@@ -110,7 +110,8 @@ public static class CodexCatalogBuilder
             cancellationToken.ThrowIfCancellationRequested();
 
             Domain.Codex.Titles.ThreadTitle title = ThreadTitleResolver.Resolve(row, sessionIndexTitles);
-            Domain.Codex.Projects.ProjectAssignment project = CodexProjectResolver.Resolve(row, projectGraph, rootCandidates);
+            Domain.Codex.Projects.ProjectAssignment project = CodexProjectResolver.Resolve(
+                row, installation.ThreadAssignmentsMigrated, projectGraph, rootCandidates);
             chains.TryGetValue(row.Id, out ThreadChain? chain);
 
             allConversations.Add(new ConversationEntry

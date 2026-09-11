@@ -2,8 +2,8 @@
 
 OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내보내기 · 불러오기 · 복원하는 **Windows 데스크톱 프로그램**.
 
-> **현재 상태: Phase 1 — Codex 탐색까지만 구현되어 있습니다.**
-> 대화 목록 / 뷰어 / Export / Import / Restore는 아직 없습니다.
+> **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model — 프로젝트/대화 목록) 완료.**
+> 대화 본문 뷰어 / 선택 / Export / Import / Restore는 아직 없습니다.
 
 ---
 
@@ -78,16 +78,26 @@ CodexBackupManager/
 │  ├─ CodexBackupManager.Domain/     의존성 0. 값 객체와 모델만
 │  │    Paths/CanonicalPath          Windows 경로 정규화 (\\?\ / NFC / 대소문자)
 │  │    Codex/…                      CodexInstallationInfo, CodexHomeValidation, …
+│  │    Codex/Rollout, Sessions, Threads, Titles, Projects, Catalog
+│  │                                 Phase 2 Read Model 도메인(rollout 파일 참조,
+│  │                                 세션 메타데이터, thread 체인, 제목/프로젝트 해결, 카탈로그)
 │  │    Diagnostics/Redact           로그용 민감정보 마스킹
 │  ├─ CodexBackupManager.Codex/      Codex 데이터 접근 (Read-Only)
 │  │    Locating/CodexLocator        CODEX_HOME → %USERPROFILE%\.codex → 저장된 경로 → 사용자 선택
 │  │    Locating/CodexHomeValidator  Valid / Probable / Invalid + 사유
 │  │    Locating/CodexHomeLayout     state_*.sqlite 등 파일명 패턴 한 곳에 모음
-│  │    Inspection/…                 StateDbReader, ConfigTomlValueReader,
+│  │    Inspection/…                 StateDbReader, ThreadRowReader, ProjectTableReader,
+│  │                                 SessionIndexReader, ConfigTomlValueReader,
 │  │                                 GlobalStateReader, SessionFileCounter,
 │  │                                 CodexInstallationInspector
+│  │    Rollout/…                    RolloutFileLocator, RolloutStreamReader(.jsonl/.jsonl.zst)
+│  │    Sessions/CodexSessionParser  rollout의 session_meta 한 줄 파싱(스트리밍)
+│  │    Threads/ThreadChainResolver  세그먼트/분기 thread를 하나의 체인으로
+│  │    Titles/ThreadTitleResolver   제목 우선순위 결정
+│  │    Projects/CodexProjectResolver  프로젝트↔대화 연결(마이그레이션 상태별 authoritative 정책)
 │  │    Sqlite/ReadOnlySqlite        읽기 전용 SQLite 연결의 유일한 통로
-│  │    CodexDetectionService        탐색 + 검증 + 조사 파사드
+│  │    CodexDetectionService        탐색 + 검증 + 조사 파사드 (Phase 1)
+│  │    Catalog/CodexCatalogBuilder  "Project → User Conversation 목록" 오케스트레이터 (Phase 2)
 │  └─ CodexBackupManager.App/        WPF (MVVM). 로직 없음
 └─ tests/
    ├─ CodexBackupManager.Domain.Tests/
@@ -107,15 +117,15 @@ Codex Backup Manager                              ● Codex 연결됨
 Codex Home
 C:\Users\User\.codex
 
-탐지 경로                    CODEX_HOME 환경변수
+탐지 경로                    %USERPROFILE%\.codex
 Codex Desktop               26.903.61454
 Codex CLI                   0.153.4
 CLI 실행 파일                ...\codex.exe (존재)
 State DB                    Generation 5 — state_5.sqlite
 Migration                   52
-Sessions                    365
+Sessions                    370
 Archived                    1
-Threads (state DB)          352행, archived 1
+Threads (state DB)          357행, archived 1
 session_index.jsonl         136줄
 projectsMigrated            true
 threadAssignmentsMigrated   false
@@ -129,6 +139,53 @@ SQLite 열기 모드              Mode=ReadOnly, Pooling=False
 
 Codex를 찾지 못하면 후보 경로별 탈락 사유를 함께 보여주고 `[Codex 폴더 선택]`을 제공한다.
 
+> **`CODEX_HOME` 환경변수에 대한 실측 결과 (Phase 1 검증, 2026-09-11):** 이 PC에서는
+> `Process`/`User`/`Machine` 세 스코프 모두 `CODEX_HOME`이 설정되어 있지 않았다.
+> Phase 0 조사 당시 "config.toml이 주입하는 값으로 추정 확정"이라고 적었던 것은 틀린 추정이었다 —
+> 실제로는 `CodexLocator`가 2순위 후보인 `%USERPROFILE%\.codex`로 정상 폴백해 Codex Home을 찾았다
+> (`source=UserProfileDotCodex`). 다른 PC/다른 실행 환경에서는 실제로 설정되어 있을 수 있으므로
+> 하드코딩하지 않고 매번 런타임에 읽는다. 상세: `docs/codex-storage-format.md` §9.
+
+---
+
+## Phase 2가 표시하는 것
+
+Phase 1의 탐지 정보 아래에, 실제 Codex 대화를 **프로젝트 → 사용자 대화** 트리로 보여준다.
+`thread_source == "user"`인 대화만 그룹에 노출하고(`subagent`/`guardian_review`는 숨기되 버리지 않는다),
+아직 대화 내용을 열람하거나 선택하는 기능은 없다(오른쪽은 Phase 3 예정 placeholder).
+
+```
+▼ Balhwajeom_Project (17)
+    Gameplay Tag 시스템 구조
+    조사 시스템 구현
+    ...
+
+▼ UProjectHub (12)
+    Column Width 수정
+    ...
+
+▼ 기타 대화 (11)
+    ...
+
+프로젝트 46개 · 사용자 대화 112개 · rollout 파일 371개 · 스캔 1716ms / 전체 1795ms
+```
+
+이 목록은 다음 순서로 만든다(전부 Read-Only, 파일 전체를 메모리에 올리지 않는 스트리밍 방식):
+
+1. `sessions\`/`archived_sessions\`에서 rollout 파일을 찾는다(`RolloutFileLocator`).
+2. 각 파일의 `session_meta` 한 줄만 스트리밍으로 읽는다(`RolloutStreamReader` + `CodexSessionParser`,
+   `.jsonl.zst`도 순수 관리형 라이브러리로 지원).
+3. 세그먼트/분기로 나뉜 파일을 하나의 대화로 묶는다(`ThreadChainResolver`).
+4. `state_*.sqlite`의 `threads`를 읽는다(`ThreadRowReader`).
+5. 제목을 우선순위대로 결정한다(`ThreadTitleResolver`: `name` → `session_index` → `title` →
+   `first_user_message` → `preview` → thread ID 폴백).
+6. 프로젝트를 연결한다(`CodexProjectResolver`: `threadAssignmentsMigrated` 값에 따라
+   `.codex-global-state.json`과 `threads.project_id` 중 어느 쪽이 authoritative인지 결정 —
+   값이 있다고 migration 완료를 추측하지 않는다).
+
+실제 PC 실측(2026-09-11): 프로젝트 46개, 사용자 대화 112개(Phase 0 조사값과 일치), rollout 파일 371개,
+JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB 원본을 메모리에 올리지 않음).
+
 ---
 
 ## 로드맵
@@ -136,7 +193,7 @@ Codex를 찾지 못하면 후보 경로별 탈락 사유를 함께 보여주고 
 | Phase | 내용 | 상태 |
 |---|---|---|
 | 1 | Codex Home 탐색 · 검증 · 설치 정보 조회 | **완료** |
-| 2 | Read Model — JSONL Parser, 세션 메타데이터, 프로젝트 그룹화, 대화 목록 | 예정 |
+| 2 | Read Model — rollout 파서, thread 체인, 프로젝트/제목 해결, 대화 목록 | **완료** |
 | 3 | Conversation Viewer — User / Assistant 메시지 | 예정 |
 | 4 | Selection — 프로젝트/대화 다중 선택 | 예정 |
 | 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | 예정 |
@@ -147,19 +204,23 @@ Codex를 찾지 못하면 후보 경로별 탈락 사유를 함께 보여주고 
 
 ## 알려진 정리 필요 항목
 
-- **NuGet 패키지 버전이 floating(`10.0.*`, `2.*`, `17.*`, `3.*`)이다.**
-  첫 `dotnet restore` 성공 후 `scripts\verify-phase1.ps1`이 출력하는 실제 해석 버전으로 고정할 것.
-- `.zst` 압축 rollout은 개수만 세고 처리하지 않는다. (Phase 2 이후)
-- `CODEX_HOME` 환경변수의 런타임 실측값은 `verify-phase1.ps1`이 출력한다.
+- `.zst` 압축 rollout은 우리가 직접 압축한 fixture로만 검증했다. 실제 Codex `.zst` 실물은 아직
+  확인하지 못했다(조사 시점 이 PC에 0개). `docs/codex-storage-format.md` §9 참고.
+- `ThreadChainResolver.ResolveAncestry`(분기 조상 체인 계산)는 도메인 모델만 만들어뒀고 아직 아무도
+  호출하지 않는다 — Export(Phase 5)에서 실제로 쓸 때 다시 검증이 필요하다.
 
 ---
 
 ## 외부 의존성
 
-| 패키지 | 용도 |
-|---|---|
-| `Microsoft.Data.Sqlite` | `state_*.sqlite` 읽기 전용 접근 |
-| `xunit`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk` | 테스트 |
+| 패키지 | 버전 | 용도 |
+|---|---|---|
+| `Microsoft.Data.Sqlite` | `10.0.12` | `state_*.sqlite` 읽기 전용 접근 |
+| `ZstdSharp.Port` | `0.8.8` | `.jsonl.zst` 압축 해제(순수 관리형, 외부 exe 없음) |
+| `xunit` | `2.9.3` | 테스트 |
+| `xunit.runner.visualstudio` | `3.1.5` | 테스트 러너 |
+| `Microsoft.NET.Test.Sdk` | `17.14.1` | 테스트 |
 
-그 밖에는 전부 BCL만 쓴다. 로거, TOML 스칼라 리더, MVVM 베이스, 폴더 선택 대화상자 모두 직접 구현했다.
+전부 정확한 버전으로 고정되어 있다(floating 버전 없음). 그 밖에는 전부 BCL만 쓴다.
+로거, TOML 스칼라 리더, MVVM 베이스, 폴더 선택 대화상자 모두 직접 구현했다.
 **외부 프로그램을 실행하거나 필수 의존성으로 삼지 않는다** (CLAUDE.md §2.1).
