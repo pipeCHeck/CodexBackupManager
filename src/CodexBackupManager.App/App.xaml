@@ -1,0 +1,31 @@
+<Application x:Class="CodexBackupManager.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+
+    <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+
+    <SolidColorBrush x:Key="Bg" Color="#FF1E1F22" />
+    <SolidColorBrush x:Key="Panel" Color="#FF2B2D31" />
+    <SolidColorBrush x:Key="Fg" Color="#FFE6E6E6" />
+    <SolidColorBrush x:Key="Muted" Color="#FF9AA0A6" />
+    <SolidColorBrush x:Key="Ok" Color="#FF4CAF50" />
+    <SolidColorBrush x:Key="Bad" Color="#FFE57373" />
+    <SolidColorBrush x:Key="Warn" Color="#FFFFB74D" />
+
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Fg}" />
+      <Setter Property="FontFamily" Value="Segoe UI, Malgun Gothic" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+    </Style>
+
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="14,7" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="MinWidth" Value="120" />
+      <Setter Property="FontFamily" Value="Segoe UI, Malgun Gothic" />
+    </Style>
+
+  </Application.Resources>
+</Application>

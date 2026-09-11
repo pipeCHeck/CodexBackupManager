@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>CodexBackupManager.App</RootNamespace>
+    <AssemblyName>CodexBackupManager</AssemblyName>
+
+    <!-- 배포: 런타임 설치가 필요 없는 단일 exe -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!-- WPF XAML 코드 생성 때문에 XML 문서 경고를 프로젝트 단위로 완화한다. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj" />
+    <ProjectReference Include="..\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

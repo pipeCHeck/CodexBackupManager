@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CodexBackupManager.Domain</RootNamespace>
+    <AssemblyName>CodexBackupManager.Domain</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    Domain은 의존성이 0이다. BCL 외의 어떤 패키지도 참조하지 않는다.
+    파일 시스템 / SQLite / UI 어느 쪽도 알지 못한다.
+  -->
+
+</Project>

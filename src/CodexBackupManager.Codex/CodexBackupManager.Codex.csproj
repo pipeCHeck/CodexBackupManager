@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CodexBackupManager.Codex</RootNamespace>
+    <AssemblyName>CodexBackupManager.Codex</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 내부 헬퍼(TOML 스칼라 파서, SQLite URI 빌더)를 단위 테스트에서 직접 검증한다. -->
+    <InternalsVisibleTo Include="CodexBackupManager.Codex.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Codex의 state_*.sqlite를 읽기 전용으로 열기 위한 유일한 외부 패키지.
+      버전은 첫 restore 성공 후 정확한 값으로 고정할 것. (README "패키지 버전 고정" 참고)
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.*" />
+  </ItemGroup>
+
+</Project>

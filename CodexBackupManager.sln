@@ -1,0 +1,60 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.00000.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{B18F4050-6ED9-4D3F-9D48-9A47204C6F58}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{89185637-AC6F-431A-8878-847983A91DC6}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CodexBackupManager.Domain", "src\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj", "{0BC3AF21-7841-4E0D-A1E7-B1A2680DB840}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CodexBackupManager.Codex", "src\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj", "{94352FD5-8F7D-4892-A7D6-CF96FFB2BAB8}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CodexBackupManager.App", "src\CodexBackupManager.App\CodexBackupManager.App.csproj", "{A222E7D5-13BA-43E9-93D9-A29192DEDC1E}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CodexBackupManager.Domain.Tests", "tests\CodexBackupManager.Domain.Tests\CodexBackupManager.Domain.Tests.csproj", "{06DC84AF-2914-4C0A-86E4-9F9F316C7491}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CodexBackupManager.Codex.Tests", "tests\CodexBackupManager.Codex.Tests\CodexBackupManager.Codex.Tests.csproj", "{9A58A01D-1536-401F-B699-573CDFB07BD8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{0BC3AF21-7841-4E0D-A1E7-B1A2680DB840}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BC3AF21-7841-4E0D-A1E7-B1A2680DB840}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BC3AF21-7841-4E0D-A1E7-B1A2680DB840}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BC3AF21-7841-4E0D-A1E7-B1A2680DB840}.Release|Any CPU.Build.0 = Release|Any CPU
+		{94352FD5-8F7D-4892-A7D6-CF96FFB2BAB8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{94352FD5-8F7D-4892-A7D6-CF96FFB2BAB8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{94352FD5-8F7D-4892-A7D6-CF96FFB2BAB8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{94352FD5-8F7D-4892-A7D6-CF96FFB2BAB8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A222E7D5-13BA-43E9-93D9-A29192DEDC1E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A222E7D5-13BA-43E9-93D9-A29192DEDC1E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A222E7D5-13BA-43E9-93D9-A29192DEDC1E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A222E7D5-13BA-43E9-93D9-A29192DEDC1E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{06DC84AF-2914-4C0A-86E4-9F9F316C7491}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{06DC84AF-2914-4C0A-86E4-9F9F316C7491}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{06DC84AF-2914-4C0A-86E4-9F9F316C7491}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{06DC84AF-2914-4C0A-86E4-9F9F316C7491}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9A58A01D-1536-401F-B699-573CDFB07BD8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A58A01D-1536-401F-B699-573CDFB07BD8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A58A01D-1536-401F-B699-573CDFB07BD8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A58A01D-1536-401F-B699-573CDFB07BD8}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{0BC3AF21-7841-4E0D-A1E7-B1A2680DB840} = {B18F4050-6ED9-4D3F-9D48-9A47204C6F58}
+		{94352FD5-8F7D-4892-A7D6-CF96FFB2BAB8} = {B18F4050-6ED9-4D3F-9D48-9A47204C6F58}
+		{A222E7D5-13BA-43E9-93D9-A29192DEDC1E} = {B18F4050-6ED9-4D3F-9D48-9A47204C6F58}
+		{06DC84AF-2914-4C0A-86E4-9F9F316C7491} = {89185637-AC6F-431A-8878-847983A91DC6}
+		{9A58A01D-1536-401F-B699-573CDFB07BD8} = {89185637-AC6F-431A-8878-847983A91DC6}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {53E4FB7F-4B3F-45F3-80DF-DC9167A3886F}
+	EndGlobalSection
+EndGlobal

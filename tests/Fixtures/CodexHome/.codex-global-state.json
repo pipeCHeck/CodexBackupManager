@@ -1,0 +1,32 @@
+{
+ "project-order": [
+  "fixture-project-1"
+ ],
+ "local-projects": {
+  "local-fixture1": {
+   "id": "local-fixture1",
+   "name": "Alpha",
+   "rootPaths": [
+    "C:\\Fixture\\Projects\\Alpha"
+   ],
+   "createdAt": 1780000000000,
+   "updatedAt": 1780000000000
+  }
+ },
+ "thread-project-assignments": {
+  "01a00000-0000-7000-8000-000000000001": {
+   "projectKind": "local",
+   "projectId": "local-fixture1"
+  }
+ },
+ "projectless-thread-ids": [
+  "01a00000-0000-7000-8000-000000000002"
+ ],
+ "app-server-projects-migration-by-host": {
+  "local:C:\\Fixture\\.codex": {
+   "version": 1,
+   "projectsMigrated": true,
+   "threadAssignmentsMigrated": false
+  }
+ }
+}

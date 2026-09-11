@@ -1,0 +1,32 @@
+# 테스트용 합성 config.toml — 실제 사용자 설정이 아닙니다.
+# 실제 Codex config.toml의 형태(literal string, 테이블 중첩, 여러 줄 배열)를 흉내 냅니다.
+model = "test-model"
+model_reasoning_effort = "high"
+
+notify = [ 'C:\Fixture\bin\notify.exe', "turn-ended" ]
+
+[features]
+multi_agent = true
+
+[marketplaces.fixture-bundled]
+source_type = "local"
+source = '\\?\C:\Fixture\.codex\.tmp\bundled'
+
+[projects.'c:\fixture\projects\alpha']
+trust_level = "trusted"
+
+[projects.'c:\fixture\projects\한글 프로젝트']
+trust_level = "trusted"
+
+[mcp_servers.node_repl]
+args = []
+command = 'C:\Fixture\node_repl.exe'
+
+[mcp_servers.node_repl.env]
+CODEX_HOME = 'C:\Fixture\.codex'
+BROWSER_USE_CODEX_APP_VERSION = "99.123.45678"
+NODE_REPL_TRUSTED_SERVICES = '{"browser":"C:/Fixture/browser.mjs"}'
+CODEX_CLI_PATH = 'C:\Fixture\bin\codex.exe'
+
+[shell_environment_policy.set]
+SOME_HASH = "0000000000000000000000000000000000000000000000000000000000000000"

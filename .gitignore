@@ -1,0 +1,68 @@
+## ---------------------------------------------------------------------------
+## .NET
+## ---------------------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+artifacts/
+publish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.vscode/
+*.binlog
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+
+## Test / coverage
+TestResults/
+[Cc]overage*/
+*.coverage
+*.trx
+
+## Rider / JetBrains
+.idea/
+*.sln.iml
+
+## ---------------------------------------------------------------------------
+## OS
+## ---------------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+
+## ---------------------------------------------------------------------------
+## 이 프로젝트 고유 — 개인 데이터 유출 방지 (CLAUDE.md §31)
+## ---------------------------------------------------------------------------
+## 실제 사용자의 Codex 데이터는 절대 커밋하지 않는다.
+scratch/
+local/
+*.codexbackup
+snapshots/
+Snapshots/
+
+## 실제 .codex 데이터가 실수로 들어오는 것을 막는다.
+**/.codex/
+**/.codex-global-state.json
+**/session_index.jsonl
+**/rollout-*.jsonl
+**/rollout-*.jsonl.zst
+**/state_*.sqlite
+**/state_*.sqlite-wal
+**/state_*.sqlite-shm
+**/thread_history_*.sqlite
+**/logs_*.sqlite
+**/config.toml
+
+## 단, tests/Fixtures 아래의 것은 우리가 직접 만든 합성 데이터이므로 커밋한다.
+## (실제 대화 내용이 들어 있지 않음 — tests/Fixtures/CodexHome/README.md 참고)
+!tests/Fixtures/**
