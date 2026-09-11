@@ -490,12 +490,36 @@ Commit과 Push는 내가 따로 요청할 때까지 하지 마.
 
 ## 부록: 이번 조사에서 확정하지 못한 항목 (다음 단계에서 반드시 확인)
 
-1. **`CODEX_HOME` 환경변수의 실제 런타임 값** — 이 세션에 해당 PC의 셸이 없어 직접 읽지 못함. config.toml 주입값으로 추정 확정.
+1. ~~**`CODEX_HOME` 환경변수의 실제 런타임 값**~~ — **Phase 1 검증(2026-09-11)에서 확정.**
+   실제 셸로 `Process`/`User`/`Machine` 세 스코프를 모두 확인한 결과 **전부 미설정**이었다.
+   이 부록에 적었던 "config.toml 주입값으로 추정 확정"은 **틀린 추정이었음이 실측으로 드러났다.**
+   `CodexLocator`는 우선순위 2순위인 `%USERPROFILE%\.codex`로 정상 폴백해 Codex Home을 찾았다
+   (`source=UserProfileDotCodex`, 검증 점수 5/5 Valid). 상세는 `docs/codex-storage-format.md` §9 참고.
 2. **`.zst` 압축 rollout 실물 샘플** — 이 PC에는 0건. 실제 바이트 레이아웃 검증 필요.
 3. **Import 후 Codex가 새 thread를 인식하는지** — 실제 적용 실험은 하지 않았다(원본 보호 우선). 반드시 **격리된 임시 CODEX_HOME**에서 먼저 재현 실험할 것.
 4. **app-server(`thread/list`, `thread/read`) 실사용 가능성** — 미확인. Phase 7에서 격리 모듈로만 조사.
 5. **`sqlite\codex-dev.db`(2.8 MB, 현재도 갱신 중)의 역할** — 스키마 미확인. 루트 `state_5.sqlite`와의 관계 확인 필요.
 6. **`worktrees` / `visualizations` / `generated_images`** — 대화가 참조하는 산출물. Export 완전성 범위에 포함할지 결정 필요(CLAUDE.md §27과의 경계).
+
+---
+
+## 부록 2: Phase 1 검증 중 새로 실측된 사실 (2026-09-11, Phase 1 완료 검증)
+
+Phase 1 구현을 실제 Windows PC의 실제 `.codex`에 대해 실행/검증하는 과정에서 이 보고서 작성 시점에는
+확인하지 못했던 사실이 추가로 드러났다. Phase 0 조사 시점에는 이 PC에 대한 셸 접근이 없어 직접 실측하지
+못했던 항목들이다.
+
+1. **`CODEX_HOME` 환경변수는 실제로 설정되어 있지 않았다.** (부록 1번 참고) Phase 0의 추정은 틀렸다.
+2. **Read-Only SQLite 접속 과정에서 `state_5.sqlite-shm`이 최초 1회 재구성되는 것을 관찰했다.**
+   Codex를 종료한 직후 `Mode=ReadOnly` 연결로 처음 접속하면 SQLite가 WAL 공유 메모리 인덱스(`-shm`)를
+   재구성하는데, 이는 읽기 전용 연결에서도 발생하는 SQLite 자체의 정상 동작이다(같은 프로세스로 재접속하면
+   더 이상 바뀌지 않았다). `state_5.sqlite` 본체와 `-wal`(실제 데이터/보류 커밋)은 모든 시도에서 바이트
+   단위로 동일했다.
+3. **이 발견에 따라 이 프로젝트의 "Codex 원본 데이터 변경 없음" 판정 기준을 명문화했다**:
+   `state_*.sqlite` 본체 · `-wal` · rollout JSONL · `session_index.jsonl` · `.codex-global-state.json` ·
+   `config.toml` 같은 영속 데이터의 해시가 변하지 않는 것을 기준으로 하고, `-shm`처럼 SQLite 프로토콜상
+   재생성 가능한 임시 sidecar 파일은 이 기준에서 제외한다(변화가 관찰되면 별도로 기록한다).
+   상세 근거는 `docs/codex-storage-format.md` §4, §7(위험 요소 표 4번)에 있다.
 
 ---
 

@@ -61,8 +61,8 @@
     <!-- 본문 -->
     <Grid Grid.Row="3" Margin="0,12,0,0">
       <Grid.RowDefinitions>
+        <RowDefinition Height="220" />
         <RowDefinition Height="*" />
-        <RowDefinition Height="Auto" />
       </Grid.RowDefinitions>
 
       <!-- 탐지 실패 안내 -->
@@ -88,7 +88,7 @@
         </StackPanel>
       </Border>
 
-      <!-- 탐지 성공 정보 -->
+      <!-- 탐지 성공 정보 (Phase 1) -->
       <ScrollViewer VerticalScrollBarVisibility="Auto"
                     Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibility}}">
         <StackPanel>
@@ -128,20 +128,63 @@
         </StackPanel>
       </ScrollViewer>
 
-      <!-- Phase 2+ placeholder. 이번 Phase에서는 비활성. -->
-      <Border Grid.Row="1" Background="{StaticResource Panel}" CornerRadius="6"
-              Padding="14,11" Margin="0,12,0,0" Opacity="0.45">
-        <StackPanel>
-          <TextBlock Text="다음 단계 (Phase 2 이후 — 아직 구현되지 않음)"
-                     Foreground="{StaticResource Muted}" FontSize="11" />
-          <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-            <Button Content="프로젝트 목록" IsEnabled="False" />
-            <Button Content="대화 목록" IsEnabled="False" />
-            <Button Content="내보내기" IsEnabled="False" />
-            <Button Content="백업 불러오기" IsEnabled="False" />
+      <!-- 프로젝트 / 대화 카탈로그 (Phase 2) + 대화 내용 placeholder (Phase 3 예정) -->
+      <Grid Grid.Row="1" Margin="0,12,0,0"
+            Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibility}}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="300" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- 왼쪽: 프로젝트 → 대화 트리 -->
+        <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="12">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Text="{Binding CatalogSummaryText, TargetNullValue='카탈로그 준비 중…'}"
+                       Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="1" Text="목록을 만드는 중입니다…"
+                       Foreground="{StaticResource Muted}" FontSize="12"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Visibility="{Binding IsCatalogLoading, Converter={StaticResource BoolToVisibility}}" />
+
+            <TreeView Grid.Row="1" Margin="0,8,0,0" BorderThickness="0" Background="Transparent"
+                      ItemsSource="{Binding ProjectNodes}">
+              <TreeView.ItemContainerStyle>
+                <Style TargetType="TreeViewItem">
+                  <Setter Property="IsExpanded" Value="True" />
+                </Style>
+              </TreeView.ItemContainerStyle>
+              <TreeView.ItemTemplate>
+                <HierarchicalDataTemplate ItemsSource="{Binding Conversations}">
+                  <TextBlock Text="{Binding HeaderText}" FontWeight="SemiBold" />
+                  <HierarchicalDataTemplate.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                  </HierarchicalDataTemplate.ItemTemplate>
+                </HierarchicalDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+          </Grid>
+        </Border>
+
+        <!-- 오른쪽: 대화 내용 (Phase 3에서 구현 예정) -->
+        <Border Grid.Column="1" Background="{StaticResource Panel}" CornerRadius="6"
+                Padding="14" Margin="12,0,0,0">
+          <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock Text="대화 내용" Foreground="{StaticResource Muted}"
+                       FontSize="13" HorizontalAlignment="Center" />
+            <TextBlock Text="Phase 3에서 구현 예정입니다." Foreground="{StaticResource Muted}"
+                       FontSize="11" Margin="0,4,0,0" HorizontalAlignment="Center" />
           </StackPanel>
-        </StackPanel>
-      </Border>
+        </Border>
+      </Grid>
     </Grid>
 
     <!-- 하단 버튼 -->

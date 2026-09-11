@@ -2,10 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using CodexBackupManager.App.Services;
 using CodexBackupManager.Codex;
+using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Domain.Codex;
+using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Diagnostics;
 
 namespace CodexBackupManager.App.ViewModels;
@@ -32,6 +36,10 @@ public sealed class MainViewModel : ObservableObject
     private string _homePath = string.Empty;
     private string? _warningText;
     private string? _detailText;
+
+    private bool _isCatalogLoading;
+    private string? _catalogSummaryText;
+    private CancellationTokenSource? _catalogCancellation;
 
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
@@ -134,6 +142,23 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _detailText;
         private set => SetProperty(ref _detailText, value);
+    }
+
+    /// <summary>Phase 2 — 왼쪽 트리에 표시할 프로젝트/대화 카탈로그.</summary>
+    public ObservableCollection<ProjectNodeViewModel> ProjectNodes { get; } = [];
+
+    /// <summary>카탈로그를 만드는 중인지. <c>.codex</c> 탐색이 UI 스레드를 막지 않는다.</summary>
+    public bool IsCatalogLoading
+    {
+        get => _isCatalogLoading;
+        private set => SetProperty(ref _isCatalogLoading, value);
+    }
+
+    /// <summary>카탈로그 요약(프로젝트/대화/파일 개수, 소요 시간). 아직 없으면 <c>null</c>.</summary>
+    public string? CatalogSummaryText
+    {
+        get => _catalogSummaryText;
+        private set => SetProperty(ref _catalogSummaryText, value);
     }
 
     /// <summary>시작 시 한 번 호출한다.</summary>
@@ -247,6 +272,7 @@ public sealed class MainViewModel : ObservableObject
                 : string.Join(Environment.NewLine, reasons));
 
             _logger.Info($"Codex Home 탐지 실패. 후보 {result.Located.Probes.Count}건 검사.");
+            ClearCatalog();
             return;
         }
 
@@ -304,6 +330,87 @@ public sealed class MainViewModel : ObservableObject
             $"sessions={info.SessionFileCount} zst={info.CompressedSessionFileCount} " +
             $"archived={info.ArchivedSessionFileCount} threads={info.ThreadRowCount?.ToString(CultureInfo.InvariantCulture) ?? "-"} " +
             $"openMode={info.StateDatabaseOpenMode} tam={DescribeFlag(info.ThreadAssignmentsMigrated)}");
+
+        _ = LoadCatalogAsync(info);
+    }
+
+    private async Task LoadCatalogAsync(CodexInstallationInfo installation)
+    {
+        _catalogCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _catalogCancellation = cancellation;
+
+        ProjectNodes.Clear();
+        IsCatalogLoading = true;
+        CatalogSummaryText = null;
+
+        try
+        {
+            CodexCatalog catalog = await Task.Run(
+                () => CodexCatalogBuilder.Build(installation, cancellation.Token),
+                cancellation.Token).ConfigureAwait(true);
+
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            ApplyCatalog(catalog);
+        }
+        catch (OperationCanceledException)
+        {
+            // 새 탐지/폴더 변경으로 취소됨. 이전 결과를 화면에 남기지 않는다.
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("대화 카탈로그 생성 중 오류", ex);
+            CatalogSummaryText = $"대화 목록을 만드는 중 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_catalogCancellation, cancellation))
+            {
+                IsCatalogLoading = false;
+            }
+        }
+    }
+
+    private void ApplyCatalog(CodexCatalog catalog)
+    {
+        ProjectNodes.Clear();
+        foreach (ProjectEntry project in catalog.Projects)
+        {
+            ProjectNodes.Add(new ProjectNodeViewModel
+            {
+                DisplayName = project.DisplayName,
+                IsUncategorized = project.IsUncategorized,
+                Conversations = project.Conversations
+                    .Select(c => new ConversationNodeViewModel { Title = c.Title.Text, ThreadId = c.ThreadId })
+                    .ToList(),
+            });
+        }
+
+        CatalogSummaryText =
+            $"프로젝트 {catalog.Projects.Count}개 · 사용자 대화 {catalog.UserConversationCount}개 · " +
+            $"rollout 파일 {catalog.Stats.RolloutFileCount}개 · " +
+            $"스캔 {catalog.Stats.JsonlScanDuration.TotalMilliseconds:F0}ms / " +
+            $"전체 {catalog.Stats.TotalBuildDuration.TotalMilliseconds:F0}ms";
+
+        // 카탈로그 경고에는 사용자 원문이 없다(파일명/thread ID 수준의 진단 문구뿐이다). 개수만 로그에 남긴다.
+        _logger.Info(
+            $"카탈로그 생성 완료. projects={catalog.Projects.Count} userThreads={catalog.UserConversationCount} " +
+            $"allThreads={catalog.AllConversations.Count} rolloutFiles={catalog.Stats.RolloutFileCount} " +
+            $"scanMs={catalog.Stats.JsonlScanDuration.TotalMilliseconds:F0} " +
+            $"totalMs={catalog.Stats.TotalBuildDuration.TotalMilliseconds:F0} warnings={catalog.Warnings.Count}");
+    }
+
+    private void ClearCatalog()
+    {
+        _catalogCancellation?.Cancel();
+        _catalogCancellation = null;
+        ProjectNodes.Clear();
+        IsCatalogLoading = false;
+        CatalogSummaryText = null;
     }
 
     private void ShowFailure(string detail)

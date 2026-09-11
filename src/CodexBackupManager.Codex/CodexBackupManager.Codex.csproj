@@ -21,6 +21,12 @@
       버전은 2026-09-11 dotnet restore에서 실제로 해석된 값으로 고정했다.
     -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+
+    <!--
+      오래된 rollout(.jsonl.zst)을 순수 관리형 코드로 압축 해제하기 위한 패키지.
+      외부 zstd.exe를 실행하지 않는다 (CLAUDE.md §2.1). 2026-09-11 restore에서 해석된 버전으로 고정.
+    -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 
 </Project>

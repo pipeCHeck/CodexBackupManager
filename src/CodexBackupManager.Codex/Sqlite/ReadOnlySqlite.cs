@@ -189,6 +189,28 @@ public sealed class ReadOnlyDatabase : IDisposable
         return results;
     }
 
+    /// <summary>여러 행을 읽어 각 행을 컬럼 값 배열로 돌려준다.</summary>
+    public IReadOnlyList<object?[]> ReadRows(string sql)
+    {
+        Guard(sql);
+        var rows = new List<object?[]>();
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = sql;
+        using SqliteDataReader reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var values = new object?[reader.FieldCount];
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                values[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            }
+
+            rows.Add(values);
+        }
+
+        return rows;
+    }
+
     /// <summary>한 행을 읽어 컬럼 값 배열로 돌려준다. 행이 없으면 <c>null</c>.</summary>
     public object?[]? ReadSingleRow(string sql)
     {

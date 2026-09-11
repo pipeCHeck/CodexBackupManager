@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using CodexBackupManager.Codex.Locating;
+using CodexBackupManager.Domain.Codex.Projects;
 using CodexBackupManager.Domain.Paths;
 
 namespace CodexBackupManager.Codex.Inspection;
@@ -143,6 +144,130 @@ public static class GlobalStateReader
             return null;
         }
     }
+
+    /// <summary>
+    /// <c>.codex-global-state.json</c>에서 프로젝트↔대화 그래프를 읽는다.
+    /// docs/codex-storage-format.md §5 "(B) 현재 유효한 경로".
+    /// </summary>
+    /// <param name="localProjects"><c>id → 프로젝트 정보</c>.</param>
+    /// <param name="threadProjectAssignments"><c>threadId → projectId</c>. <c>projectKind != "local"</c>은 무시한다.</param>
+    /// <param name="projectlessThreadIds">프로젝트 미지정으로 명시된 thread ID 집합("기타 대화").</param>
+    public sealed record ProjectGraph(
+        IReadOnlyDictionary<string, LocalProjectInfo> LocalProjects,
+        IReadOnlyDictionary<string, string> ThreadProjectAssignments,
+        IReadOnlySet<string> ProjectlessThreadIds);
+
+    /// <summary>
+    /// 프로젝트↔대화 그래프를 읽는다. 실패하면 <c>null</c>.
+    /// </summary>
+    public static ProjectGraph? TryReadProjectGraph(string globalStateFilePath, out string? error)
+    {
+        error = null;
+
+        try
+        {
+            var file = new FileInfo(globalStateFilePath);
+            if (!file.Exists)
+            {
+                error = $"{CodexHomeLayout.GlobalStateFileName} 파일이 없습니다.";
+                return null;
+            }
+
+            if (file.Length > MaxFileSizeBytes)
+            {
+                error = "데스크톱 앱 상태 파일이 예상보다 너무 커서 읽지 않았습니다.";
+                return null;
+            }
+
+            using FileStream stream = new(globalStateFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using JsonDocument document = JsonDocument.Parse(stream);
+            JsonElement root = document.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                error = "데스크톱 앱 상태 파일의 최상위 구조가 예상과 다릅니다.";
+                return null;
+            }
+
+            var localProjects = new Dictionary<string, LocalProjectInfo>(StringComparer.Ordinal);
+            if (root.TryGetProperty("local-projects", out JsonElement lp) && lp.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty prop in lp.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    string id = ReadOptionalString(prop.Value, "id") ?? prop.Name;
+                    string? name = ReadOptionalString(prop.Value, "name");
+                    var roots = new List<string>();
+                    if (prop.Value.TryGetProperty("rootPaths", out JsonElement rootPaths) &&
+                        rootPaths.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (JsonElement item in rootPaths.EnumerateArray())
+                        {
+                            if (item.ValueKind == JsonValueKind.String && item.GetString() is { } path)
+                            {
+                                roots.Add(path);
+                            }
+                        }
+                    }
+
+                    localProjects[id] = new LocalProjectInfo(id, name, roots);
+                }
+            }
+
+            var assignments = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (root.TryGetProperty("thread-project-assignments", out JsonElement tpa) &&
+                tpa.ValueKind == JsonValueKind.Object)
+            {
+                foreach (JsonProperty prop in tpa.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    string? kind = ReadOptionalString(prop.Value, "projectKind");
+                    string? projectId = ReadOptionalString(prop.Value, "projectId");
+                    if (projectId is not null && (kind is null || string.Equals(kind, "local", StringComparison.Ordinal)))
+                    {
+                        assignments[prop.Name] = projectId;
+                    }
+                }
+            }
+
+            var projectless = new HashSet<string>(StringComparer.Ordinal);
+            if (root.TryGetProperty("projectless-thread-ids", out JsonElement pl) && pl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement item in pl.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String && item.GetString() is { } id)
+                    {
+                        projectless.Add(id);
+                    }
+                }
+            }
+
+            return new ProjectGraph(localProjects, assignments, projectless);
+        }
+        catch (JsonException ex)
+        {
+            error = $"데스크톱 앱 상태 파일을 JSON으로 해석할 수 없습니다: {ex.Message}";
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"데스크톱 앱 상태 파일을 읽을 수 없습니다: {ex.Message}";
+            return null;
+        }
+    }
+
+    private static string? ReadOptionalString(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     internal static bool HostKeyMatches(string hostKey, CanonicalPath codexHome)
     {

@@ -13,6 +13,12 @@
 > **이 문서의 값을 코드에 하드코딩하지 않는다.** 버전·generation·개수는 전부 런타임에 읽는다.
 > 이 문서는 "무엇을 어디서 읽어야 하는가"를 고정할 뿐이다. (CLAUDE.md §33)
 
+> **Phase 1 실측 갱신 (2026-09-11, Phase 1 검증)**
+> `CODEX_HOME` 환경변수는 이 PC의 `Process`/`User`/`Machine` 스코프 전부에서 **설정되어 있지 않음**을
+> 실제로 확인했다. Phase 0 조사 당시 "config.toml이 자식 프로세스에 주입하는 값으로 추정 확정"이라고
+> 적었던 부분은 **틀린 추정이었다.** `CodexLocator`는 우선순위대로 2순위인 `%USERPROFILE%\.codex`로
+> 정상 폴백해 Codex Home을 찾았다(`source=UserProfileDotCodex`). §9 "아직 확정하지 못한 항목" 1번 참고.
+
 ---
 
 ## 1. Codex Home
@@ -259,6 +265,17 @@ Cache=Private            페이지 캐시를 공유하지 않는다
 이 폴백은 원본을 건드리지 않지만 **WAL에만 있는 최신 변경을 보지 못할 수 있으므로**
 사용한 모드를 호출자에게 반드시 알린다.
 
+> **Phase 1 실측 (2026-09-11)**: 실제 `.codex`(Codex 종료 직후)에 `Mode=ReadOnly` 연결로 처음 접속했을 때
+> `state_5.sqlite-shm`의 바이트가 1회 바뀌는 것을 관찰했다. 원인은 SQLite WAL 프로토콜 자체다 —
+> 이전 소유자(Codex)가 종료된 뒤 `-shm`(공유 메모리 wal-index)에 처음 연결하는 리더는 그 인덱스를
+> 재구성해야 하며, 이는 **읽기 전용 연결에서도 발생하는 정상 동작**이다. 같은 연결을 다시 열면
+> 더 이상 변하지 않았고, `state_5.sqlite` 본체와 `-wal`(실제 데이터/보류 커밋)은 매번 바이트 단위로
+> 동일했다. `-shm`은 언제든 삭제되어도 Codex가 다시 만들어내는 파생 캐시이지 source-of-truth가 아니므로,
+> **이 프로젝트에서 "Codex 원본 데이터 변경 없음"의 판정 기준은 `state_*.sqlite` 본체 · `-wal` ·
+> rollout JSONL · `session_index.jsonl` · `.codex-global-state.json` · `config.toml` 같은 영속 데이터의
+> 해시가 변하지 않는 것으로 정의한다.** `-shm`/`-journal` 같은 SQLite 프로토콜상의 임시 sidecar 파일은
+> 이 기준에서 제외하되, 변화가 관찰되면 그 사실은 별도로 기록한다.
+
 **컬럼 구성은 버전마다 달라진다.** 쿼리를 조립하기 전에 항상 `PRAGMA table_info(threads)`로 실제 컬럼을 확인한다.
 
 ---
@@ -363,7 +380,7 @@ thread_realtime_items (0행)
 | 1 | **한 대화 = 여러 파일 체인**. `threads.rollout_path`는 마지막 세그먼트를 가리키고 `history_base`로 부모를 참조 | Export 시 조상 파일 강제 포함 + Manifest에 체인 명시. 안 하면 대화 앞부분이 사라진다 |
 | 2 | 프로젝트↔대화 매핑이 마이그레이션 중간 상태 | `threadAssignmentsMigrated`로 판정하는 Adapter |
 | 3 | `.codex-global-state.json` 쓰기 경합 | Codex 종료 후, 특정 키만 병합, atomic replace |
-| 4 | SQLite WAL 동시 접근 | 읽기는 `Mode=ReadOnly`, 스냅샷은 `-wal`/`-shm`까지 함께 |
+| 4 | SQLite WAL 동시 접근. `-shm`은 읽기 전용 접속에서도 최초 1회 재구성될 수 있다(Phase 1 실측, §4 참고) | 읽기는 `Mode=ReadOnly`, 스냅샷은 `-wal`/`-shm`까지 함께. "원본 무변경" 판정은 `-shm`을 제외한 영속 데이터 기준 |
 | 5 | `state` 행이 불완전하면 Codex가 대화를 못 열거나 안 보임 | `model_provider` 공백 → resume 실패(#29083), `thread_source` NULL → 목록에서 사라짐(#23979) |
 | 6 | 경로 표기 3종 불일치 | `CanonicalPath` |
 | 7 | `.zst` 압축 rollout | Reader가 `.jsonl.zst` 지원 (순수 관리형 구현) |
@@ -409,8 +426,11 @@ Codex Home 아래 어떤 파일도 생성/수정/삭제하지 않는다.
 
 ## 9. 아직 확정하지 못한 항목
 
-1. **`CODEX_HOME` 환경변수의 런타임 실측값** — `config.toml`이 자식 프로세스에 주입하는 값으로 추정 확정.
-   `scripts/verify-phase1.ps1`이 실제 값을 출력한다.
+1. ~~**`CODEX_HOME` 환경변수의 런타임 실측값**~~ — **확정됨 (Phase 1 검증, 2026-09-11)**.
+   이 PC에서는 `Process`/`User`/`Machine` 스코프 전부 미설정이었다. Phase 0의 "config.toml 주입값으로
+   추정 확정"은 틀렸다. `CodexLocator`가 2순위 `%USERPROFILE%\.codex`로 정상 폴백함을 확인했다.
+   다른 PC/다른 실행 환경에서는 실제로 설정되어 있을 수 있으므로 `scripts/verify-phase1.ps1`로 항상
+   실측할 것.
 2. **`.zst` 압축 rollout 실물** — 조사 PC에 0개. 실제 바이트 레이아웃 미검증.
 3. **Import 후 Codex가 새 thread를 인식하는지** — 원본 보호 우선으로 적용 실험을 하지 않았다.
    반드시 **격리된 임시 `CODEX_HOME`** 에서 먼저 재현할 것.
