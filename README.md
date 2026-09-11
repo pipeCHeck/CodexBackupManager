@@ -56,6 +56,13 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-phase1.ps1 -SkipRun
 > 6단계 비교를 의미 있게 하려면 **Codex를 완전히 종료한 상태**로 실행하세요.
 > Codex가 켜져 있으면 Codex 자신이 파일을 갱신하므로 우리 프로그램의 쓰기와 구분할 수 없습니다.
 
+위 `dotnet build`/`dotnet run`은 개발용 framework-dependent 빌드다(대상 PC에 .NET 10 Desktop 런타임 필요).
+CLAUDE.md §38이 정한 최종 배포 형태(런타임 설치 불필요)는 배포할 때 다음처럼 self-contained로 publish한다.
+
+```powershell
+dotnet publish src\CodexBackupManager.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
+
 ---
 
 ## 구조

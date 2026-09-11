@@ -18,9 +18,9 @@
   <ItemGroup>
     <!--
       Codex의 state_*.sqlite를 읽기 전용으로 열기 위한 유일한 외부 패키지.
-      버전은 첫 restore 성공 후 정확한 값으로 고정할 것. (README "패키지 버전 고정" 참고)
+      버전은 2026-09-11 dotnet restore에서 실제로 해석된 값으로 고정했다.
     -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
 </Project>
