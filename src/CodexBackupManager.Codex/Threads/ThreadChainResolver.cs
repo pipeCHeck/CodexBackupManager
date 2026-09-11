@@ -64,18 +64,52 @@ public static class ThreadChainResolver
                 warnings.Add("정렬 중 파일 수가 달라졌습니다."); // 이론상 발생하지 않지만 방어적으로 기록한다.
             }
 
+            // 실측(Phase 3 pre-commit audit)으로 확인: 세그먼트끼리도 무조건 전체를 잇지 않는다.
+            // 첫 파일뿐 아니라 뒤이은 세그먼트도 "자기 자신의" history_base를 가질 수 있고,
+            // 그 thread_id는 이 thread의 안정 ID가 아니라 바로 앞 세그먼트 파일 자신의
+            // rollout ID(RolloutFileReference.OwnRolloutId)를 가리킨다. 그래서 파일마다
+            // 각자의 메타데이터에서 history_base를 따로 읽는다(첫 파일만 보던 이전 버그 수정).
+            var fileHistoryBases = new List<HistoryBaseReference?>(ordered.Count);
+            foreach (RolloutFileReference file in ordered)
+            {
+                fileHistoryBases.Add(metadataByFile.GetValueOrDefault(file)?.HistoryBase);
+            }
+
             SessionMetadata? baseMetadata = metadataByFile.GetValueOrDefault(ordered[0]);
-            string? parentThreadId = baseMetadata?.HistoryBase?.ThreadId ?? baseMetadata?.ForkedFromId;
-            long? parentEndOrdinal = baseMetadata?.HistoryBase?.EndOrdinalExclusive;
+            string? parentThreadId = fileHistoryBases[0]?.ThreadId ?? baseMetadata?.ForkedFromId;
+            long? parentEndOrdinal = fileHistoryBases[0]?.EndOrdinalExclusive;
+            long? parentEndByteOffset = fileHistoryBases[0]?.EndByteOffset;
 
             if (parentThreadId is not null && string.Equals(parentThreadId, threadId, StringComparison.OrdinalIgnoreCase))
             {
                 warnings.Add("자기 자신을 분기 부모로 참조합니다. 부모 연결을 무시합니다.");
                 parentThreadId = null;
                 parentEndOrdinal = null;
+                parentEndByteOffset = null;
+                fileHistoryBases[0] = null;
             }
 
-            result[threadId] = new ThreadChain(threadId, ordered, parentThreadId, parentEndOrdinal, warnings);
+            // 세그먼트 간 history_base가 실제로 "바로 앞 세그먼트 자신의 rollout ID"를 가리키는지
+            // 검증한다. 어긋나면 추측으로 자르지 않고 경고만 남긴 뒤 안전하게 전체를 포함한다.
+            for (int i = 1; i < ordered.Count; i++)
+            {
+                HistoryBaseReference? hb = fileHistoryBases[i];
+                if (hb is null)
+                {
+                    continue;
+                }
+
+                string expectedOwnRolloutId = ordered[i - 1].OwnRolloutId;
+                if (!string.Equals(hb.ThreadId, expectedOwnRolloutId, StringComparison.OrdinalIgnoreCase))
+                {
+                    warnings.Add(
+                        $"{ordered[i].FileName}: history_base가 바로 앞 세그먼트를 가리키지 않아 " +
+                        "경계를 확정할 수 없습니다. 해당 구간을 잘라내지 않고 전체를 포함합니다.");
+                    fileHistoryBases[i] = null;
+                }
+            }
+
+            result[threadId] = new ThreadChain(threadId, ordered, fileHistoryBases, parentThreadId, parentEndOrdinal, parentEndByteOffset, warnings);
         }
 
         return result;
@@ -85,9 +119,19 @@ public static class ThreadChainResolver
     /// 분기 부모를 따라가며 조상 thread ID 목록을 계산한다(뿌리 → 자신 순서).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// 순환 참조나 누락된 부모가 있어도 <b>절대 무한 루프에 빠지지 않는다.</b> 이미 방문한 thread를
     /// 다시 만나면 그 지점에서 멈추고 <paramref name="hasCycle"/>을 참으로 돌려준다.
     /// 부모가 카탈로그에 없으면(원본 손상 등) 있는 데까지만 돌려주고 조용히 멈춘다.
+    /// </para>
+    /// <para>
+    /// <c>chain.ParentThreadId</c>는 <see cref="Domain.Codex.Sessions.HistoryBaseReference.ThreadId"/>를
+    /// 그대로 옮긴 값이라 <b>rollout ID</b>다(공식 소스 주석 확인, docs/codex-storage-format.md §3) —
+    /// 대상 thread의 안정적인 ID(=<paramref name="chains"/>의 key)와 다를 수 있다. 예를 들어
+    /// 다중 세그먼트 thread의 비루트 세그먼트에서 분기했다면 그 세그먼트 자신의 rollout ID를
+    /// 가리킨다. 그래서 <see cref="BuildRolloutIdIndex"/>로 rollout ID → 실제 소유 thread를
+    /// 먼저 찾은 뒤 그 thread로 이동한다.
+    /// </para>
     /// </remarks>
     /// <param name="threadId">시작 thread ID.</param>
     /// <param name="chains"><see cref="Resolve"/>가 만든 체인 맵.</param>
@@ -99,6 +143,8 @@ public static class ThreadChainResolver
     {
         ArgumentNullException.ThrowIfNull(threadId);
         ArgumentNullException.ThrowIfNull(chains);
+
+        IReadOnlyDictionary<string, string> rolloutIdIndex = BuildRolloutIdIndex(chains);
 
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var path = new List<string>();
@@ -120,10 +166,30 @@ public static class ThreadChainResolver
                 break; // 부모 누락. 있는 데까지만 돌려주고 멈춘다.
             }
 
-            current = chain.ParentThreadId;
+            current = chain.ParentThreadId is { } rawTarget
+                ? rolloutIdIndex.GetValueOrDefault(rawTarget, rawTarget)
+                : null;
         }
 
         path.Reverse();
         return path;
+    }
+
+    /// <summary>
+    /// 모든 체인의 모든 파일에 대해 <c>rollout ID(<see cref="RolloutFileReference.OwnRolloutId"/>) →
+    /// 그 파일이 속한 thread의 안정적인 ID</c> 색인을 만든다. 분기/이어붙이기 대상을 찾을 때 쓴다.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> BuildRolloutIdIndex(IReadOnlyDictionary<string, ThreadChain> chains)
+    {
+        var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string threadId, ThreadChain chain) in chains)
+        {
+            foreach (RolloutFileReference file in chain.Files)
+            {
+                index[file.OwnRolloutId] = threadId;
+            }
+        }
+
+        return index;
     }
 }

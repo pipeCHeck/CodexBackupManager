@@ -26,4 +26,18 @@ public sealed record RolloutFileReference(
 {
     /// <summary>페이지네이션 세그먼트 파일인지(파일명에 <c>_&lt;segmentId&gt;</c>가 있는지).</summary>
     public bool IsSegment => SegmentId is not null;
+
+    /// <summary>
+    /// 이 파일 자신의 rollout ID. 세그먼트 파일이면 <c>_&lt;segmentId&gt;</c> 부분이고,
+    /// 아니면 <see cref="ThreadId"/>(파일명 앞부분) 그 자체다.
+    /// </summary>
+    /// <remarks>
+    /// 공식 Codex 소스(<c>codex-rs/protocol/src/protocol.rs</c> <c>HistoryPosition</c> 주석) 확인:
+    /// "HistoryPosition predates thread/revert, so this field is named thread_id. Treat its value
+    /// as a rollout_id" — 즉 뒤에 이어지는 세그먼트의 <c>history_base.thread_id</c>는 안정적인
+    /// 대화 ID(<see cref="ThreadId"/>)가 아니라 <b>바로 앞 세그먼트 파일 자신의 rollout ID</b>를
+    /// 가리킨다. 실측으로 확인됨: 세그먼트 2의 rollout ID는 파일명의 <c>_&lt;segmentId&gt;</c>이고,
+    /// 세그먼트 3의 <c>history_base.thread_id</c>는 세그먼트 1이 아니라 세그먼트 2의 이 값과 일치했다.
+    /// </remarks>
+    public string OwnRolloutId => SegmentId ?? ThreadId;
 }

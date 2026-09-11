@@ -49,6 +49,7 @@ public sealed class ThreadChainResolverTests
         ThreadChain chain = chains["child"];
         Assert.Equal("parent", chain.ParentThreadId);
         Assert.Equal(5, chain.ParentEndOrdinalExclusive);
+        Assert.Equal(1200, chain.ParentEndByteOffset);
     }
 
     [Fact]
@@ -72,7 +73,7 @@ public sealed class ThreadChainResolverTests
     {
         var chains = new Dictionary<string, ThreadChain>
         {
-            ["child"] = new ThreadChain("child", [File("child", null, DateTimeOffset.UnixEpoch)], "missing-parent", null, []),
+            ["child"] = new ThreadChain("child", [File("child", null, DateTimeOffset.UnixEpoch)], new HistoryBaseReference?[1], "missing-parent", null, null, []),
         };
 
         IReadOnlyList<string> ancestry = ThreadChainResolver.ResolveAncestry("child", chains, out bool hasCycle);
@@ -88,8 +89,8 @@ public sealed class ThreadChainResolverTests
     {
         var chains = new Dictionary<string, ThreadChain>
         {
-            ["a"] = new ThreadChain("a", [File("a", null, DateTimeOffset.UnixEpoch)], "b", null, []),
-            ["b"] = new ThreadChain("b", [File("b", null, DateTimeOffset.UnixEpoch)], "a", null, []),
+            ["a"] = new ThreadChain("a", [File("a", null, DateTimeOffset.UnixEpoch)], new HistoryBaseReference?[1], "b", null, null, []),
+            ["b"] = new ThreadChain("b", [File("b", null, DateTimeOffset.UnixEpoch)], new HistoryBaseReference?[1], "a", null, null, []),
         };
 
         IReadOnlyList<string> ancestry = ThreadChainResolver.ResolveAncestry("a", chains, out bool hasCycle);

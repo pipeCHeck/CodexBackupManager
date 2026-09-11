@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CodexBackupManager.Domain.Codex.Threads;
 
 namespace CodexBackupManager.Domain.Codex.Catalog;
 
@@ -13,12 +14,19 @@ namespace CodexBackupManager.Domain.Codex.Catalog;
 /// <b>모든</b> thread(<c>subagent</c>/<c>guardian_review</c> 포함)를 담은 전체 목록.
 /// 기본 UI는 <see cref="Projects"/>만 쓰지만, 이 목록은 버리지 않고 내부 관계 확인/향후 Export에 쓴다.
 /// </param>
+/// <param name="Chains">
+/// thread ID → <see cref="ThreadChain"/> 전체 맵. state DB에 없는(고아) thread도 rollout 파일만 있으면
+/// 포함된다. Phase 3 Conversation Viewer가 <c>history_base</c>/분기 조상 체인을 따라갈 때 이 맵으로
+/// 조상의 rollout 파일을 찾는다 — <see cref="ConversationEntry.Chain"/>은 그 thread 자신의 체인만
+/// 담고 있어 조상 탐색에는 부족하다.
+/// </param>
 /// <param name="Warnings">카탈로그를 만드는 동안 발견한 이상 징후(사용자 원문 없이).</param>
 /// <param name="BuiltAtUtc">카탈로그를 만든 시각.</param>
 /// <param name="Stats">성능/규모 측정값.</param>
 public sealed record CodexCatalog(
     IReadOnlyList<ProjectEntry> Projects,
     IReadOnlyList<ConversationEntry> AllConversations,
+    IReadOnlyDictionary<string, ThreadChain> Chains,
     IReadOnlyList<string> Warnings,
     DateTimeOffset BuiltAtUtc,
     CodexCatalogStats Stats)

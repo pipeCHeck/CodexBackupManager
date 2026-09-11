@@ -71,7 +71,7 @@ public static class CodexCatalogBuilder
         if (installation.ActiveStateDatabase is null)
         {
             warnings.Add("활성 state DB가 없어 대화 목록을 만들 수 없습니다.");
-            return EmptyCatalog(files.Count, warnings, totalStopwatch, scanStopwatch);
+            return EmptyCatalog(files.Count, chains, warnings, totalStopwatch, scanStopwatch);
         }
 
         string stateDbPath = Path.Combine(root, installation.ActiveStateDatabase.FileName);
@@ -79,7 +79,7 @@ public static class CodexCatalogBuilder
         if (database is null)
         {
             warnings.Add($"state DB를 읽기 전용으로 열 수 없습니다: {openError}");
-            return EmptyCatalog(files.Count, warnings, totalStopwatch, scanStopwatch);
+            return EmptyCatalog(files.Count, chains, warnings, totalStopwatch, scanStopwatch);
         }
 
         IReadOnlyList<ThreadRow> threadRows = ThreadRowReader.Read(database);
@@ -128,7 +128,7 @@ public static class CodexCatalogBuilder
 
         totalStopwatch.Stop();
         var stats = new CodexCatalogStats(files.Count, threadRows.Count, projects.Count, scanStopwatch.Elapsed, totalStopwatch.Elapsed);
-        return new CodexCatalog(projects, allConversations, warnings, DateTimeOffset.UtcNow, stats);
+        return new CodexCatalog(projects, allConversations, chains, warnings, DateTimeOffset.UtcNow, stats);
     }
 
     private static List<CodexProjectResolver.RootCandidate> BuildRootCandidates(
@@ -246,12 +246,13 @@ public static class CodexCatalogBuilder
 
     private static CodexCatalog EmptyCatalog(
         int rolloutFileCount,
+        IReadOnlyDictionary<string, ThreadChain> chains,
         List<string> warnings,
         Stopwatch totalStopwatch,
         Stopwatch scanStopwatch)
     {
         totalStopwatch.Stop();
         var stats = new CodexCatalogStats(rolloutFileCount, 0, 0, scanStopwatch.Elapsed, totalStopwatch.Elapsed);
-        return new CodexCatalog([], [], warnings, DateTimeOffset.UtcNow, stats);
+        return new CodexCatalog([], [], chains, warnings, DateTimeOffset.UtcNow, stats);
     }
 }

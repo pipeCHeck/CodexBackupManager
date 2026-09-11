@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using CodexBackupManager.Domain.Codex.Rollout;
 using ZstdSharp;
@@ -64,6 +65,61 @@ public static class RolloutStreamReader
 
             count++;
             yield return line;
+        }
+    }
+
+    /// <summary>
+    /// 줄과 함께 그 줄의 <b>UTF-8 바이트</b> 시작/끝(미포함) 위치를 돌려준다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>history_base.end_byte_offset</c>은 문자 위치가 아니라 원본 파일의 바이트 위치다.
+    /// 한글처럼 UTF-8에서 여러 바이트를 쓰는 문자가 섞여 있으면 <see cref="StreamReader"/>가 센
+    /// 문자 수와 실제 바이트 수가 달라지므로, 이 메서드는 <b>문자를 세지 않고 원시 바이트를 직접 센다.</b>
+    /// </para>
+    /// <para>
+    /// <c>ordinal</c> 기반 판정(<see cref="RolloutStreamReader"/> 사용부인
+    /// <c>ConversationItemParser</c> 참고)이 항상 가능하므로 이 메서드는 그것을 쓸 수 없을 때만 쓰는
+    /// 폴백이다. 줄 구분자는 <c>\n</c> 하나만 인식한다(rollout 파일은 LF만 쓴다, 실측 확인).
+    /// </para>
+    /// </remarks>
+    public static IEnumerable<(string Line, long StartByteOffsetInclusive, long EndByteOffsetExclusive)> ReadLinesWithByteOffsets(
+        string filePath,
+        RolloutFileKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        using FileStream fileStream = new(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using Stream contentStream = kind == RolloutFileKind.ZstdCompressed
+            ? new DecompressionStream(fileStream, leaveOpen: true)
+            : fileStream;
+        using BufferedStream buffered = new(contentStream);
+
+        long offset = 0;
+        var lineBytes = new List<byte>();
+
+        int b;
+        while ((b = buffered.ReadByte()) != -1)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            offset++;
+
+            if (b == '\n')
+            {
+                long start = offset - lineBytes.Count - 1;
+                string line = Encoding.UTF8.GetString(lineBytes.ToArray());
+                lineBytes.Clear();
+                yield return (line, start, offset);
+                continue;
+            }
+
+            lineBytes.Add((byte)b);
+        }
+
+        if (lineBytes.Count > 0)
+        {
+            long start = offset - lineBytes.Count;
+            string line = Encoding.UTF8.GetString(lineBytes.ToArray());
+            yield return (line, start, offset);
         }
     }
 }

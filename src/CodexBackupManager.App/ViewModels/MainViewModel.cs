@@ -8,8 +8,10 @@ using System.Threading.Tasks;
 using CodexBackupManager.App.Services;
 using CodexBackupManager.Codex;
 using CodexBackupManager.Codex.Catalog;
+using CodexBackupManager.Codex.Conversation;
 using CodexBackupManager.Domain.Codex;
 using CodexBackupManager.Domain.Codex.Catalog;
+using CodexBackupManager.Domain.Codex.Conversation;
 using CodexBackupManager.Domain.Diagnostics;
 
 namespace CodexBackupManager.App.ViewModels;
@@ -40,6 +42,12 @@ public sealed class MainViewModel : ObservableObject
     private bool _isCatalogLoading;
     private string? _catalogSummaryText;
     private CancellationTokenSource? _catalogCancellation;
+    private CodexCatalog? _lastCatalog;
+
+    private string? _selectedConversationTitle;
+    private bool _isConversationLoading;
+    private string? _conversationErrorText;
+    private CancellationTokenSource? _conversationCancellation;
 
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
@@ -159,6 +167,133 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _catalogSummaryText;
         private set => SetProperty(ref _catalogSummaryText, value);
+    }
+
+    /// <summary>Phase 3 — 오른쪽 Conversation Viewer에 표시할 메시지 목록.</summary>
+    public ObservableCollection<ConversationMessageViewModel> ConversationMessages { get; } = [];
+
+    /// <summary>선택된 대화의 제목. 선택된 대화가 없으면 <c>null</c>.</summary>
+    public string? SelectedConversationTitle
+    {
+        get => _selectedConversationTitle;
+        private set
+        {
+            if (SetProperty(ref _selectedConversationTitle, value))
+            {
+                OnPropertyChanged(nameof(HasSelectedConversation));
+                OnPropertyChanged(nameof(NoConversationSelected));
+            }
+        }
+    }
+
+    /// <summary>대화가 선택되어 있는지(오른쪽 영역 placeholder ↔ 실제 뷰어 전환용).</summary>
+    public bool HasSelectedConversation => SelectedConversationTitle is not null;
+
+    /// <summary>대화 내용을 읽는 중인지.</summary>
+    public bool IsConversationLoading
+    {
+        get => _isConversationLoading;
+        private set => SetProperty(ref _isConversationLoading, value);
+    }
+
+    /// <summary>대화 읽기 실패 사유. 없으면 <c>null</c>.</summary>
+    public string? ConversationErrorText
+    {
+        get => _conversationErrorText;
+        private set
+        {
+            if (SetProperty(ref _conversationErrorText, value))
+            {
+                OnPropertyChanged(nameof(HasConversationError));
+            }
+        }
+    }
+
+    /// <summary>대화 읽기 오류 문구가 있는지.</summary>
+    public bool HasConversationError => !string.IsNullOrWhiteSpace(ConversationErrorText);
+
+    /// <summary>오른쪽 영역에 placeholder를 보여줘야 하는지(아직 대화를 선택하지 않았을 때).</summary>
+    public bool NoConversationSelected => !HasSelectedConversation;
+
+    /// <summary>
+    /// 왼쪽 트리에서 대화를 선택했을 때 호출한다(<c>null</c>이면 선택 해제).
+    /// 이전 로딩이 진행 중이었다면 취소하고 새 로딩만 화면에 반영한다(race condition 방지).
+    /// </summary>
+    public void SelectConversation(ConversationNodeViewModel? node)
+    {
+        _conversationCancellation?.Cancel();
+
+        if (node is null)
+        {
+            SelectedConversationTitle = null;
+            ConversationMessages.Clear();
+            ConversationErrorText = null;
+            IsConversationLoading = false;
+            return;
+        }
+
+        _ = LoadConversationAsync(node);
+    }
+
+    private async Task LoadConversationAsync(ConversationNodeViewModel node)
+    {
+        var cancellation = new CancellationTokenSource();
+        _conversationCancellation = cancellation;
+
+        SelectedConversationTitle = node.Title;
+        ConversationMessages.Clear();
+        ConversationErrorText = null;
+        IsConversationLoading = true;
+
+        try
+        {
+            IReadOnlyDictionary<string, Domain.Codex.Threads.ThreadChain>? chains = _lastCatalog?.Chains;
+            if (chains is null)
+            {
+                ConversationErrorText = "카탈로그가 아직 준비되지 않았습니다.";
+                return;
+            }
+
+            ConversationTranscript transcript = await Task.Run(
+                () => ConversationTranscriptBuilder.Build(node.ThreadId, chains, cancellation.Token),
+                cancellation.Token).ConfigureAwait(true);
+
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            foreach (var message in transcript.Messages)
+            {
+                ConversationMessages.Add(ConversationMessageViewModel.FromDomain(message));
+            }
+
+            if (transcript.Messages.Count == 0 && transcript.Warnings.Count > 0)
+            {
+                ConversationErrorText = "이 대화를 읽을 수 없습니다.";
+            }
+
+            // 경고에는 사용자 원문이 없다(파일명 수준 진단 문구뿐이다). thread ID도 해시로만 남긴다.
+            _logger.Info(
+                $"대화 로딩 완료. thread={Redact.ShortHash(node.ThreadId)} messages={transcript.Messages.Count} " +
+                $"warnings={transcript.Warnings.Count} loadMs={transcript.BuildDuration.TotalMilliseconds:F0}");
+        }
+        catch (OperationCanceledException)
+        {
+            // 사용자가 다른 대화를 선택해 취소됨. 이전 결과를 화면에 남기지 않는다.
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("대화 로딩 중 오류", ex);
+            ConversationErrorText = $"대화를 읽는 중 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_conversationCancellation, cancellation))
+            {
+                IsConversationLoading = false;
+            }
+        }
     }
 
     /// <summary>시작 시 한 번 호출한다.</summary>
@@ -377,6 +512,9 @@ public sealed class MainViewModel : ObservableObject
 
     private void ApplyCatalog(CodexCatalog catalog)
     {
+        _lastCatalog = catalog;
+        SelectConversation(null);
+
         ProjectNodes.Clear();
         foreach (ProjectEntry project in catalog.Projects)
         {
@@ -408,6 +546,8 @@ public sealed class MainViewModel : ObservableObject
     {
         _catalogCancellation?.Cancel();
         _catalogCancellation = null;
+        _lastCatalog = null;
+        SelectConversation(null);
         ProjectNodes.Clear();
         IsCatalogLoading = false;
         CatalogSummaryText = null;

@@ -97,7 +97,7 @@ rollout-2026-09-11T12-22-35-01a08e64-...-a762540c0755_01a08e7d-...-55505359447b.
 | 항목 | 실측 |
 |---|---|
 | `sessions\**\*.jsonl` | 365개 / 약 1.45 GB |
-| 단일 최대 세션 파일 | 12.8 MB |
+| 단일 최대 세션 파일 | 12.8 MB (Phase 0 조사 시점. **상한이 아니다** — Phase 3 실측으로 288 MB 파일 발견, 아래 참고) |
 | `archived_sessions` | 1개 |
 | `state_5.sqlite` | 33.1 MB (+ `-wal` 4.1 MB) |
 | `thread_history_1.sqlite` | 325.3 MB |
@@ -142,12 +142,48 @@ context_window { window_id }
 git { commit_hash, branch, repository_url }
 
 # 분기/이어붙이기 관련 (Export/Import에 결정적)
-forked_from_id                          부모 threadId
+forked_from_id                          부모 rollout ID
 forked_from_ordinal_exclusive           부모에서 분기한 ordinal
 history_base { thread_id, end_ordinal_exclusive, end_byte_offset }
 multi_agent_version
 dynamic_tools[]
 ```
+
+> **`history_base`/`forked_from_id`의 `thread_id` 필드는 rollout ID다, 안정적인 thread ID가 아니다**
+> (Phase 3 pre-commit audit, 공식 소스 `codex-rs/protocol/src/protocol.rs`의 `HistoryPosition` 주석 확인):
+>
+> ```
+> /// Exclusive position in another rollout's paginated history.
+> pub struct HistoryPosition {
+>     /// HistoryPosition predates thread/revert, so this field is named thread_id.
+>     /// Treat its value as a rollout_id: ordinary rollouts use the thread ID as
+>     /// their rollout ID, while a reverted thread's filename carries a distinct
+>     /// rollout ID. It is not necessarily SessionMeta::id, which remains the
+>     /// stable thread ID across revert.
+>     pub thread_id: ThreadId,
+>     /// First rollout ordinal not included from the prefix file.
+>     pub end_ordinal_exclusive: u64,
+>     /// Byte offset immediately after the last included JSONL record from the prefix file.
+>     pub end_byte_offset: u64,
+> }
+> ```
+>
+> **실측으로 확인된 핵심 사실**: 같은 thread의 페이지네이션 세그먼트끼리도 이전 세그먼트를 무조건
+> 전부 잇지 않는다. 세그먼트 파일 하나하나가 자기 자신의 `history_base`를 가질 수 있고, 그
+> `thread_id`는 대화의 안정 ID(`session_meta.id`, 파일명의 prefix)가 아니라 **바로 앞 세그먼트
+> 파일 자신의 rollout ID**(base 파일이면 파일명 prefix, 세그먼트 파일이면 파일명의
+> `_<segmentId>` 부분)를 가리킨다. cross-thread 분기도 동일한 메커니즘이라, 조상이 여러
+> 세그먼트로 나뉜 뒤에는 분기 지점이 조상의 "마지막" 세그먼트가 아니라 **중간의 특정 세그먼트**일
+> 수도 있다(그 세그먼트 이후 조상 자신이 별도로 계속됐을 수 있기 때문).
+>
+> `end_ordinal_exclusive`는 "포함되지 않는 첫 rollout ordinal", `end_byte_offset`은 "마지막으로
+> 포함된 JSONL record 바로 다음의 byte 위치"다(공식 주석 그대로). `ordinal`은 파일마다 0으로
+> 리셋되지 않고, 페이지네이션 세그먼트 전체에 걸쳐 하나의 thread(그 분기 체인 포함) 안에서
+> 단조 증가한다(공식 소스 `codex-rs/rollout/src/ordinal.rs` `RolloutOrdinalState` 확인).
+>
+> 실제 `.codex` 데이터로 Codex 자신의 `thread_history_*.sqlite`(`thread_items.rollout_ordinal` +
+> `item_json`)와 교차 검증해 이 판정이 정확히 일치함을 확인했다(짧은 대화/긴 대화/segmented
+> thread/history_base fork thread 4종 전부 메시지 수·순서·내용 해시 시퀀스 100% 일치).
 
 **`session_meta`에는 대화 제목 필드가 없다.** 제목은 §5에서 따로 읽어야 한다.
 
@@ -169,6 +205,19 @@ dynamic_tools[]
 
 > 이 `item` 스키마는 `thread_history_<N>.sqlite`의 `thread_items.item_json`과 **동일한 camelCase 형태**다
 > (`userMessage`, `agentMessage`, …). **파서 하나로 양쪽을 처리할 수 있다.**
+>
+> **단, `content` 배열의 모양은 item type마다 다르다(Phase 3 pre-commit audit 실측):**
+> `userMessage.item_json`은 `{ content: [{ type, text }] }` 배열 형태이지만,
+> `agentMessage.item_json`은 배열이 아니라 **최상위 `{ text: "..." }` 필드**다.
+> 게다가 rollout JSONL 쪽 `item.content[].type`도 `UserMessage`는 `"text"`, `AgentMessage`는
+> `"Text"`로 대소문자가 다르게 나타났다(실측 확인). 그래서 텍스트를 뽑을 때는 `type` 값의
+> 표기를 따지지 말고 **문자열 `text` 속성이 있으면(배열 안이든 최상위든) 그대로 쓰는** 편이 안전하다.
+>
+> **`thread_items.thread_id`는 안정적인 thread ID가 아니라 각 rollout 파일 자신의 rollout ID로
+> 키가 잡힌다(Phase 3 pre-commit audit 실측).** 세그먼트가 3개인 thread를 실측한 결과
+> `thread_items`에 그 thread의 안정 ID로 조회했을 때는 세그먼트 1의 항목만 나왔고, 세그먼트
+> 2·3의 항목은 각각 자기 rollout ID(파일명의 `_<segmentId>` 부분)로 별도 조회해야 나왔다. 위의
+> `history_base.thread_id` = rollout ID라는 사실과 정확히 같은 맥락이다.
 
 **② API wire 레벨 — 정합성 검증/재개용 (`response_item`)**
 
@@ -179,6 +228,16 @@ dynamic_tools[]
 | `developer` | **시스템 주입분 — UI에서 숨겨야 한다** (`<app-context>`, `<recommended_plugins>`, `<multi_agent_mode>`, `<turn_aborted>` 등) |
 
 `payload.type == "reasoning"`은 `encrypted_content`(암호화 문자열)만 담는다. **복호화 불가 — 보존만 한다.**
+
+> **`role == "user"`이어도 시스템 주입 콘텐츠일 수 있다(Phase 3 pre-commit audit 실측).**
+> 실제 `.codex` 데이터에서 `role:"user"`인 `response_item`이 진짜 사용자 입력이 아니라
+> `<recommended_plugins>` 목록을 담고 있는 사례를 확인했다 — `role`만으로는 안전하지 않다.
+> 또한 알려진 마커(`<app-context>`, `<recommended_plugins>`, `<multi_agent_mode>`,
+> `<turn_aborted>`) 목록만으로는 부족해서, 같은 조사에서 목록에 없던 `<environment_context>`가
+> 추가로 발견됐다. **고정 문자열 목록보다 "소문자/밑줄 태그로 즉시 시작하는" 구조로 판정하는 편이
+> 새 마커에도 더 안전하다.** 371개 rollout 파일 실측: `event_msg`를 쓸 수 있는 파일 320개,
+> `response_item` 폴백이 필요한 파일 16개, `response_item` 후보 중 known/구조 판정으로 걸러진
+> 것 142건(`developer` role 929건은 이미 role만으로 걸러짐), 실제 채택된 폴백 메시지 389건.
 
 ---
 
@@ -438,3 +497,15 @@ Codex Home 아래 어떤 파일도 생성/수정/삭제하지 않는다.
 5. **`sqlite\codex-dev.db`(2.8 MB, 조사 시점에도 갱신 중)의 역할** — 스키마 미확인.
 6. **`worktrees\` / `visualizations\` / `generated_images\`** — 대화가 참조하는 산출물.
    Export 완전성 범위에 포함할지 미결정 (CLAUDE.md §27과의 경계).
+7. **`session_meta.subagent_history_start_ordinal`** — 공식 소스(`codex-rs/protocol/src/protocol.rs`)에서
+   존재를 확인했다("이 ordinal 이전 rollout 레코드는 상속된 모델 컨텍스트이며 이 subagent 자신의
+   turn/item 투영에서 제외한다"). Phase 3 Conversation Viewer는 아직 이 필드를 읽지 않는다 —
+   지금까지 실측한 대화 4종(짧은/긴/segmented/history_base fork)에는 이 필드가 없었고 thread_history와
+   100% 일치했으므로 당장은 영향이 없었지만, `thread_source=subagent`인 thread를 뷰어로 열면
+   이 필드를 무시해 상속된 컨텍스트까지 메시지로 잘못 보여줄 가능성이 있다. Phase 3은 기본적으로
+   `thread_source=user`만 노출하므로 아직 실제로 부딪히지 않았을 뿐이다 — subagent thread를 다루게
+   되면 반드시 다시 확인할 것.
+8. **다단계 분기(조상의 조상)** — `ConversationTranscriptBuilder`는 `ResolveAncestry`로 임의 깊이의
+   조상 체인을 계산하도록 만들어져 있지만, 실제 `.codex` 데이터에서 2단계 이상 이어진 fork 실례를
+   찾지 못해 검증하지 못했다. 1단계 fork(부모→자식)와 세그먼트 체인(같은 thread 안에서 여러 단계)은
+   thread_history와 100% 일치를 확인했다.
