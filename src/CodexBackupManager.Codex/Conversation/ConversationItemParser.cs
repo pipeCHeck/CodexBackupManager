@@ -4,7 +4,6 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using CodexBackupManager.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Conversation;
@@ -30,12 +29,24 @@ namespace CodexBackupManager.Codex.Conversation;
 /// <c>role:"developer"</c>를 숨기는 것에 더해 이런 주입 envelope도 숨긴다.
 /// </para>
 /// <para>
-/// <b>고정 문자열 목록만으로는 부족함이 실측으로 드러났다(Phase 3 pre-commit audit).</b>
-/// 알려진 <c>&lt;app-context&gt;</c>/<c>&lt;recommended_plugins&gt;</c>/<c>&lt;turn_aborted&gt;</c>/
-/// <c>&lt;multi_agent_mode&gt;</c> 외에도 <c>&lt;environment_context&gt;</c>가 추가로 발견됐다.
-/// 그래서 <see cref="InjectedTagPattern"/>로 <b>"소문자/밑줄 태그로 즉시 시작하는" 구조</b>를
-/// 함께 본다 — 새 마커가 나와도 이름을 미리 몰라도 걸러진다. 속성이 있는 태그(<c>&lt;a href=...&gt;</c>)나
-/// 대문자/숫자로 시작하는 것은 매치하지 않아 일반 텍스트를 과도하게 숨기지 않는다.
+/// <b>"소문자 태그로 시작"하는 구조 규칙은 쓰지 않는다.</b> 예전에는 새 마커를 놓치지 않으려고
+/// <c>^&lt;[a-z][a-z0-9_]*&gt;</c> 형태의 구조 규칙으로 광범위하게 걸렀는데, 이 규칙은 사용자가
+/// 실제로 <c>&lt;code&gt;</c>/<c>&lt;summary&gt;</c>/<c>&lt;xml&gt;</c> 같은 정상 HTML/코드
+/// 조각으로 메시지를 시작했을 때도 오탐으로 삭제해버린다(실측으로 확인된 false positive).
+/// 내부 메시지 하나를 잘못 보여주는 것보다 실제 사용자 메시지를 누락하는 쪽이 훨씬 심각한 오류이므로,
+/// OpenAI Codex 공식 소스(<c>codex-rs/context-fragments/src/fragment.rs</c>의
+/// <c>ContextualUserFragment::matches_marked_text</c>)와 동일하게 <b>확인된 마커의 시작+종료
+/// 태그 쌍이 정확히 양 끝에서 일치할 때만</b> 숨긴다. 알려지지 않은 새 마커는 이 목록에 없으면
+/// 숨기지 않는다 — future-proofing을 이유로 판정 범위를 넓히지 않는다는 원칙을 명시적으로 따른다.
+/// </para>
+/// <para>
+/// <b>주입 마커는 <c>content</c> 배열 원소 단위로 판정한다.</b> 실측(2026-08-27 rollout)에서
+/// <c>&lt;recommended_plugins&gt;...&lt;/recommended_plugins&gt;</c>와
+/// <c>&lt;environment_context&gt;...&lt;/environment_context&gt;</c>가 한 <c>response_item</c>의
+/// <c>content</c> 배열 안에 서로 다른 원소로 함께 들어오는 사례를 확인했다. 이걸 먼저 하나로
+/// 합친 뒤 "시작 마커 + 종료 마커"로 판정하면 서로 다른 두 마커의 시작/끝이 섞여 어느 쌍과도
+/// 맞지 않아 필터를 통과해버린다. 그래서 각 <c>content</c> 원소의 텍스트를 개별적으로 판정해서
+/// 주입된 조각만 제외하고 나머지(실제 사용자 텍스트가 섞여 있다면 그것)를 합친다.
 /// </para>
 /// <para>
 /// <c>item.content</c>/<c>payload.content</c> 배열의 각 원소에서 <b>타입 이름을 따지지 않고</b>
@@ -48,24 +59,18 @@ namespace CodexBackupManager.Codex.Conversation;
 public static class ConversationItemParser
 {
     /// <summary>
-    /// 실측으로 확인된 대표적인 주입 마커. <see cref="IsInjectedContent"/>는 이 목록에 없는 새 마커도
-    /// <see cref="InjectedTagPattern"/> 구조 판정으로 걸러낸다 — 이 목록은 예시/문서화 목적이 크다.
+    /// 실제 <c>.codex</c> 데이터와 OpenAI Codex 공식 소스(<c>codex-rs/core/src/context/</c>)로
+    /// 확인된 내부 주입 마커의 시작/종료 태그 쌍. 이 목록에 없는 마커는 숨기지 않는다 —
+    /// 새 마커에 대한 future-proofing을 이유로 판정 범위를 넓히지 않는다(클래스 remarks 참고).
     /// </summary>
-    private static readonly string[] InjectedContentMarkers =
+    private static readonly (string Start, string End)[] InjectedContentMarkers =
     [
-        "<app-context>",
-        "<recommended_plugins>",
-        "<turn_aborted>",
-        "<multi_agent_mode>",
-        "<environment_context>",
+        ("<app-context>", "</app-context>"),
+        ("<recommended_plugins>", "</recommended_plugins>"),
+        ("<turn_aborted>", "</turn_aborted>"),
+        ("<multi_agent_mode>", "</multi_agent_mode>"),
+        ("<environment_context>", "</environment_context>"),
     ];
-
-    /// <summary>
-    /// "소문자로 시작해 소문자/숫자/밑줄만 쓰는 태그 이름으로, 속성 없이 즉시 시작"하는지 판정한다.
-    /// Codex의 시스템 주입 envelope들이 공통으로 이 모양이다. 사용자가 실제로 타이핑한 텍스트가
-    /// 우연히 이 모양으로 시작할 가능성은 매우 낮다(대문자 태그, 속성이 있는 HTML 등은 매치되지 않는다).
-    /// </summary>
-    private static readonly Regex InjectedTagPattern = new(@"^<[a-z][a-z0-9_]*>", RegexOptions.Compiled);
 
     /// <summary>파싱 결과.</summary>
     /// <param name="Messages">
@@ -269,8 +274,8 @@ public static class ConversationItemParser
             return null;
         }
 
-        string text = CombineContentText(payload);
-        if (text.Length == 0 || IsInjectedContent(text))
+        string text = CombineNonInjectedContentText(payload);
+        if (text.Length == 0)
         {
             return null;
         }
@@ -288,26 +293,43 @@ public static class ConversationItemParser
         };
     }
 
+    /// <summary>
+    /// 텍스트 전체(양 끝 공백 제외)가 확인된 마커의 시작 태그로 시작하고 그 마커의 종료 태그로
+    /// 끝나는지 판정한다. 시작 마커와 종료 마커는 반드시 같은 쌍이어야 한다 — 서로 다른 두 마커의
+    /// 시작/끝이 섞인 경우는 매치하지 않는다(클래스 remarks의 <c>content</c> 배열 원소 단위 판정 참고).
+    /// </summary>
     private static bool IsInjectedContent(string text)
     {
-        string trimmed = text.TrimStart();
+        string trimmed = text.Trim();
 
-        foreach (string marker in InjectedContentMarkers)
+        foreach ((string start, string end) in InjectedContentMarkers)
         {
-            if (trimmed.StartsWith(marker, StringComparison.Ordinal))
+            if (trimmed.StartsWith(start, StringComparison.OrdinalIgnoreCase) &&
+                trimmed.EndsWith(end, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
         }
 
-        return InjectedTagPattern.IsMatch(trimmed);
+        return false;
     }
 
     /// <summary>
-    /// <c>content</c> 배열의 각 원소에서 문자열 <c>text</c> 속성을 전부 모아 합친다.
+    /// <c>content</c> 배열의 각 원소에서 문자열 <c>text</c> 속성을 모아 합친다.
     /// <c>type</c> 값의 대소문자/어휘 차이에 의존하지 않는다(클래스 remarks 참고).
     /// </summary>
     private static string CombineContentText(JsonElement itemOrPayload)
+        => CombineContentText(itemOrPayload, filterInjected: false);
+
+    /// <summary>
+    /// <c>CombineContentText</c>와 같지만, 확인된 주입 마커 쌍과 정확히 일치하는 원소는 제외하고
+    /// 나머지만 합친다. <c>response_item</c>(API wire 포맷) 폴백 경로에서만 쓴다 — <c>event_msg</c>는
+    /// 항상 UI가 이미 정제한 메시지이므로 이 필터가 필요 없다.
+    /// </summary>
+    private static string CombineNonInjectedContentText(JsonElement payload)
+        => CombineContentText(payload, filterInjected: true);
+
+    private static string CombineContentText(JsonElement itemOrPayload, bool filterInjected)
     {
         if (!itemOrPayload.TryGetProperty("content", out JsonElement content) || content.ValueKind != JsonValueKind.Array)
         {
@@ -324,6 +346,11 @@ public static class ConversationItemParser
 
             string? text = GetString(element, "text");
             if (string.IsNullOrEmpty(text))
+            {
+                continue;
+            }
+
+            if (filterInjected && IsInjectedContent(text))
             {
                 continue;
             }

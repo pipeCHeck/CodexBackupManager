@@ -2,8 +2,8 @@
 
 OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내보내기 · 불러오기 · 복원하는 **Windows 데스크톱 프로그램**.
 
-> **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model — 프로젝트/대화 목록) 완료.**
-> 대화 본문 뷰어 / 선택 / Export / Import / Restore는 아직 없습니다.
+> **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer) 완료.**
+> 선택 / Export / Import / Restore는 아직 없습니다.
 
 ---
 
@@ -188,13 +188,47 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
+## Phase 3가 표시하는 것
+
+프로젝트 트리에서 대화를 선택하면 오른쪽에 실제 User / Assistant 메시지를 보여준다.
+
+- **User / Assistant 메시지 Viewer**: `event_msg`/`item_completed`(UI 레벨)를 우선 사용하고,
+  그것이 하나도 없는 파일에서만 `response_item`(API wire 포맷)로 폴백한다(`ConversationItemParser`).
+  Assistant 메시지는 `commentary`/`final` phase를 구분해서 보존한다.
+- **segmented/history_base 재구성**: 하나의 대화가 여러 rollout 파일(세그먼트, 분기)에 걸쳐
+  있을 수 있다. `history_base`로 이어진 부모 파일들을 실제 순서대로 이어붙여 하나의 transcript로
+  만든다(`ConversationTranscriptBuilder`, `ThreadChainResolver`).
+- **rollout ID 기반 경계 처리**: `history_base.thread_id`는 실제로는 **rollout ID**이지 안정적인
+  thread ID가 아니다(공식 `HistoryPosition` 구조체로 확인). 파일 자신의 rollout ID
+  (`RolloutFileReference.OwnRolloutId`)로 색인을 만들어(`ThreadChainResolver.BuildRolloutIdIndex`)
+  분기/세그먼트가 걸쳐 있는 원본 파일을 정확히 찾고, `end_ordinal_exclusive`로 상속 범위를 자른다.
+- **response_item fallback**: `event_msg`가 없는 파일에서는 `response_item`으로 대체하되,
+  `role:"developer"`는 항상 숨기고, `role:"user"`라도 확인된 주입 마커(`<recommended_plugins>` 등)와
+  정확히 일치하는 조각은 제외한다 — 상세 정책은 아래 "내부 주입 콘텐츠 필터" 참고.
+- **가상화 WPF message list**: 메시지 수백~수천 개도 부드럽게 스크롤되도록 `ListBox` +
+  `VirtualizingPanel`(Recycling 모드)로 렌더링한다.
+
+### 내부 주입 콘텐츠 필터
+
+`response_item` 폴백 경로에서 실제 사용자가 타이핑하지 않은 시스템 주입 콘텐츠(예:
+`<environment_context>`, `<recommended_plugins>`)를 걸러낸다. OpenAI Codex 공식 소스
+(`codex-rs/context-fragments/src/fragment.rs`의 `ContextualUserFragment::matches_marked_text`)와
+동일하게, **확인된 마커의 시작 태그와 종료 태그가 정확히 양 끝에서 일치할 때만** 숨긴다.
+"소문자 태그로 시작하면 숨긴다" 같은 일반 구조 규칙은 쓰지 않는다 — 그런 규칙은 사용자가 실제로
+`<code>`/`<summary>`/`<xml>` 같은 정상 HTML/코드 조각으로 메시지를 시작했을 때도 오탐으로 삭제해버리기
+때문이다. 내부 메시지 하나를 잘못 보여주는 것보다 실제 사용자 메시지를 누락하는 쪽이 더 심각한
+오류라는 원칙에 따라, 확인되지 않은 새 마커는 목록에 추가되기 전까지 숨기지 않는다
+(`ConversationItemParser.IsInjectedContent`).
+
+---
+
 ## 로드맵
 
 | Phase | 내용 | 상태 |
 |---|---|---|
 | 1 | Codex Home 탐색 · 검증 · 설치 정보 조회 | **완료** |
 | 2 | Read Model — rollout 파서, thread 체인, 프로젝트/제목 해결, 대화 목록 | **완료** |
-| 3 | Conversation Viewer — User / Assistant 메시지 | 예정 |
+| 3 | Conversation Viewer — User / Assistant 메시지 | **완료** |
 | 4 | Selection — 프로젝트/대화 다중 선택 | 예정 |
 | 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | 예정 |
 | 6 | Import Preview — Manifest/체크섬 검사, 충돌 검사, 경로 재매핑 | 예정 |
@@ -206,8 +240,8 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 - `.zst` 압축 rollout은 우리가 직접 압축한 fixture로만 검증했다. 실제 Codex `.zst` 실물은 아직
   확인하지 못했다(조사 시점 이 PC에 0개). `docs/codex-storage-format.md` §9 참고.
-- `ThreadChainResolver.ResolveAncestry`(분기 조상 체인 계산)는 도메인 모델만 만들어뒀고 아직 아무도
-  호출하지 않는다 — Export(Phase 5)에서 실제로 쓸 때 다시 검증이 필요하다.
+- `ThreadChainResolver.ResolveAncestry`(분기 조상 체인 계산)는 Phase 3의 `ConversationTranscriptBuilder`가
+  실제로 호출한다 — 다만 Export(Phase 5)에서 백업 대상 파일 범위를 정할 때는 별도로 다시 검증이 필요하다.
 
 ---
 

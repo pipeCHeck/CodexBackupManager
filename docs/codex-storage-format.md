@@ -234,10 +234,27 @@ dynamic_tools[]
 > `<recommended_plugins>` 목록을 담고 있는 사례를 확인했다 — `role`만으로는 안전하지 않다.
 > 또한 알려진 마커(`<app-context>`, `<recommended_plugins>`, `<multi_agent_mode>`,
 > `<turn_aborted>`) 목록만으로는 부족해서, 같은 조사에서 목록에 없던 `<environment_context>`가
-> 추가로 발견됐다. **고정 문자열 목록보다 "소문자/밑줄 태그로 즉시 시작하는" 구조로 판정하는 편이
-> 새 마커에도 더 안전하다.** 371개 rollout 파일 실측: `event_msg`를 쓸 수 있는 파일 320개,
-> `response_item` 폴백이 필요한 파일 16개, `response_item` 후보 중 known/구조 판정으로 걸러진
-> 것 142건(`developer` role 929건은 이미 role만으로 걸러짐), 실제 채택된 폴백 메시지 389건.
+> 추가로 발견됐다.
+>
+> **필터 정책(Phase 3 사후 정합성 수정, 2026-09-11):** 처음에는 "소문자/밑줄 태그로 즉시
+> 시작하는" 구조 규칙을 추가해 새 마커에도 대응하려 했으나, 이 규칙은 사용자가 실제로
+> `<code>`/`<summary>`/`<xml>` 같은 정상 HTML/코드 조각으로 메시지를 시작했을 때도 오탐으로
+> 지워버리는 문제가 있었다(false positive). 내부 메시지 하나를 잘못 보여주는 것보다 실제
+> 사용자 메시지를 누락하는 쪽이 더 심각한 오류이므로, OpenAI Codex 공식 소스
+> (`codex-rs/context-fragments/src/fragment.rs`의 `ContextualUserFragment::matches_marked_text`)와
+> 동일한 방식으로 되돌렸다: **확인된 마커의 시작 태그와 종료 태그가 정확히 양 끝에서 일치할 때만**
+> 숨기고, 목록에 없는 새 마커는 숨기지 않는다. 판정은 `content` 배열 원소 단위로 한다 — 실측
+> 결과 `<recommended_plugins>...</recommended_plugins>`와
+> `<environment_context>...</environment_context>`가 한 `response_item`의 `content` 배열 안에
+> 서로 다른 원소로 함께 들어오는 사례가 있어서, 먼저 전체를 합친 뒤 판정하면 서로 다른 두 마커의
+> 시작/끝이 섞여 필터를 통과해버리기 때문이다. 구현: `ConversationItemParser.IsInjectedContent`.
+>
+> `content_item_kinds`(`internal_chat_message_metadata_passthrough`) 필드가 일부 최신 rollout에
+> 구조적 분류 메타데이터로 존재하는 것도 확인했지만(예: `["plugins.recommendations",
+> "environments.environment_context"]`), 2026-06 무렵의 구버전 rollout에는 이 필드 자체가 없는
+> 사례도 확인되어(같은 `<environment_context>` 주입인데도 필드 부재) 전체 데이터셋에 대한 1차
+> 판정 근거로 쓰기에는 아직 근거가 부족하다. 향후 버전별 커버리지를 더 검증하면 보조 신호로
+> 검토할 수 있다.
 
 ---
 

@@ -190,12 +190,12 @@ public sealed class ConversationItemParserTests : IDisposable
     }
 
     [Fact]
-    public void 목록에_없는_주입_태그도_구조적으로_숨긴다()
+    public void 확인된_마커_쌍으로_시작하고_끝나는_environment_context는_숨긴다()
     {
         // Phase 3 pre-commit audit 실측: <recommended_plugins>/<app-context>/<turn_aborted>/
-        // <multi_agent_mode> 고정 목록만으로는 부족했다 — 실제 데이터에서 <environment_context>라는
-        // 새 마커가 나왔다. 고정 문자열 목록에만 의존하지 않도록, "메시지가 소문자/밑줄로 된
-        // 태그로 시작한다"는 구조로 판정한다.
+        // <multi_agent_mode> 외에 <environment_context>라는 마커도 실제 데이터에서 확인됐다.
+        // 공식 Codex 소스(ContextualUserFragment::matches_marked_text)처럼 시작+종료 마커
+        // "쌍"이 정확히 일치할 때만 숨긴다 — 임의의 소문자 태그 구조 전체를 숨기지 않는다.
         RolloutFileReference file = WriteFile(
         [
             ResponseItemLine(1, "user", ["<environment_context>\n작업 디렉터리 정보\n</environment_context>"]),
@@ -211,13 +211,68 @@ public sealed class ConversationItemParserTests : IDisposable
     [Fact]
     public void 태그처럼_보이지_않는_꺾쇠로_시작하는_진짜_메시지는_숨기지_않는다()
     {
-        // 구조적 판정이 과도하게 넓지 않은지 확인한다 — "<3 감사합니다!" 같은 진짜 사용자 텍스트는
-        // '<' 뒤에 소문자/밑줄로 된 깔끔한 태그 이름이 오지 않으므로 숨기면 안 된다.
+        // "<3 감사합니다!"는 확인된 마커 목록 어디에도 없으므로 숨기면 안 된다.
         RolloutFileReference file = WriteFile([ResponseItemLine(1, "user", ["<3 감사합니다!"])]);
 
         ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
 
         Assert.Equal("<3 감사합니다!", Assert.Single(result.Messages).Text);
+    }
+
+    [Fact]
+    public void code_태그로_시작하는_진짜_사용자_메시지는_보존한다()
+    {
+        // 실제 사용자가 <code>...</code> 같은 정상 HTML/코드 조각으로 메시지를 시작할 수 있다.
+        // "소문자 태그로 시작" 같은 구조 규칙으로 판정하면 이런 메시지가 잘못 삭제된다.
+        RolloutFileReference file = WriteFile([ResponseItemLine(1, "user", ["<code>hello</code>"])]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        Assert.Equal("<code>hello</code>", Assert.Single(result.Messages).Text);
+    }
+
+    [Fact]
+    public void summary_태그로_시작하는_진짜_사용자_메시지는_보존한다()
+    {
+        RolloutFileReference file = WriteFile([ResponseItemLine(1, "user", ["<summary>hello</summary>"])]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        Assert.Equal("<summary>hello</summary>", Assert.Single(result.Messages).Text);
+    }
+
+    [Fact]
+    public void xml_태그로_시작하는_진짜_사용자_메시지는_보존한다()
+    {
+        RolloutFileReference file = WriteFile([ResponseItemLine(1, "user", ["<xml>hello</xml>"])]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        Assert.Equal("<xml>hello</xml>", Assert.Single(result.Messages).Text);
+    }
+
+    [Fact]
+    public void 서로_다른_주입_마커_쌍이_같은_메시지_안에서_각각_조각으로_들어와도_모두_제거하고_실제_텍스트만_남긴다()
+    {
+        // 실측(2026-08-27 rollout): role=user response_item 하나의 content 배열 안에
+        // <recommended_plugins>...</recommended_plugins> 조각과 <environment_context>...</environment_context>
+        // 조각이 각각 별도의 content 원소로 함께 들어오는 사례가 있다. 전체를 하나로 합친 뒤
+        // "시작 마커 A + 끝 마커 B"로 판정하면 어느 쌍과도 맞지 않아 필터를 통과해버린다.
+        // content 원소 단위로 각각 판정해야 두 조각 모두 제거된다.
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLine(1, "user",
+            [
+                "<recommended_plugins>\n설치 안 된 플러그인 목록\n</recommended_plugins>",
+                "<environment_context>\n작업 디렉터리 정보\n</environment_context>",
+            ]),
+            ResponseItemLine(2, "user", ["진짜 사용자 메시지"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal("진짜 사용자 메시지", message.Text);
     }
 
     [Fact]
