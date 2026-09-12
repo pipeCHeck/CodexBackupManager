@@ -255,6 +255,37 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
+## UI/UX 개선 (Phase 4 사후)
+
+기능은 그대로 두고 가독성 · 레이아웃 · 렌더링 품질만 다듬은 작업. 새 기능(Export/Import)은 없다.
+
+- **색상 대비 정리**: 버튼 스타일이 배경/전경을 지정하지 않아 시스템 기본 크롬(밝은 배경에 가까움)을
+  그대로 물려받았던 게 "전체 선택/선택 해제 버튼이 흰 배경/흰 글씨처럼 보이는" 원인이었다. 버튼에
+  전용 `ControlTemplate`을 주고 Hover/Pressed/Disabled 상태별 배경·전경·테두리를 전부 `App.xaml`
+  리소스(`ButtonBg`/`ButtonFg`/`ButtonBgDisabled`/`ButtonFgDisabled` 등)로 명시했다 — Disabled도
+  "비활성처럼 보이되 글자는 읽을 수 있게" 만들었다. CheckBox도 라벨 글자색을 명시해 테마와 무관하게
+  또렷이 보이게 했다. Assistant 말풍선 배경은 창 배경(`Bg`)과 구분되는 `PanelAlt`로 바꿔 대비를 줬다.
+- **레이아웃**: 왼쪽 프로젝트/대화 트리 폭을 300→380(최소 260)으로 넓히고, 오른쪽 Viewer와의 경계에
+  `GridSplitter`를 추가해 사용자가 직접 폭을 조절할 수 있다. 프로젝트/대화 이름은 `StackPanel` 대신
+  `Grid`(Auto+`*`)로 감싸 실제로 폭이 제한되게 했다 — 전에는 `StackPanel`이 자식에게 무한 너비를 줘서
+  `TextTrimming`이 사실상 동작하지 않았다. 너무 길면 말줄임(`…`) 처리되고, 마우스를 올리면 전체 이름이
+  ToolTip으로 보인다.
+- **Viewer 렌더링(Markdown-lite)**: 대화 본문을 더 이상 순수 텍스트로 보여주지 않는다.
+  `CodexBackupManager.App.Rendering.MarkdownLiteParser`가 문단/줄바꿈/제목(`#`~`###`)/번호 목록/불릿
+  목록/코드블록(펜스 ```` ``` ````)/인라인 코드(`` `code` ``)를 인식하고, `MarkdownLiteFlowDocumentRenderer`가
+  이를 WPF `FlowDocument`로 그린다. 외부 markdown 패키지 대신 직접 만든 최소 subset 파서다(과설계 방지,
+  CLAUDE.md의 최소 의존성 원칙). 렌더링은 `TextBlock`이 아니라 읽기 전용 `RichTextBox`에 붙이는데,
+  `RichTextBox.Document`가 바인딩 불가능한 일반 CLR 속성이라 `FlowDocumentBinding` 첨부 속성을 거친다 —
+  이 방식이라야 서식이 섞여도 기존처럼 텍스트 선택/복사가 유지된다. 실제 `.codex` 데이터(1,624개 실측
+  메시지)로 확인한 결과 제목 1,296개·불릿 항목 4,291개·번호 항목 792개·코드블록 403개가 실제로
+  파싱되었고 예외는 0건이었다.
+- **스크롤 부드럽게**: 메시지 `ListBox`에 `VirtualizingPanel.ScrollUnit="Pixel"`을 추가했다. 기존
+  기본값(Item 단위)은 마우스 휠 한 번에 "메시지 하나"(=여러 줄짜리 말풍선 전체) 단위로 건너뛰어
+  스크롤이 딱딱했다. Pixel 단위로 바꾸면 가상화(성능)는 그대로 유지하면서 일반 문서처럼 부드럽게
+  스크롤된다 — 실측 1,431개 메시지 대화에서도 전체 렌더링 894ms로 체감 지연이 없었다.
+
+---
+
 ## 로드맵
 
 | Phase | 내용 | 상태 |

@@ -5,13 +5,31 @@
 
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
 
+    <!-- ── 색상 토큰 ──────────────────────────────────────────────────────
+         UI/UX 개선(다크 테마 대비 정리) 작업에서 뽑아낸 재사용 가능한 팔레트.
+         버튼 기본 스타일이 배경/전경을 명시하지 않아 시스템 기본(밝은 배경 + 검은 글씨에
+         가까움) 테마를 그대로 물려받던 것이 "흰 배경/흰 글씨처럼 보임" 문제의 원인이었다. -->
     <SolidColorBrush x:Key="Bg" Color="#FF1E1F22" />
     <SolidColorBrush x:Key="Panel" Color="#FF2B2D31" />
+    <!-- Panel과 구분되는 살짝 밝은 패널. Assistant 말풍선/코드블록 등에 쓴다. -->
+    <SolidColorBrush x:Key="PanelAlt" Color="#FF33363B" />
     <SolidColorBrush x:Key="Fg" Color="#FFE6E6E6" />
     <SolidColorBrush x:Key="Muted" Color="#FF9AA0A6" />
     <SolidColorBrush x:Key="Ok" Color="#FF4CAF50" />
     <SolidColorBrush x:Key="Bad" Color="#FFE57373" />
     <SolidColorBrush x:Key="Warn" Color="#FFFFB74D" />
+    <SolidColorBrush x:Key="Border" Color="#FF44474D" />
+    <SolidColorBrush x:Key="CodeBg" Color="#FF17181B" />
+    <SolidColorBrush x:Key="UserBubbleBg" Color="#FF2F3B4C" />
+
+    <SolidColorBrush x:Key="ButtonBg" Color="#FF3A3D42" />
+    <SolidColorBrush x:Key="ButtonBgHover" Color="#FF484B52" />
+    <SolidColorBrush x:Key="ButtonBgPressed" Color="#FF2A2C30" />
+    <SolidColorBrush x:Key="ButtonFg" Color="#FFF2F2F2" />
+    <SolidColorBrush x:Key="ButtonBorder" Color="#FF55585F" />
+    <SolidColorBrush x:Key="ButtonBgDisabled" Color="#FF2A2C30" />
+    <SolidColorBrush x:Key="ButtonFgDisabled" Color="#FF7C7F85" />
+    <SolidColorBrush x:Key="ButtonBorderDisabled" Color="#FF3A3D42" />
 
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource Fg}" />
@@ -20,11 +38,58 @@
       <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
     </Style>
 
+    <!-- 버튼은 시스템 기본 크롬(밝은 배경)에 전혀 의존하지 않도록 배경/전경/테두리를 전부
+         직접 그린다. Hover/Pressed/Disabled 모두 명시적으로 대비를 확보한다 —
+         특히 Disabled는 "비활성처럼 보이되 글자는 읽을 수 있게" 한다. -->
     <Style TargetType="Button">
       <Setter Property="Padding" Value="14,7" />
       <Setter Property="Margin" Value="0,0,8,0" />
       <Setter Property="MinWidth" Value="120" />
       <Setter Property="FontFamily" Value="Segoe UI, Malgun Gothic" />
+      <Setter Property="Background" Value="{StaticResource ButtonBg}" />
+      <Setter Property="Foreground" Value="{StaticResource ButtonFg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource ButtonBorder}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5" SnapsToDevicePixels="True">
+              <ContentPresenter Margin="{TemplateBinding Padding}"
+                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                 TextElement.Foreground="{TemplateBinding Foreground}"
+                                 RecognizesAccessKey="True" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource ButtonBgHover}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource ButtonBgPressed}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource ButtonBgDisabled}" />
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource ButtonBorderDisabled}" />
+                <Setter Property="Foreground" Value="{StaticResource ButtonFgDisabled}" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- CheckBox는 네이티브 글리프를 유지하되(과설계 방지), 라벨 글자색만 명시해
+         테마와 무관하게 항상 또렷이 보이게 한다. -->
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource Fg}" />
+      <Setter Property="FontFamily" Value="Segoe UI, Malgun Gothic" />
+      <Setter Property="Cursor" Value="Hand" />
     </Style>
 
   </Application.Resources>
