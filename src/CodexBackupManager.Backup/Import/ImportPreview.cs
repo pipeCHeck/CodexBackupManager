@@ -91,15 +91,26 @@ public sealed record ImportProjectPreview(
 /// 선택되지 않은(조상 전용) 대화의 Preview. 일반 목록에는 넣지 않고 상세 정보용으로만 별도 보관한다.
 /// </param>
 /// <param name="Warnings">manifest/backup lineage 재구성 중 발견한 경고. 원문 없음.</param>
+/// <param name="SourceBackupIdentity">
+/// (Phase 06_03) 이 Preview가 실제로 검증·분석한 <c>.codexbackup</c> 파일의 identity(길이+전체
+/// streaming SHA-256). <see cref="ImportPreviewBuilder.Build(string,CodexBackupManager.Domain.Codex.Catalog.CodexCatalog,System.Threading.CancellationToken)"/>
+/// 가 분석을 마친 직후 같은 경로를 다시 읽어 고정한다. <see cref="ImportPlanBuilder"/>는 나중에
+/// (임의로 시간이 지난 뒤) 같은 경로의 파일을 다시 hash해서 이 값과 정확히 같을 때만 Plan을
+/// 만든다 — 그 사이 파일이 다른 것으로 바뀌었으면 "새 source로 다시 freeze"하지 않고 Plan 생성
+/// 자체를 거부한다(Preview↔Plan TOCTOU 방지). 검증에 실패한 Preview(<see cref="Success"/>가
+/// <c>false</c>)이거나 경로를 알 수 없는 <see cref="ImportPreviewBuilder.Build(CodexBackupManager.Backup.Reading.BackupReader,CodexBackupManager.Domain.Codex.Catalog.CodexCatalog,System.Threading.CancellationToken)"/>
+/// 오버로드로 직접 만들었으면 <c>null</c>.
+/// </param>
 public sealed record ImportPreview(
     bool Success,
     IReadOnlyList<string> ValidationErrors,
     BackupManifest? Manifest,
     IReadOnlyList<ImportProjectPreview> Projects,
     IReadOnlyList<ImportConversationPreview> DependencyOnlyConversations,
-    IReadOnlyList<string> Warnings)
+    IReadOnlyList<string> Warnings,
+    ImportBackupIdentity? SourceBackupIdentity)
 {
     /// <summary>검증 실패 결과를 만든다.</summary>
     public static ImportPreview Failed(IReadOnlyList<string> validationErrors)
-        => new(false, validationErrors, null, [], [], []);
+        => new(false, validationErrors, null, [], [], [], null);
 }

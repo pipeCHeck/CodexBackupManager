@@ -87,6 +87,12 @@ public sealed class MainViewModel : ObservableObject
     private ImportPreview? _lastImportPreviewDomain;
     private string? _importPlanSummaryText;
 
+    // Phase 06_03 — freeze된 ImportPlan은 여기 한 곳에만 보관한다. Preview가 성공하거나 경로를
+    // 재지정할 때 딱 한 번만 ImportPlanBuilder.Build를 부르고, 그 결과를 이 필드에 저장한다 — Phase 7이
+    // Apply 직전에 이 인스턴스를 그대로 받아 preflight만 다시 돌리면 되고, Preview를 다시 해석하거나
+    // Plan을 다시 만들 필요가 없다.
+    private ImportPlan? _currentImportPlan;
+
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
     /// <param name="settings">설정 저장소.</param>
@@ -202,15 +208,26 @@ public sealed class MainViewModel : ObservableObject
     public bool HasImportPreview => CurrentImportPreview is not null;
 
     /// <summary>
-    /// Phase 06_01 — Preview를 <see cref="ImportPlan"/>으로 freeze했을 때의 Apply 준비 상태 요약.
-    /// Diverged/Unverifiable이 하나도 없어야 Apply-ready다(요구사항 4). Phase 7이 참고할 값이며,
-    /// 이 문구를 보여주는 것 자체는 아무것도 적용하지 않는다.
+    /// Preview를 <see cref="ImportPlan"/>으로 freeze한 결과에 대한 안내 문구(Phase 06_01, 문구는
+    /// Phase 06_03에서 정정). <b>이 문구는 "지금 바로 Apply해도 안전하다"는 뜻이 아니다</b> —
+    /// <see cref="ImportPlan.IsApplyReady"/>는 Diverged/Unverifiable이 없다는 것만 말해줄 뿐, backup
+    /// 파일이나 로컬 Codex가 Preview 이후 바뀌었는지는 전혀 모른다(그건 Apply 직전 fresh
+    /// <see cref="ImportPlanPreflightValidator"/>만 알 수 있다). Phase 7 이전까지는 "실제 적용
+    /// 가능"이라는 오해를 주지 않는 중립적인 문구만 보여준다.
     /// </summary>
     public string? ImportPlanSummaryText
     {
         get => _importPlanSummaryText;
         private set => SetProperty(ref _importPlanSummaryText, value);
     }
+
+    /// <summary>
+    /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 현재 freeze된
+    /// <see cref="ImportPlan"/> — <see cref="UpdateImportPlanSummary"/>가 딱 한 곳에서만 만들고
+    /// 저장한다. Phase 7은 이 인스턴스를 그대로 받아 Apply 직전 preflight만 다시 돌리면 된다(Preview
+    /// 재해석/Plan 재생성 금지).
+    /// </summary>
+    internal ImportPlan? CurrentImportPlan => _currentImportPlan;
 
     /// <summary>Export가 진행 중인지. 재실행을 막고 취소 버튼 표시 여부를 결정하는 데 쓴다.</summary>
     public bool IsExporting
@@ -866,6 +883,7 @@ public sealed class MainViewModel : ObservableObject
         CurrentImportPreview = null;
         _lastImportPreviewDomain = null;
         _lastImportBackupFilePath = null;
+        _currentImportPlan = null;
         ImportPlanSummaryText = null;
     }
 
@@ -982,33 +1000,47 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Preview를 <see cref="ImportPlan"/>으로 freeze해 Apply 준비 상태 문구를 갱신한다(요구사항 4).
-    /// Plan을 "만들기"만 할 뿐 여기서도 아무것도 적용하지 않는다.
+    /// Preview를 <see cref="ImportPlan"/>으로 freeze해 <see cref="_currentImportPlan"/>에 보존하고,
+    /// 문구를 갱신한다(요구사항 4/5). <b>이 메서드가 <see cref="ImportPlanBuilder.Build"/>를 부르는
+    /// 유일한 곳이어야 한다</b> — 다른 곳(예: 문구를 다시 보여줘야 할 때)에서 Plan을 다시 만들지
+    /// 않고 항상 <see cref="_currentImportPlan"/>을 그대로 읽어야 한다. Plan을 "만들기"만 할 뿐
+    /// 여기서도 아무것도 적용하지 않는다.
     /// </summary>
+    /// <remarks>
+    /// (Phase 06_03) <see cref="ImportPlanBuilder.Build"/>가 <c>null</c>을 돌려주는 경우는 두 가지를
+    /// 구분하지 않는다 — Preview 검증 실패, 그리고 Preview 이후 backup 파일이 바뀐 경우
+    /// (<see cref="ImportPreview.SourceBackupIdentity"/> 불일치) 전부 "Plan을 지금 신뢰할 수 없다"는
+    /// 같은 결론이므로, 문구도 재-Preview를 안내하는 것으로 충분하다.
+    /// </remarks>
     private void UpdateImportPlanSummary(ImportPreview preview)
     {
         if (!preview.Success || _lastImportBackupFilePath is not { } backupPath)
         {
+            _currentImportPlan = null;
             ImportPlanSummaryText = null;
             return;
         }
 
         ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        _currentImportPlan = plan;
+
         if (plan is null)
         {
-            ImportPlanSummaryText = null;
+            ImportPlanSummaryText = "가져오기 계획을 만들 수 없습니다 — 백업 파일이 미리보기 이후 변경되었을 수 있습니다. 다시 불러와 주세요.";
             return;
         }
 
-        if (plan.IsApplyReady)
+        if (!plan.IsApplyReady)
         {
-            ImportPlanSummaryText = "Apply 준비 완료(Phase 7에서 사용).";
+            int blockedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.Blocked);
+            int divergedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.RequiresDecision);
+            ImportPlanSummaryText = $"충돌 있음 — 확인 불가 {blockedCount}건, 분기 충돌 {divergedCount}건(사용자 결정 필요).";
             return;
         }
 
-        int blockedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.Blocked);
-        int divergedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.RequiresDecision);
-        ImportPlanSummaryText = $"Apply 준비 안 됨 — 확인 불가 {blockedCount}건, 분기 충돌 {divergedCount}건(사용자 결정 필요).";
+        // "Apply 준비 완료"라고 말하지 않는다 — Diverged/Unverifiable이 없다는 뜻일 뿐, backup/로컬
+        // Codex가 지금(Apply 직전) 이 상태와 같은지는 Phase 7의 fresh preflight만 알 수 있다.
+        ImportPlanSummaryText = "가져오기 계획 생성 완료 — 충돌 없음(적용 전 최종 검사가 필요합니다).";
     }
 
     /// <summary>

@@ -24,7 +24,17 @@ namespace CodexBackupManager.Backup.Import;
 /// </remarks>
 public static class ImportPreviewBuilder
 {
-    /// <summary>파일 경로로 Preview를 만든다. 검증 실패면 <see cref="ImportPreview.Failed"/>를 돌려준다.</summary>
+    /// <summary>
+    /// 파일 경로로 Preview를 만든다. 검증 실패면 <see cref="ImportPreview.Failed"/>를 돌려준다.
+    /// </summary>
+    /// <remarks>
+    /// (Phase 06_03) 분석을 마친 직후 같은 <paramref name="backupFilePath"/>를 다시 스트리밍으로
+    /// 읽어 <see cref="ImportPreview.SourceBackupIdentity"/>를 고정한다 — Preview와 나중의
+    /// <see cref="ImportPlanBuilder.Build"/> 사이에 같은 경로의 파일이 다른 내용으로 바뀌는 TOCTOU를
+    /// 잡아내기 위한 유일한 근거다. 이 오버로드를 거치지 않고 <see cref="Build(BackupReader,CodexCatalog,CancellationToken)"/>
+    /// 를 직접 부르면(경로를 모르므로) <see cref="ImportPreview.SourceBackupIdentity"/>는 <c>null</c>로
+    /// 남는다.
+    /// </remarks>
     public static ImportPreview Build(string backupFilePath, CodexCatalog localCatalog, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(backupFilePath);
@@ -37,7 +47,14 @@ public static class ImportPreviewBuilder
         }
 
         using BackupReader reader = BackupReader.Open(backupFilePath);
-        return Build(reader, localCatalog, cancellationToken);
+        ImportPreview preview = Build(reader, localCatalog, cancellationToken);
+        if (!preview.Success || preview.Manifest is null)
+        {
+            return preview;
+        }
+
+        ImportBackupIdentity identity = BackupIdentityHasher.Compute(backupFilePath, preview.Manifest, cancellationToken);
+        return preview with { SourceBackupIdentity = identity };
     }
 
     /// <summary>이미 연 <see cref="BackupReader"/>로 Preview를 만든다.</summary>
@@ -108,7 +125,7 @@ public static class ImportPreviewBuilder
 
         List<string> warnings = [.. manifest.Warnings, .. backupCatalog.Warnings];
 
-        return new ImportPreview(true, [], manifest, projectPreviews, dependencyOnly, warnings);
+        return new ImportPreview(true, [], manifest, projectPreviews, dependencyOnly, warnings, SourceBackupIdentity: null);
     }
 
     private static ImportConversationPreview BuildConversationPreview(

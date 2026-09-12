@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using CodexBackupManager.App.Services;
 using CodexBackupManager.App.Tests.TestSupport;
 using CodexBackupManager.App.ViewModels;
+using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Codex;
 using Xunit;
 
@@ -163,6 +164,95 @@ public sealed class MainViewModelImportPreviewTests : IAsyncLifetime
             .Single(p => p.DisplayName == overridableProject.DisplayName);
         Assert.Contains("사용자가 지정함", updatedProject.PathMappingStatusText);
         Assert.Contains("재지정", importer.ImportStatusText);
+    }
+
+    [Fact]
+    public async Task Import_Preview가_성공하면_frozen_ImportPlan을_보존한다()
+    {
+        // Phase 06_03 요구사항 5/9 — ViewModel은 Preview 성공 시 ImportPlanBuilder.Build를 한 번만
+        // 불러 그 결과를 _currentImportPlan에 보존해야 한다(Apply 준비 문구를 다시 보여줄 때마다
+        // Plan을 다시 만들지 않는다).
+        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _targetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testDir);
+        _backupPath = Path.Combine(_testDir, "frozen-plan.codexbackup");
+
+        MainViewModel exporter = CreateViewModel(_sourceHome, exportFilePicker: _ => _backupPath);
+        exporter.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => exporter.IsBusy, "탐지");
+        await WaitUntilFalse(() => exporter.IsCatalogLoading, "카탈로그 로딩");
+        exporter.SelectAllConversationsCommand.Execute(null);
+        exporter.ExportCommand.Execute(null);
+        await WaitUntilFalse(() => exporter.IsExporting, "Export");
+        Assert.True(File.Exists(_backupPath));
+
+        MainViewModel importer = CreateViewModel(_targetHome, importFilePicker: () => _backupPath);
+        importer.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsBusy, "탐지");
+        await WaitUntilFalse(() => importer.IsCatalogLoading, "카탈로그 로딩");
+
+        importer.ImportPreviewCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsImportPreviewLoading, "Import Preview");
+
+        Assert.True(importer.HasImportPreview);
+        Assert.NotNull(importer.CurrentImportPlan);
+        Assert.True(importer.CurrentImportPlan!.IsApplyReady);
+        Assert.Contains("충돌 없음", importer.ImportPlanSummaryText);
+        Assert.DoesNotContain("Apply 준비 완료", importer.ImportPlanSummaryText);
+
+        importer.CloseImportPreviewCommand.Execute(null);
+        Assert.Null(importer.CurrentImportPlan);
+        Assert.Null(importer.ImportPlanSummaryText);
+    }
+
+    [Fact]
+    public async Task 수동_경로_재지정_후에도_ImportPlan의_backup_identity는_그대로_유지된다()
+    {
+        // Phase 06_03 요구사항 4 — 경로 override는 ProjectPathMapping만 바꾸고 SourceBackupIdentity는
+        // 그대로 보존되어야 한다. 그 결과 override 후 다시 만든 ImportPlan의 Backup identity도 변하지
+        // 않아야 한다(같은 backup을 그대로 다시 확인했을 뿐이므로).
+        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _targetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testDir);
+        _backupPath = Path.Combine(_testDir, "override-identity.codexbackup");
+
+        MainViewModel exporter = CreateViewModel(_sourceHome, exportFilePicker: _ => _backupPath);
+        exporter.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => exporter.IsBusy, "탐지");
+        await WaitUntilFalse(() => exporter.IsCatalogLoading, "카탈로그 로딩");
+        exporter.SelectAllConversationsCommand.Execute(null);
+        exporter.ExportCommand.Execute(null);
+        await WaitUntilFalse(() => exporter.IsExporting, "Export");
+        Assert.True(File.Exists(_backupPath));
+
+        string overrideFolder = Path.Combine(_testDir, "manually-chosen-project-2");
+        Directory.CreateDirectory(overrideFolder);
+
+        MainViewModel importer = CreateViewModel(
+            _targetHome, importFilePicker: () => _backupPath, projectPathPicker: () => overrideFolder);
+        importer.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsBusy, "탐지");
+        await WaitUntilFalse(() => importer.IsCatalogLoading, "카탈로그 로딩");
+
+        importer.ImportPreviewCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsImportPreviewLoading, "Import Preview");
+        Assert.True(importer.HasImportPreview);
+
+        ImportBackupIdentity beforeOverride = importer.CurrentImportPlan!.Backup;
+
+        ImportProjectRowViewModel? overridableProject = importer.CurrentImportPreview!.Projects
+            .FirstOrDefault(p => p.CanOverridePath);
+        Assert.NotNull(overridableProject);
+        overridableProject!.OverridePathCommand!.Execute(null);
+
+        Assert.NotNull(importer.CurrentImportPlan);
+        ImportBackupIdentity afterOverride = importer.CurrentImportPlan!.Backup;
+
+        Assert.Equal(beforeOverride.BackupFileSha256, afterOverride.BackupFileSha256);
+        Assert.Equal(beforeOverride.BackupFileLength, afterOverride.BackupFileLength);
+        Assert.Contains(importer.CurrentImportPlan.Projects, p => p.TargetProjectPath == overrideFolder);
     }
 
     [Fact]

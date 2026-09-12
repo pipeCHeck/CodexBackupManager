@@ -1,19 +1,17 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
-using CodexBackupManager.Backup.Container;
 using CodexBackupManager.Domain.Codex.Import;
 
 namespace CodexBackupManager.Backup.Import;
 
 /// <summary>
 /// <see cref="ImportPreview"/>를 <see cref="ImportPlan"/>으로 freeze한다(Phase 06_01 요구사항 4,
-/// Phase 06_02에서 backup identity/precondition 강화). 여기서 UI 트리를 다시 해석하거나 계획을
-/// 다시 정하지 않는다 — Preview가 이미 확정한 <see cref="ImportConversationPreview.PlannedAction"/>과
-/// 실제로 비교에 쓰인 <see cref="ImportConversationPreview.LocalRevision"/>/
-/// <see cref="ImportConversationPreview.IncomingRevision"/>을 그대로 옮겨 담을 뿐이다. Codex에는
-/// 아무것도 쓰지 않는다.
+/// Phase 06_02에서 backup identity/precondition 강화, Phase 06_03에서 Preview↔Plan TOCTOU 방지).
+/// 여기서 UI 트리를 다시 해석하거나 계획을 다시 정하지 않는다 — Preview가 이미 확정한
+/// <see cref="ImportConversationPreview.PlannedAction"/>과 실제로 비교에 쓰인
+/// <see cref="ImportConversationPreview.LocalRevision"/>/<see cref="ImportConversationPreview.IncomingRevision"/>을
+/// 그대로 옮겨 담을 뿐이다. Codex에는 아무것도 쓰지 않는다.
 /// </summary>
 public static class ImportPlanBuilder
 {
@@ -22,8 +20,15 @@ public static class ImportPlanBuilder
     /// <c>false</c>) freeze할 대상이 없으므로 <c>null</c>을 돌려준다.
     /// </summary>
     /// <remarks>
-    /// backup 파일 전체의 SHA-256을 스트리밍으로 계산해 <see cref="ImportBackupIdentity"/>에 담는다
-    /// (Phase 06_02 — 요구사항 1). 파일 전체를 메모리에 올리지 않는다.
+    /// <para>
+    /// (Phase 06_03) <b>backup identity를 여기서 새로 "채택"하지 않는다.</b> Preview가 분석을 마친
+    /// 직후 고정해 둔 <see cref="ImportPreview.SourceBackupIdentity"/>가 있어야 하고,
+    /// <paramref name="backupFilePath"/>를 지금 다시 streaming hash해서 그 값과 길이+SHA-256이
+    /// 정확히 같을 때만 Plan을 만든다. Preview와 이 호출 사이에 같은 경로의 파일이 다른 내용(같은
+    /// 길이/CreatedAt/AppVersion이어도 hash가 다르면 다른 파일)으로 바뀌었으면, "그 새 파일을
+    /// 현재 source로 다시 freeze"하지 않고 Plan 생성 자체를 거부(<c>null</c>)한다 — 사용자가 다시
+    /// <c>[백업 불러오기]</c>부터 해야 한다.
+    /// </para>
     /// </remarks>
     public static ImportPlan? Build(
         ImportPreview preview, string backupFilePath, CancellationToken cancellationToken = default)
@@ -31,7 +36,14 @@ public static class ImportPlanBuilder
         ArgumentNullException.ThrowIfNull(preview);
         ArgumentException.ThrowIfNullOrWhiteSpace(backupFilePath);
 
-        if (!preview.Success || preview.Manifest is null)
+        if (!preview.Success || preview.Manifest is null || preview.SourceBackupIdentity is not { } sourceIdentity)
+        {
+            return null;
+        }
+
+        // Preview가 실제로 검증/분석했던 그 바이트가 지금도 그대로인지 확인한다 — 다르면 이 Plan은
+        // 서로 다른 source(Preview는 A, 지금 파일은 B)를 섞은 것이 되므로 만들지 않는다.
+        if (!BackupIdentityHasher.Matches(sourceIdentity, backupFilePath, cancellationToken))
         {
             return null;
         }
@@ -61,9 +73,9 @@ public static class ImportPlanBuilder
             UpdateBlockingFlags(dependency.PlannedAction, ref hasBlockingIssues, ref hasUnresolvedDivergence);
         }
 
-        ImportBackupIdentity identity = BuildBackupIdentity(preview, backupFilePath, cancellationToken);
-
-        return new ImportPlan(identity, projects, conversations, hasBlockingIssues, hasUnresolvedDivergence);
+        // Plan의 identity는 방금 재확인한 sourceIdentity 그 자체다 — 다시 계산하지 않는다(같은
+        // 값임이 이미 확인됐다).
+        return new ImportPlan(sourceIdentity, projects, conversations, hasBlockingIssues, hasUnresolvedDivergence);
     }
 
     private static ImportPlanConversation BuildPlanConversation(ImportConversationPreview conversation, string? targetProjectPath)
@@ -78,27 +90,6 @@ public static class ImportPlanBuilder
         return new ImportPlanConversation(
             conversation.ThreadId, conversation.IsSelected, conversation.Relation, conversation.PlannedAction,
             targetProjectPath, precondition);
-    }
-
-    /// <summary>
-    /// backup 파일 전체를 스트리밍으로 다시 읽어 길이+SHA-256을 계산한다(요구사항 1 — 파일 전체를
-    /// 메모리에 올리지 않는다). 이게 Phase 7 preflight가 "Preview했던 그 파일인지" 증명하는 유일한
-    /// source of truth다.
-    /// </summary>
-    private static ImportBackupIdentity BuildBackupIdentity(
-        ImportPreview preview, string backupFilePath, CancellationToken cancellationToken)
-    {
-        using FileStream stream = new(backupFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        StreamingHashCopy.Result hashed = StreamingHashCopy.HashOnly(stream, cancellationToken);
-
-        return new ImportBackupIdentity(
-            backupFilePath,
-            hashed.ByteLength,
-            hashed.Sha256Hex,
-            preview.Manifest!.BackupFormatVersion,
-            preview.Manifest.CreatedAtUtc,
-            preview.Manifest.AppVersion,
-            preview.Manifest.ConversationCount);
     }
 
     private static void UpdateBlockingFlags(ImportPlannedAction action, ref bool hasBlockingIssues, ref bool hasUnresolvedDivergence)

@@ -5,19 +5,21 @@
 포맷으로 백업하는가"를 다룬다면, 이 문서는 "그 backup을 다른 PC의 현재 상태와 어떻게 비교하고
 보여주는가"를 다룬다.
 
-> **상태: FROZEN (Phase 06_02 완료 기준).** Phase 6에서 처음 확정한 스펙을 재검토로 발견된 안전성
+> **상태: FROZEN (Phase 06_03 완료 기준).** Phase 6에서 처음 확정한 스펙을 재검토로 발견된 안전성
 > 경계 케이스 문제(§4의 segment transition, §2의 New/Unverifiable 정책, §7 수동 경로 재지정, §8.1
-> `ImportPlan` freeze 경계, §8.2 backup identity/precondition/preflight)에 맞춰 Phase 06_01/06_02에서
-> 수정했다. **`RevisionRelation` 판정 semantics 자체는 Phase 06_01에서 이미 FROZEN이고 Phase 06_02는
-> 바꾸지 않았다** — 06_02는 그 위에 "그 판정이 여전히 유효한가"를 확인하는 계층(§8.2)만 추가했다.
-> Phase 7(Safe Restore/Apply)은 이 문서를 그대로 신뢰하고 시작해도 된다 — 특히 **`ImportPreview`가
-> 아니라 `ImportPlan`을 입력으로 받을 것**(§8.1)이며, **적용 전에 반드시
-> `ImportPlanPreflightValidator.Validate`로 `Ready`를 확인할 것**(§8.2). 이후 변경이 필요하면 이
-> 문서를 먼저 갱신할 것.
+> `ImportPlan` freeze 경계, §8.2 backup identity/precondition/preflight, §8.3 Preview source
+> identity pinning)에 맞춰 Phase 06_01/06_02/06_03에서 수정했다. **`RevisionRelation` 판정 semantics
+> 자체는 Phase 06_01에서 이미 FROZEN이고 그 이후 어떤 Phase도 바꾸지 않았다** — 06_02/06_03은 그
+> 위에 "그 판정이 여전히 유효한가"를 확인하는 계층(§8.2, §8.3)만 추가했다. Phase 7(Safe
+> Restore/Apply)은 이 문서를 그대로 신뢰하고 시작해도 된다 — 특히 **`ImportPreview`가 아니라
+> `ImportPlan`을 입력으로 받을 것**(§8.1)이며, **그 `ImportPlan`은 Preview 성공 시점에 한 번 만들어
+> 보존해 둔 인스턴스를 그대로 받아야 하고**(§8.3 — 다시 `ImportPlanBuilder.Build`를 부르지 말 것),
+> **적용 전에 반드시 `ImportPlanPreflightValidator.Validate`로 `Ready`를 확인할 것**(§8.2). 이후
+> 변경이 필요하면 이 문서를 먼저 갱신할 것.
 
-> **범위**: Phase 6/06_01/06_02는 판정과 미리보기·freeze·preflight 검증까지만 한다. Codex 원본에는
-> 어떤 write도 하지 않는다(SQLite INSERT/UPDATE, rollout append/복사, global-state 변경,
-> Snapshot/Rollback 전부 Phase 7의 역할).
+> **범위**: Phase 6/06_01/06_02/06_03은 판정과 미리보기·freeze·preflight·identity pinning
+> 검증까지만 한다. Codex 원본에는 어떤 write도 하지 않는다(SQLite INSERT/UPDATE, rollout
+> append/복사, global-state 변경, Snapshot/Rollback 전부 Phase 7의 역할).
 
 ---
 
@@ -501,6 +503,71 @@ precondition(§8.2.2) → 프로젝트별 target path(§8.2.3) → `Ready`.** �
 검사의 상태를 보고한다. 전부 read-only다 — Codex에 아무것도 쓰지 않는다(Snapshot/Rollback/실제
 Apply는 여전히 Phase 7의 몫).
 
+### 8.3 Preview↔Plan TOCTOU 방지 — Preview source identity pinning(Phase 06_03)
+
+§8.2.1의 backup identity는 `ImportPlanBuilder.Build`가 **그 호출 시점의** `backupFilePath`를 새로
+hash해서 만드는 것이었다. 그런데 `ImportPreviewBuilder.Build`(Preview)와 `ImportPlanBuilder.Build`
+(Plan) 호출 사이에는 임의의 시간이 지날 수 있다(사용자가 화면에서 Preview 결과를 보거나, 프로젝트
+경로를 재지정하는 동안). 그 사이 **같은 경로의 파일이 다른 내용으로 교체되면**, Preview는 backup A를
+읽고 relation/project/path를 전부 A 기준으로 판정했는데 `ImportPlanBuilder`는 그 자리에서 B를 다시
+읽어 B의 hash를 `Plan.Backup`으로 채택해버린다 — "판정은 A, identity는 B"인 뒤섞인 Plan이 만들어질
+수 있었다. B가 rollout 내용은 A와 완전히 같고 manifest metadata(예: `CreatedAtUtc`)만 다른 경우,
+§8.2.1의 preflight(`hash(현재 파일) == Plan.Backup의 hash`, 둘 다 B이므로 항상 참)조차 이 mismatch를
+잡지 못한다 — Plan 자체가 이미 잘못된 source를 갖고 있기 때문이다.
+
+**Preview 단계에서 identity를 고정한다(pin).**
+
+```
+ImportPreview
+  ...
+  SourceBackupIdentity: ImportBackupIdentity?   // (Phase 06_03) Preview가 실제로 검증·분석한
+                                                 // 그 backup 파일의 identity. null이면(경로를
+                                                 // 모르는 BackupReader 오버로드로 직접 만든 경우)
+                                                 // 이 Preview로는 Plan을 만들 수 없다.
+```
+
+`ImportPreviewBuilder.Build(string backupFilePath, ...)`가 검증·분석을 전부 마친 직후, 같은 경로를
+다시 streaming으로 읽어(길이+SHA-256, `BackupIdentityHasher`) `SourceBackupIdentity`에 고정한다 —
+"Preview가 실제로 검증/분석한 그 바이트"의 유일한 증거다.
+
+**`ImportPlanBuilder`는 더 이상 identity를 새로 "채택"하지 않는다.**
+
+```
+ImportPlanBuilder.Build(preview, backupFilePath, ct) → ImportPlan?
+
+  preview.SourceBackupIdentity가 null이면              → null(Plan 생성 자체를 거부)
+  현재 backupFilePath를 다시 hash했을 때 그 값과
+    (길이 + SHA-256이 정확히) 다르면                    → null(Plan 생성 자체를 거부)
+  같으면 → Plan.Backup = preview.SourceBackupIdentity 그대로(다시 계산하지 않는다)
+```
+
+즉 Plan은 "Preview가 봤던 그 바이트"에서만 만들어질 수 있다. 1바이트 변조, 같은 경로에 다른 valid
+backup으로 교체, rollout 내용은 같지만 manifest metadata만 다른 경우, `CreatedAtUtc`/`AppVersion`/
+개수까지 우연히 같지만 whole-file hash만 다른 경우 — 전부 Plan 생성을 거부한다(`null`). "새 파일을
+현재 source로 다시 freeze"하지 않는다 — 사용자는 `[백업 불러오기]`부터 다시 해야 한다. 이 hash
+계산/비교는 `BackupIdentityHasher`(내부, Backup.Import)가 Preview 쪽 pin과 Plan 쪽 재확인에 공통으로
+쓰여, "언제 계산했든 같은 정의의 identity"임을 보장한다.
+
+**수동 경로 재지정(§7.1)은 identity에 영향을 주지 않는다.** `ApplyManualProjectPathOverride`는
+`preview with { Projects = updatedProjects }`로 `Projects` 필드만 바꾸므로, `SourceBackupIdentity`는
+레코드의 `with` 의미론에 의해 자동으로 그대로 보존된다 — 사용자가 폴더를 고르는 동안 backup 파일이
+바뀌면, 그 다음에 새로 만드는 `ImportPlan`은 (보존된) 원래 identity와 지금 파일을 비교해 정확히
+거부된다.
+
+**`MainViewModel`이 frozen `ImportPlan`을 보존한다.** Preview가 성공하거나 경로를 재지정할 때마다
+`UpdateImportPlanSummary`가 유일하게 `ImportPlanBuilder.Build`를 부르고, 그 결과를 `_currentImportPlan`
+필드에 저장한다 — Apply 준비 상태 문구를 다시 보여줘야 할 때도 Plan을 다시 만들지 않는다. **Phase 7은
+이 인스턴스를 그대로 받아 Apply 직전에 §8.2의 `ImportPlanPreflightValidator`만 fresh하게 다시
+돌리면 된다** — `ImportPlanBuilder.Build`를 Phase 7이 다시 호출하면, 그 사이(Apply 버튼을 누르기
+까지) 파일이 바뀐 경우를 오히려 놓칠 수 있으므로 하지 말 것.
+
+**"Apply 준비 완료" 문구는 오해의 소지가 있어 정정했다.** `ImportPlan.IsApplyReady`는
+Diverged/Unverifiable이 하나도 없다는 뜻일 뿐, backup 파일이나 로컬 Codex가 지금 이 순간 Preview
+때와 같은지는 전혀 모른다(실제로 Phase 06_02 실측에서 `IsApplyReady=true`인 Plan이 fresh
+preflight에서 `TargetPathUnavailable`이 나온 적이 있었다). UI 문구는 "가져오기 계획 생성 완료 —
+충돌 없음(적용 전 최종 검사가 필요합니다)"처럼 중립적으로 표현해야 한다 — 실제 "지금 적용 가능"은
+Phase 7이 fresh `ImportPlanPreflightValidator.Validate`로 `Ready`를 확인했을 때만 말할 수 있다.
+
 ---
 
 ## 9. 실제 데이터 검증 결과 요약
@@ -557,3 +624,22 @@ PC에 실물 `.zst`가 0개, 기존 알려진 한계와 동일). 3단계 이상 
   수정 시각이 바뀌었는데, 이는 SQLite가 WAL 모드 DB를 열 때(읽기 전용 연결이라도) 항상 재생성하는
   비영속 공유 메모리 인덱스 파일이라 논리적 데이터 변경이 아니다 — 이 세션의 모든 read-only 카탈로그
   조회가 이미 이런 특성을 갖고 있었다(Phase 06_02가 새로 만든 특성이 아니다).
+
+### 9.3 Phase 06_03 재검증
+
+- 실제 40개 선택 Preview로 만든 backup 파일을 별도 scratch 복사본으로 만들어 `ImportPreviewBuilder.Build`
+  로 다시 Preview했다 — `SourceBackupIdentity`가 정상적으로 고정됨을 확인했다.
+- 아무것도 바꾸지 않은 채 그 Preview로 `ImportPlanBuilder.Build`를 호출 → Plan이 정상적으로
+  만들어졌다(기대: 성공).
+- 그 복사본 파일만 1바이트 변조한 뒤 **같은 Preview 인스턴스**로 다시 `ImportPlanBuilder.Build`를
+  호출 → **Plan 생성이 정확히 거부됐다**(`null`, 기대대로) — 실제 backup 데이터로 Preview↔Plan
+  TOCTOU 방지가 작동함을 확인했다.
+- 이 검증 과정에서 기존 Phase 06_02 하네스 코드 중 "Preview는 원본 그대로 두고 Plan만 변조된
+  복사본 경로를 가리키게 하면 Plan이 여전히 만들어진다"고 가정했던 부분이 이제 Phase 06_03 때문에
+  더 이상 성립하지 않는다는 것도 함께 확인했다(예상된 동작 변화 — 그 시나리오를 "Plan 생성 후
+  변조"로 재구성해 기존 Preflight 검증(§9.2)은 그대로 유지했다).
+- 작업 전후 source-of-truth 4개 파일(SHA-256) 전부 동일 — `-shm`만 수정 시각이 바뀌는 것은 §9.2와
+  같은 이유(SQLite WAL reader의 비영속 인덱스 재작성)로 논리적 데이터 변경이 아니다.
+- Phase 06_02에서 발견한 실제 프로젝트("test")의 `TargetProjectPath` 부재는 이번에도 동일하게
+  재현됐다 — Phase 06_03이 이 계층을 건드리지 않았으므로 회귀가 아니라 그대로다(§4-15/§4-16 근처
+  handoff 문서 참고).
