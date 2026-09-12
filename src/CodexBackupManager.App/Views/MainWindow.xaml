@@ -267,7 +267,7 @@
                     <Setter Property="Focusable" Value="False" />
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                     <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0,0,0,12" />
+                    <Setter Property="Margin" Value="0,0,0,16" />
                     <Setter Property="Template">
                       <Setter.Value>
                         <ControlTemplate TargetType="ListBoxItem">
@@ -277,38 +277,41 @@
                     </Setter>
                   </Style>
                 </ListBox.ItemContainerStyle>
+                <!-- Codex 실제 UI에 가깝게: Assistant는 카드/말풍선을 없애고 평평한 문서형으로,
+                     본문 폭을 넉넉히 준다. User만 오른쪽 정렬의 작은 말풍선(내용 크기만큼만)으로
+                     남긴다. Role/Phase 라벨(User/Assistant/commentary/final)은 개발자 도구처럼
+                     보인다는 지적을 반영해 전부 제거했다 — 정렬/배경색만으로 구분한다. Phase 값 자체는
+                     Domain에 그대로 보존되고(향후 Export 등에서 쓸 수 있다), UI에만 안 보여준다. -->
                 <ListBox.ItemTemplate>
                   <DataTemplate>
-                    <Border CornerRadius="6" Padding="12,9" MaxWidth="680">
+                    <Border x:Name="Bubble">
                       <Border.Style>
                         <Style TargetType="Border">
                           <Setter Property="HorizontalAlignment" Value="Left" />
-                          <Setter Property="Background" Value="{StaticResource PanelAlt}" />
+                          <Setter Property="Background" Value="Transparent" />
+                          <Setter Property="CornerRadius" Value="0" />
+                          <Setter Property="Padding" Value="0" />
+                          <Setter Property="MaxWidth" Value="760" />
                           <Style.Triggers>
                             <DataTrigger Binding="{Binding IsUser}" Value="True">
                               <Setter Property="HorizontalAlignment" Value="Right" />
                               <Setter Property="Background" Value="{StaticResource UserBubbleBg}" />
+                              <Setter Property="CornerRadius" Value="14" />
+                              <Setter Property="Padding" Value="14,9" />
+                              <Setter Property="MaxWidth" Value="520" />
                             </DataTrigger>
                           </Style.Triggers>
                         </Style>
                       </Border.Style>
-                      <StackPanel>
-                        <StackPanel Orientation="Horizontal">
-                          <TextBlock Text="{Binding RoleLabel}" FontWeight="SemiBold" FontSize="11"
-                                     Foreground="{StaticResource Muted}" />
-                          <TextBlock Text="{Binding PhaseLabel}" FontSize="10" Margin="6,0,0,0"
-                                     Foreground="{StaticResource Muted}" />
-                        </StackPanel>
-                        <!-- 읽기 전용 RichTextBox: Markdown-lite로 파싱한 FlowDocument(제목/문단/
-                             목록/코드블록 서식)를 붙인다. 일반 TextBlock과 달리 텍스트 선택/복사는
-                             그대로 유지된다. RichTextBox.Document는 일반 CLR 속성이라 직접 바인딩할
-                             수 없어 render:FlowDocumentBinding.Document 첨부 속성을 거친다. -->
-                        <RichTextBox render:FlowDocumentBinding.Document="{Binding Body}"
-                                     IsReadOnly="True" BorderThickness="0" Background="Transparent"
-                                     Foreground="{StaticResource Fg}" IsReadOnlyCaretVisible="False"
-                                     Cursor="IBeam" Margin="0,5,0,0" Padding="0"
-                                     HorizontalScrollBarVisibility="Disabled" />
-                      </StackPanel>
+                      <!-- 읽기 전용 RichTextBox: Markdown-lite로 파싱한 FlowDocument(제목/문단/
+                           목록/코드블록 서식)를 붙인다. 일반 TextBlock과 달리 텍스트 선택/복사는
+                           그대로 유지된다. RichTextBox.Document는 일반 CLR 속성이라 직접 바인딩할
+                           수 없어 render:FlowDocumentBinding.Document 첨부 속성을 거친다. -->
+                      <RichTextBox render:FlowDocumentBinding.Document="{Binding Body}"
+                                   IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                                   Foreground="{StaticResource Fg}" IsReadOnlyCaretVisible="False"
+                                   Cursor="IBeam" Padding="0"
+                                   HorizontalScrollBarVisibility="Disabled" />
                     </Border>
                   </DataTemplate>
                 </ListBox.ItemTemplate>

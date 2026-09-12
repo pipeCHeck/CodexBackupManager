@@ -116,4 +116,48 @@ public sealed class MarkdownLiteFlowDocumentRendererTests
     [Fact]
     public void 빈_텍스트는_빈_FlowDocument가_된다()
         => Assert.Empty(MarkdownLiteFlowDocumentRenderer.Render(MarkdownLiteParser.Parse(string.Empty)).Blocks.ToList());
+
+    [Fact]
+    public void 굵게_span은_FontWeight_Bold인_Run이_된다()
+    {
+        FlowDocument document = RenderText("**굵게**");
+
+        var paragraph = Assert.IsType<Paragraph>(Assert.Single(document.Blocks));
+        var run = Assert.IsType<Run>(paragraph.Inlines.Single());
+        Assert.Equal("굵게", run.Text);
+        Assert.Equal(FontWeights.Bold, run.FontWeight);
+    }
+
+    [Fact]
+    public void 기울임_span은_FontStyle_Italic인_Run이_된다()
+    {
+        FlowDocument document = RenderText("*기울임*");
+
+        var paragraph = Assert.IsType<Paragraph>(Assert.Single(document.Blocks));
+        var run = Assert.IsType<Run>(paragraph.Inlines.Single());
+        Assert.Equal(FontStyles.Italic, run.FontStyle);
+    }
+
+    [Fact]
+    public void 링크_span은_밑줄과_ToolTip으로_표시되고_실제_Hyperlink는_아니다()
+    {
+        FlowDocument document = RenderText("[문서](https://example.com)");
+
+        var paragraph = Assert.IsType<Paragraph>(Assert.Single(document.Blocks));
+        var run = Assert.IsType<Run>(paragraph.Inlines.Single());
+        Assert.Equal("문서", run.Text);
+        Assert.Equal("https://example.com", run.ToolTip);
+        Assert.NotNull(run.TextDecorations);
+        Assert.IsNotType<Hyperlink>(run);
+    }
+
+    [Fact]
+    public void 인용문은_왼쪽_테두리가_있는_Paragraph가_된다()
+    {
+        FlowDocument document = RenderText("> 인용된 문장");
+
+        var paragraph = Assert.IsType<Paragraph>(Assert.Single(document.Blocks));
+        Assert.True(paragraph.BorderThickness.Left > 0);
+        Assert.NotNull(paragraph.BorderBrush);
+    }
 }

@@ -68,6 +68,12 @@ public sealed class ConversationItemParserTests : IDisposable
                "\",\"content\":[" + contentJson + "]}}";
     }
 
+    /// <summary>content 배열을 원하는 raw JSON으로 직접 지정한다(텍스트가 없는 첨부/이미지 등 표현용).</summary>
+    private static string ResponseItemLineRawContent(long ordinal, string role, string contentJson)
+        => "{\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"ordinal\":" + ordinal +
+           ",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"msg-" + ordinal + "\",\"role\":\"" + role +
+           "\",\"content\":[" + contentJson + "]}}";
+
     [Fact]
     public void UserMessage_한_개를_파싱한다()
     {
@@ -371,5 +377,104 @@ public sealed class ConversationItemParserTests : IDisposable
 
         ConversationMessage message = Assert.Single(result.Messages);
         Assert.Equal("포함됨", message.Text);
+    }
+
+    // ── Phase 04_05: 빈 User 메시지 정합성 ──────────────────────────────────────────
+    //
+    // 공식 Codex 소스(tui/src/chatwidget.rs의 on_user_message_display,
+    // app-server-protocol/src/protocol/thread_history.rs의 build_user_inputs)를 확인한 결과,
+    // 공식 정책은 정확히 "trim() 후 비어 있고, 텍스트/이미지 등 어떤 콘텐츠도 없으면 메시지 자체를
+    // 만들지 않는다"였다. 반대로 이미지 등 텍스트가 아닌 콘텐츠는 "[Image #N]" 같은 placeholder로
+    // 표시한다(protocol/src/models.rs의 local_image_label_text). 아래 테스트는 이 확인된 공식
+    // 정책을 그대로 반영한다 — 실제 이 PC의 .codex 데이터 4013+1648건 실측에서는 공백만 있거나
+    // zero-width만 있는 User 메시지, 첨부-only 메시지가 하나도 발견되지 않았지만(감사 결과 0건),
+    // 공식 소스가 이 정책을 명시적으로 확인해주므로 실제 데이터 사례 없이도 반영한다. 다만 공식
+    // 소스도 zero-width 문자를 "비어있음"으로 특별 취급하지 않으므로(표준 trim()만 사용), 우리도
+    // zero-width/control 문자에 대한 별도 필터는 추가하지 않는다(과설계 방지).
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("\n")]
+    [InlineData("\r\n\t")]
+    [InlineData("   \n  \t ")]
+    public void 공백만_있는_User_response_item은_숨긴다(string whitespaceOnly)
+    {
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLine(1, "user", [whitespaceOnly]),
+            ResponseItemLine(2, "user", ["진짜 사용자 메시지"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal("진짜 사용자 메시지", message.Text);
+    }
+
+    [Fact]
+    public void 공백만_있는_UserMessage_event_msg도_숨긴다()
+    {
+        RolloutFileReference file = WriteFile(
+        [
+            EventMsgLine(1, "UserMessage", "u1", ["\n\n  "]),
+            EventMsgLine(2, "UserMessage", "u2", ["진짜 사용자 메시지"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal("진짜 사용자 메시지", message.Text);
+    }
+
+    [Fact]
+    public void 텍스트_없이_이미지만_있는_User_메시지는_placeholder로_표시한다()
+    {
+        // 공식 Codex의 "[Image #N]" 표시와 같은 취지 — 사용자 데이터(첨부했다는 사실)를 조용히
+        // 지우지 않고, 텍스트가 아닌 콘텐츠가 있었다는 것을 사용자에게 보여준다.
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLineRawContent(1, "user", "{\"type\":\"input_image\",\"image_url\":\"data:...\"}"),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal(ConversationRole.User, message.Role);
+        Assert.Equal("[이미지]", message.Text);
+    }
+
+    [Fact]
+    public void 빈_문자열_text_속성만_있으면_첨부파일_placeholder가_아니라_그냥_숨긴다()
+    {
+        // 실측(2026-08-31 rollout): AgentMessage content 원소가 {"type":"...","text":""}처럼
+        // "text" 키는 있지만 값이 빈 문자열인 경우가 실제로 있었다. 이건 이미지/첨부가 아니라
+        // 그냥 빈 텍스트이므로 "[첨부 파일]" 같은 오해를 주는 placeholder를 보여주면 안 되고,
+        // 공백만 있는 경우와 동일하게 그냥 숨긴다("text" 키의 유무가 아니라 빈 문자열 여부로
+        // 첨부 여부를 판단하면 이 케이스를 attachment로 잘못 분류하게 된다).
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLineRawContent(1, "assistant", "{\"type\":\"output_text\",\"text\":\"\"}"),
+            ResponseItemLine(2, "assistant", ["진짜 답변"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal("진짜 답변", message.Text);
+    }
+
+    [Fact]
+    public void 텍스트도_이미지도_없이_완전히_빈_content_배열은_계속_숨긴다()
+    {
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLineRawContent(1, "user", string.Empty),
+            ResponseItemLine(2, "user", ["진짜 사용자 메시지"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal("진짜 사용자 메시지", message.Text);
     }
 }

@@ -152,4 +152,108 @@ public sealed class MarkdownLiteParserTests
         Assert.IsType<NumberedListItemBlock>(blocks[1]);
         Assert.IsType<CodeBlock>(blocks[2]);
     }
+
+    // ── Phase 04_05: 굵게/기울임/링크/인용문 ────────────────────────────────────────
+
+    [Theory]
+    [InlineData("**굵게**")]
+    [InlineData("__굵게__")]
+    public void 별표_두_개_또는_밑줄_두_개는_굵게다(string markdown)
+    {
+        var blocks = MarkdownLiteParser.Parse(markdown);
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        InlineSpan span = Assert.Single(paragraph.Spans);
+        Assert.Equal("굵게", span.Text);
+        Assert.True(span.IsBold);
+    }
+
+    [Theory]
+    [InlineData("*기울임*")]
+    [InlineData("_기울임_")]
+    public void 별표_한_개_또는_밑줄_한_개는_기울임이다(string markdown)
+    {
+        var blocks = MarkdownLiteParser.Parse(markdown);
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        InlineSpan span = Assert.Single(paragraph.Spans);
+        Assert.Equal("기울임", span.Text);
+        Assert.True(span.IsItalic);
+    }
+
+    [Fact]
+    public void 굵게_기울임이_별표_모양이_같아도_구분된다()
+    {
+        var blocks = MarkdownLiteParser.Parse("앞 **굵게** 사이 *기울임* 뒤");
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        var bold = Assert.Single(paragraph.Spans, s => s.Text == "굵게");
+        var italic = Assert.Single(paragraph.Spans, s => s.Text == "기울임");
+        Assert.True(bold.IsBold);
+        Assert.False(bold.IsItalic);
+        Assert.True(italic.IsItalic);
+        Assert.False(italic.IsBold);
+    }
+
+    [Fact]
+    public void 여닫는_기호_바로_안쪽이_공백이면_굵게_기울임으로_인식하지_않는다()
+    {
+        // "3 * 4 = 12" 같은 흔한 수식 표기의 오탐을 줄이기 위한 안전장치.
+        var blocks = MarkdownLiteParser.Parse("3 * 4 = 12 * 5");
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        Assert.All(paragraph.Spans, s => Assert.False(s.IsItalic));
+    }
+
+    [Fact]
+    public void Markdown_링크는_표시_텍스트와_URL이_분리된다()
+    {
+        var blocks = MarkdownLiteParser.Parse("자세한 내용은 [공식 문서](https://example.com/docs)를 참고하세요.");
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        InlineSpan linkSpan = Assert.Single(paragraph.Spans, s => s.LinkUrl is not null);
+        Assert.Equal("공식 문서", linkSpan.Text);
+        Assert.Equal("https://example.com/docs", linkSpan.LinkUrl);
+    }
+
+    [Fact]
+    public void 인라인_코드_안의_별표는_굵게로_해석되지_않는다()
+    {
+        var blocks = MarkdownLiteParser.Parse("`a**b`는 코드다");
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        InlineSpan codeSpan = Assert.Single(paragraph.Spans, s => s.IsCode);
+        Assert.Equal("a**b", codeSpan.Text);
+    }
+
+    [Fact]
+    public void 인용문_한_줄은_Blockquote_블록이_된다()
+    {
+        var blocks = MarkdownLiteParser.Parse("> 인용된 문장입니다");
+
+        var quote = Assert.IsType<BlockquoteBlock>(Assert.Single(blocks));
+        Assert.Equal("인용된 문장입니다", Assert.Single(quote.Spans).Text);
+    }
+
+    [Fact]
+    public void 연속된_인용문_줄은_하나의_Blockquote로_합쳐진다()
+    {
+        var blocks = MarkdownLiteParser.Parse("> 첫째 줄\n> 둘째 줄");
+
+        var quote = Assert.IsType<BlockquoteBlock>(Assert.Single(blocks));
+        Assert.Equal(3, quote.Spans.Count); // "첫째 줄", LineBreak, "둘째 줄"
+        Assert.Equal("첫째 줄", quote.Spans[0].Text);
+        Assert.True(quote.Spans[1].IsLineBreak);
+        Assert.Equal("둘째 줄", quote.Spans[2].Text);
+    }
+
+    [Fact]
+    public void 인용문_뒤에_일반_문단이_오면_별개_블록이_된다()
+    {
+        var blocks = MarkdownLiteParser.Parse("> 인용문\n일반 문단");
+
+        Assert.Equal(2, blocks.Count);
+        Assert.IsType<BlockquoteBlock>(blocks[0]);
+        Assert.IsType<ParagraphBlock>(blocks[1]);
+    }
 }

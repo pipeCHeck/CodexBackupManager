@@ -28,6 +28,8 @@ public static class MarkdownLiteFlowDocumentRenderer
     private static readonly FontFamily BodyFontFamily = new("Segoe UI, Malgun Gothic");
     private static readonly SolidColorBrush CodeBackgroundBrush = CreateFrozenBrush("#FF17181B");
     private static readonly SolidColorBrush ForegroundBrush = CreateFrozenBrush("#FFE6E6E6");
+    private static readonly SolidColorBrush MutedBrush = CreateFrozenBrush("#FF9AA0A6");
+    private static readonly SolidColorBrush LinkBrush = CreateFrozenBrush("#FF7AB8F0");
 
     /// <summary>파싱된 블록으로 <see cref="FlowDocument"/>를 만든다.</summary>
     public static FlowDocument Render(IReadOnlyList<MarkdownBlock> blocks)
@@ -36,7 +38,8 @@ public static class MarkdownLiteFlowDocumentRenderer
         {
             PagePadding = new Thickness(0),
             FontFamily = BodyFontFamily,
-            FontSize = 13,
+            FontSize = 14,
+            LineHeight = 21, // "카드 여러 개" 대신 "문서를 읽는" 느낌을 위해 줄 간격을 넉넉히 준다.
             Foreground = ForegroundBrush,
             TextAlignment = TextAlignment.Left,
         };
@@ -58,6 +61,11 @@ public static class MarkdownLiteFlowDocumentRenderer
 
                 case CodeBlock code:
                     document.Blocks.Add(RenderCode(code));
+                    i++;
+                    break;
+
+                case BlockquoteBlock quote:
+                    document.Blocks.Add(RenderBlockquote(quote));
                     i++;
                     break;
 
@@ -100,7 +108,7 @@ public static class MarkdownLiteFlowDocumentRenderer
         {
             MarkerStyle = isNumbered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
             Margin = new Thickness(0, 4, 0, 8),
-            Padding = new Thickness(20, 0, 0, 0),
+            Padding = new Thickness(24, 0, 0, 0),
         };
 
         int i = start;
@@ -143,18 +151,18 @@ public static class MarkdownLiteFlowDocumentRenderer
             FontWeight = FontWeights.Bold,
             FontSize = heading.Level switch
             {
-                1 => 18,
-                2 => 16,
-                3 => 14.5,
-                _ => 13.5,
+                1 => 20,
+                2 => 17.5,
+                3 => 16,
+                _ => 15,
             },
-            Margin = new Thickness(0, 10, 0, 4),
+            Margin = new Thickness(0, 14, 0, 6),
         };
     }
 
     private static Paragraph RenderParagraph(ParagraphBlock block)
     {
-        var paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 8) };
+        var paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 10) };
         AppendSpans(paragraph.Inlines, block.Spans);
         return paragraph;
     }
@@ -184,6 +192,22 @@ public static class MarkdownLiteFlowDocumentRenderer
         return paragraph;
     }
 
+    /// <summary>인용문(<c>&gt;</c>). 왼쪽 세로선 + 흐린 색 + 기울임으로 표시한다.</summary>
+    private static Paragraph RenderBlockquote(BlockquoteBlock block)
+    {
+        var paragraph = new Paragraph
+        {
+            Margin = new Thickness(0, 4, 0, 8),
+            Padding = new Thickness(12, 2, 0, 2),
+            BorderBrush = MutedBrush,
+            BorderThickness = new Thickness(3, 0, 0, 0),
+            Foreground = MutedBrush,
+            FontStyle = FontStyles.Italic,
+        };
+        AppendSpans(paragraph.Inlines, block.Spans);
+        return paragraph;
+    }
+
     private static void AppendSpans(InlineCollection inlines, IReadOnlyList<InlineSpan> spans)
     {
         foreach (InlineSpan span in spans)
@@ -200,7 +224,28 @@ public static class MarkdownLiteFlowDocumentRenderer
                 continue;
             }
 
-            inlines.Add(new Run(span.Text));
+            var run = new Run(span.Text);
+            if (span.IsBold)
+            {
+                run.FontWeight = FontWeights.Bold;
+            }
+
+            if (span.IsItalic)
+            {
+                run.FontStyle = FontStyles.Italic;
+            }
+
+            if (span.LinkUrl is not null)
+            {
+                // 실제 Hyperlink로 만들지 않는다 — 클릭 시 브라우저/외부 프로세스를 자동으로
+                // 여는 부작용을 이 백업 도구가 만들지 않기 위한 의도적인 선택이다. 대신 링크처럼
+                // 보이게만(색 + 밑줄) 하고, 대상 URL은 ToolTip으로만 보여준다.
+                run.Foreground = LinkBrush;
+                run.TextDecorations = TextDecorations.Underline;
+                run.ToolTip = span.LinkUrl;
+            }
+
+            inlines.Add(run);
         }
     }
 

@@ -249,8 +249,8 @@ public static class ConversationItemParser
             return null;
         }
 
-        string text = CombineContentText(item);
-        if (text.Length == 0)
+        string? text = ResolveDisplayText(CombineContentText(item), item);
+        if (text is null)
         {
             return null;
         }
@@ -288,10 +288,11 @@ public static class ConversationItemParser
         // inter-agent 메시지 등)는 애초에 빈 마커("", "")를 써서 텍스트와 매치되지 않으므로, 이
         // 필터를 assistant에도 적용하면 얻는 것 없이 모델이 그 태그를 언급한 진짜 출력만 위험에
         // 노출시킨다. 그래서 필터는 role="user"에서만 적용한다(클래스 remarks 참고).
-        string text = mappedRole == ConversationRole.User
+        string rawText = mappedRole == ConversationRole.User
             ? CombineNonInjectedContentText(payload)
             : CombineContentText(payload);
-        if (text.Length == 0)
+        string? text = ResolveDisplayText(rawText, payload);
+        if (text is null)
         {
             return null;
         }
@@ -328,6 +329,100 @@ public static class ConversationItemParser
         }
 
         return false;
+    }
+
+    /// <summary>실제로 표시할 텍스트를 정한다. 텍스트가 없으면 비-텍스트 콘텐츠 placeholder나 <c>null</c>을 돌려준다.</summary>
+    /// <remarks>
+    /// <para>
+    /// 공식 Codex 소스(<c>tui/src/chatwidget.rs</c>의 <c>on_user_message_display</c>,
+    /// <c>app-server-protocol</c>의 <c>build_user_inputs</c>)를 확인한 결과, 공식 정책은 정확히
+    /// "trim한 텍스트가 비어 있고 텍스트/이미지 등 어떤 콘텐츠도 없으면 메시지 자체를 만들지
+    /// 않는다"였다. 그래서 <c>text.Length == 0</c> 대신 <see cref="string.IsNullOrWhiteSpace(string?)"/>로
+    /// 공백만 있는 메시지도 숨긴다 — 단, 공식 소스도 zero-width/control 문자를 특별 취급하지 않고
+    /// 표준 trim()만 쓰므로, 우리도 그 이상으로 판정 범위를 넓히지 않는다(과설계 방지, 실측으로도
+    /// 이 PC의 <c>.codex</c> 데이터에는 공백/zero-width-only User 메시지가 하나도 없었다).
+    /// </para>
+    /// <para>
+    /// 텍스트가 없어도 이미지 등 텍스트가 아닌 콘텐츠가 있으면 공식 Codex의 <c>"[Image #N]"</c>과
+    /// 같은 취지로 <see cref="DescribeNonTextContent"/> placeholder를 대신 보여준다 — 사용자가
+    /// 실제로 보낸 첨부를 조용히 지우지 않는다(핵심 원칙: 메시지 누락이 오탐 노출보다 더 심각하다).
+    /// 텍스트도 비-텍스트 콘텐츠도 전혀 없으면 <c>null</c>을 돌려줘 메시지 자체를 만들지 않는다.
+    /// </para>
+    /// </remarks>
+    private static string? ResolveDisplayText(string combinedText, JsonElement itemOrPayload)
+    {
+        if (!string.IsNullOrWhiteSpace(combinedText))
+        {
+            return combinedText;
+        }
+
+        return HasNonTextContent(itemOrPayload) ? DescribeNonTextContent(itemOrPayload) : null;
+    }
+
+    /// <summary>
+    /// <c>content</c> 배열에 <c>text</c> 속성 자체가 아예 없는 원소(이미지/첨부 등)가 있는지.
+    /// </summary>
+    /// <remarks>
+    /// 실측(2026-08-31 rollout)에서 <c>{"type":"...","text":""}</c>처럼 <c>text</c> 키는 있지만
+    /// 값이 빈 문자열인 원소를 발견했다 — 이건 이미지/첨부가 아니라 그냥 빈 텍스트다. 그래서
+    /// "값이 비어 있는지"가 아니라 "<c>text</c> 키 자체가 있는지"로 판정해야 한다. 키의 유무가
+    /// 아니라 값의 빈 여부로 판단하면 진짜 빈 텍스트를 첨부파일로 잘못 분류해 오해를 주는
+    /// placeholder를 보여주게 된다.
+    /// </remarks>
+    private static bool HasNonTextContent(JsonElement itemOrPayload)
+    {
+        if (!itemOrPayload.TryGetProperty("content", out JsonElement content) || content.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (JsonElement element in content.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!element.TryGetProperty("text", out _))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// <c>text</c> 속성 자체가 없는 <c>content</c> 원소들의 <c>type</c> 값에서 "image"/"audio"를
+    /// 대소문자 무시로 찾아 종류를 분류한다. 확정되지 않은 <c>type</c> 문자열을 추측해 하드코딩하지
+    /// 않기 위해, 어느 쪽에도 해당하지 않으면 안전하게 "첨부 파일"로 표시한다.
+    /// </summary>
+    private static string DescribeNonTextContent(JsonElement itemOrPayload)
+    {
+        var kinds = new List<string>();
+
+        if (itemOrPayload.TryGetProperty("content", out JsonElement content) && content.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement element in content.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Object || element.TryGetProperty("text", out _))
+                {
+                    continue;
+                }
+
+                string type = GetString(element, "type") ?? string.Empty;
+                string kind = type.Contains("image", StringComparison.OrdinalIgnoreCase) ? "이미지"
+                    : type.Contains("audio", StringComparison.OrdinalIgnoreCase) ? "음성"
+                    : "첨부 파일";
+
+                if (!kinds.Contains(kind))
+                {
+                    kinds.Add(kind);
+                }
+            }
+        }
+
+        return kinds.Count == 0 ? "[첨부 파일]" : $"[{string.Join("/", kinds)}]";
     }
 
     /// <summary>
