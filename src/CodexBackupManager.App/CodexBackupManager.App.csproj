@@ -28,4 +28,10 @@
     <ProjectReference Include="..\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- MainViewModel의 내부 ConversationSelectionState에 테스트가 직접 접근해 Changed 이벤트
+         발생 횟수를 셀 수 있게 한다(공개 API는 늘리지 않는다). -->
+    <InternalsVisibleTo Include="CodexBackupManager.App.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -604,19 +604,44 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     public IReadOnlySet<string> GetSelectedThreadIdsSnapshot() => _selection.Snapshot();
 
+    /// <summary>
+    /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 대량 선택/해제 시
+    /// <see cref="ConversationSelectionState.Changed"/> 발생 횟수를 직접 검증하기 위해 쓴다.
+    /// 공개 API 표면을 넓히지 않으면서도 핵심 selection 로직을 WPF 없이 테스트할 수 있게 한다.
+    /// </summary>
+    internal ConversationSelectionState Selection => _selection;
+
+    /// <summary>
+    /// 카탈로그 전체 선택. <see cref="ProjectNodeViewModel.SetAllSelected"/>를 프로젝트마다 호출하지
+    /// 않는다 — 그러면 프로젝트 수(N)만큼 <c>_selection</c>에 별도 bulk mutation이 걸려
+    /// <see cref="ConversationSelectionState.Changed"/>도 최대 N번 발생할 수 있다. 대신 전체
+    /// ThreadId를 한 번에 모아 <c>_selection</c>은 딱 한 번만 바꾸고, 화면 갱신 알림만 노드마다
+    /// 한 번씩 보낸다(요구사항 10: 대규모 카탈로그에서도 재계산이 반복되지 않아야 한다).
+    /// </summary>
     private void SelectAllConversations()
     {
-        foreach (ProjectNodeViewModel project in ProjectNodes)
-        {
-            project.SetAllSelected(true);
-        }
+        _selection.SelectMany(ProjectNodes.SelectMany(p => p.Conversations).Select(c => c.ThreadId));
+        NotifyAllNodesSelectionChanged();
     }
 
+    /// <summary>카탈로그 전체 선택 해제. 위와 같은 이유로 <c>_selection.Clear()</c>를 한 번만 호출한다.</summary>
     private void ClearAllSelections()
+    {
+        _selection.Clear();
+        NotifyAllNodesSelectionChanged();
+    }
+
+    /// <summary>모든 노드의 <c>IsSelected</c> 바인딩을 다시 읽으라고 알린다(값 자체는 저장하지 않는다).</summary>
+    private void NotifyAllNodesSelectionChanged()
     {
         foreach (ProjectNodeViewModel project in ProjectNodes)
         {
-            project.SetAllSelected(false);
+            foreach (ConversationNodeViewModel conversation in project.Conversations)
+            {
+                conversation.NotifySelectionChanged();
+            }
+
+            project.NotifySelectionChanged();
         }
     }
 
