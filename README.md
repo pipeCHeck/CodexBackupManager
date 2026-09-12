@@ -4,8 +4,10 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 
 > **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
 > **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
-> **+ Phase 6(Import Preview) 완료.** Codex에는 아직 아무것도 쓰지 않는다 — Phase 7(Safe Restore)은
-> 아직 예정입니다.
+> **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) 완료.**
+> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔다 — 단, New Import와 안전이 증명된
+> IncomingAhead fast-forward만 지원하고, Diverged 자동 merge 등 고위험 기능과 Apply 버튼(UI)은
+> Phase 07_01로 미뤘습니다.
 
 ---
 
@@ -386,12 +388,15 @@ Phase 7).
 | 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | **완료** |
 | 05_01 | Backup V1 Freeze / Restore Sufficiency Hardening | **완료** |
 | 6 | Import Preview — 검증, RevisionRelation 판정(timestamp 아닌 실제 내용 기준), 경로 재매핑 제안 | **완료** |
-| 7 | Safe Restore — Snapshot → Apply → 검증 → Rollback | 예정 |
+| 06_01~06_03 | Revision Relation Hardening / Apply Preconditions Freeze / Preview Source Identity Pinning | **완료** |
+| 7 | Safe Restore — Snapshot → Apply(New/IncomingAhead fast-forward만) → 검증 → Rollback | **완료** |
+| 07_01 | Restore hardening / 실제 사용자 데이터 검증 / Apply UI | 예정 |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure
-정책, 첨부 정책, 체크섬/atomic export 정책을 담고 있다. Import Preview(Phase 6) 스펙은
-[`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md)에 있다.
+정책, 첨부 정책, 체크섬/atomic export 정책을 담고 있다. Import Preview/`ImportPlan`/Preflight 스펙은
+[`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md)에, Safe Restore(Phase 7) 스펙과
+공식 `codex-rs` 소스 조사 결과는 [`docs/safe-restore-phase7.md`](./docs/safe-restore-phase7.md)에 있다.
 
 ---
 

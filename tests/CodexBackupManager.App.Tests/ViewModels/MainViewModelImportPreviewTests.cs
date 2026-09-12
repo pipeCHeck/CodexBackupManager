@@ -256,6 +256,53 @@ public sealed class MainViewModelImportPreviewTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task 새_Import_Preview를_시작하면_기존_frozen_Plan을_즉시_무효화한다()
+    {
+        // Phase 7 요구사항 0 — 새 backup을 선택한 순간 기존 frozen Plan은 더 이상 Apply 후보가
+        // 아니다. 두 번째 Preview 빌드가 아직 끝나지 않았어도(비동기 완료를 기다리지 않아도) Execute
+        // 직후 곧바로 예전 Plan이 비워져 있어야 한다.
+        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _targetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testDir);
+        _backupPath = Path.Combine(_testDir, "invalidate-plan.codexbackup");
+
+        MainViewModel exporter = CreateViewModel(_sourceHome, exportFilePicker: _ => _backupPath);
+        exporter.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => exporter.IsBusy, "탐지");
+        await WaitUntilFalse(() => exporter.IsCatalogLoading, "카탈로그 로딩");
+        exporter.SelectAllConversationsCommand.Execute(null);
+        exporter.ExportCommand.Execute(null);
+        await WaitUntilFalse(() => exporter.IsExporting, "Export");
+        Assert.True(File.Exists(_backupPath));
+
+        string secondBackupPath = _backupPath;
+        MainViewModel importer = CreateViewModel(_targetHome, importFilePicker: () => secondBackupPath);
+        importer.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsBusy, "탐지");
+        await WaitUntilFalse(() => importer.IsCatalogLoading, "카탈로그 로딩");
+
+        importer.ImportPreviewCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsImportPreviewLoading, "Import Preview");
+        Assert.NotNull(importer.CurrentImportPlan);
+
+        // 두 번째 backup(malformed)으로 다시 Preview를 시작한다 — 완료를 기다리지 않고, Execute
+        // 직후 곧바로 확인한다.
+        string malformedPath = Path.Combine(_testDir, "malformed.codexbackup");
+        File.WriteAllBytes(malformedPath, [0x00, 0x01, 0x02]);
+        secondBackupPath = malformedPath;
+
+        importer.ImportPreviewCommand.Execute(null);
+
+        Assert.Null(importer.CurrentImportPlan);
+        Assert.Null(importer.ImportPlanSummaryText);
+
+        await WaitUntilFalse(() => importer.IsImportPreviewLoading, "두 번째 Import Preview");
+        Assert.False(importer.CurrentImportPreview!.Success);
+        Assert.Null(importer.CurrentImportPlan);
+    }
+
+    [Fact]
     public async Task malformed_backup_파일은_실패_상태로_Preview를_표시한다()
     {
         _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();

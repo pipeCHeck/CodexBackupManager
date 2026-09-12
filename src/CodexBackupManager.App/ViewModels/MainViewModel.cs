@@ -914,6 +914,19 @@ public sealed class MainViewModel : ObservableObject
         _lastImportPreviewDomain = null;
         _lastImportBackupFilePath = path;
 
+        // 새 Preview를 "실제로 시작하는" 이 시점에 예전 frozen Plan을 즉시 무효화한다 — 새 backup을
+        // 선택한 순간 기존 Plan은 더 이상 Apply 후보가 아니다. 이후 빌드가 취소/실패/예외로 끝나도
+        // 예전 Plan이 남아있으면 안 되므로, 여기서 미리 비워 두고 UpdateImportPlanSummary가 성공
+        // 시에만 다시 채운다(OpenFileDialog 자체를 취소한 경우는 위에서 이미 return해 여기 도달하지
+        // 않으므로 기존 상태가 그대로 유지된다).
+        // 새 Preview를 "실제로 시작하는" 이 시점에 예전 frozen Plan을 즉시 무효화한다 — 새 backup을
+        // 선택한 순간 기존 Plan은 더 이상 Apply 후보가 아니다. 이후 빌드가 취소/실패/예외로 끝나도
+        // 예전 Plan이 남아있으면 안 되므로, 여기서 미리 비워 두고 UpdateImportPlanSummary가 성공
+        // 시에만 다시 채운다(OpenFileDialog 자체를 취소한 경우는 위에서 이미 return해 여기 도달하지
+        // 않으므로 기존 상태가 그대로 유지된다).
+        _currentImportPlan = null;
+        ImportPlanSummaryText = null;
+
         try
         {
             ImportPreview preview = await Task.Run(
