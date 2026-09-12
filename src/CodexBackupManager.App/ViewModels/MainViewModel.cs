@@ -285,8 +285,20 @@ public sealed class MainViewModel : ObservableObject
                 return;
             }
 
-            ConversationTranscript transcript = await Task.Run(
-                () => ConversationTranscriptBuilder.Build(node.ThreadId, chains, cancellation.Token),
+            // transcript 재구성과 ConversationMessageViewModel 생성(Markdown-lite 파싱까지)을 전부
+            // 백그라운드에서 끝낸다. FromDomain은 여기서 Blocks(WPF 비의존 순수 데이터)만 만들고
+            // FlowDocument는 절대 만들지 않으므로, worker 스레드에서 WPF 객체를 생성하는 일은 없다
+            // (ConversationMessageViewModel 클래스 remarks 참고) — Body는 각 아이템이 실제로
+            // virtualize되어 화면에 바인딩될 때 UI 스레드에서 지연 생성된다.
+            (ConversationTranscript transcript, List<ConversationMessageViewModel> messages) = await Task.Run(
+                () =>
+                {
+                    ConversationTranscript t = ConversationTranscriptBuilder.Build(node.ThreadId, chains, cancellation.Token);
+                    List<ConversationMessageViewModel> vms = t.Messages
+                        .Select(ConversationMessageViewModel.FromDomain)
+                        .ToList();
+                    return (t, vms);
+                },
                 cancellation.Token).ConfigureAwait(true);
 
             if (cancellation.IsCancellationRequested)
@@ -294,9 +306,9 @@ public sealed class MainViewModel : ObservableObject
                 return;
             }
 
-            foreach (var message in transcript.Messages)
+            foreach (ConversationMessageViewModel message in messages)
             {
-                ConversationMessages.Add(ConversationMessageViewModel.FromDomain(message));
+                ConversationMessages.Add(message);
             }
 
             if (transcript.Messages.Count == 0 && transcript.Warnings.Count > 0)
