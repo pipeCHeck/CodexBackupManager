@@ -4,10 +4,12 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 
 > **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
 > **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
-> **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) 완료.**
-> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔다 — 단, New Import와 안전이 증명된
-> IncomingAhead fast-forward만 지원하고, Diverged 자동 merge 등 고위험 기능과 Apply 버튼(UI)은
-> Phase 07_01로 미뤘습니다.
+> **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
+> **Phase 07_01(Restore Hardening + Apply UI) 완료.**
+> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, Phase 07_01에서 GitHub 코드 리뷰로 발견된
+> 안전성 문제를 고친 뒤 **Apply 버튼(UI)을 처음으로 연결**했습니다 — New Import와 안전이 증명된
+> IncomingAhead fast-forward만 지원하고, Diverged 자동 merge 등 고위험 기능은 여전히 지원하지
+> 않습니다. 자세한 내용은 `docs/safe-restore-phase7.md` §10 참고.
 
 ---
 
@@ -308,7 +310,8 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
   다시 열어 manifest/체크섬/path traversal 등을 전부 검사한 뒤에만 최종 `.codexbackup`으로 옮긴다.
   검증 실패·취소·예외 시 temp만 지우고 기존 파일은 건드리지 않는다.
 - Import Preview는 Phase 6에서 완료했다(아래 참고) — `BackupReader`/`BackupValidator`(읽기/검증)를
-  그대로 재사용한다. Codex에 실제로 적용하는 기능(Apply/Restore, Phase 7)은 아직 없다.
+  그대로 재사용한다. Codex에 실제로 적용하는 기능(Apply/Restore)은 Phase 7/07_01에서 추가됐다(아래
+  "Phase 7/07_01이 표시하는 것" 참고).
 
 자세한 포맷 스펙과 설계 근거는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md) 참고.
 
@@ -319,8 +322,9 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 하단에 **[백업 불러오기]** 버튼이 생긴다. `.codexbackup` 파일을 고르면(`OpenFileDialog`)
 `BackupValidator`로 즉시 검증하고, 통과하면 카탈로그/뷰어 영역을 덮는 **Import Preview** 패널이
 뜬다 — 프로젝트별로 대화 상태(신규/동일/업데이트 가능/현재 PC가 더 최신/분기 충돌/확인 불가)와
-경로 재매핑 상태를 보여준다. **선택 즉시 적용하지 않는다** — Codex에는 어떤 write도 없다(Apply는
-Phase 7).
+경로 재매핑 상태를 보여준다. **Preview만으로는 선택 즉시 적용하지 않는다** — Codex에는 어떤
+write도 없다. 실제로 적용하려면 같은 화면의 **[적용]** 버튼을 따로 눌러야 한다(Phase 7/07_01, 아래
+"Phase 7/07_01이 표시하는 것" 참고).
 
 - **timestamp가 아니라 실제 rollout 내용으로 판정한다.** 같은 ThreadId를 로컬과 backup 양쪽이 갖고
   있으면 "중복"으로 건너뛰지 않고, 실제로 소비되는 rollout byte 구간(`ConversationRevision`/
@@ -337,12 +341,41 @@ Phase 7).
 - **metadata 차이는 대화 내용 관계와 분리해서 보여준다.** cwd/프로젝트 연결/고정 여부/섹션/제목/
   최근 사용 시각이 달라도 대화 내용 자체는 완전히 같을 수 있다 — 이 둘을 섞지 않는다.
 - **경로 재매핑은 제안만 한다.** backup 프로젝트의 원본 경로가 현재 PC의 로컬 프로젝트와 canonical
-  path로 일치하면 자동 연결 표시를 하지만, 실제 재지정/적용은 Phase 7의 몫이다.
+  path로 일치하면 자동 연결 표시를 하지만, 수동 재지정은 이 화면에서 바로 할 수 있고 실제 적용은
+  Phase 7/07_01의 [적용] 버튼이 한다.
 - **core와 UI가 분리돼 있다.** `MainViewModel.ImportPreviewCommand`가 `ImportPreviewBuilder.Build()`를
   그대로 호출할 뿐, ZIP/rollout 비교 로직을 직접 갖고 있지 않다.
 
 자세한 스펙(RevisionRelation 정의, fast-forward/divergence 판정 알고리즘, metadata diff 정책,
 경로 재매핑)은 [`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md) 참고.
+
+---
+
+## Phase 7/07_01이 표시하는 것
+
+Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 대화상자("백업 내용을 Codex에
+적용합니다. 적용 전에 현재 상태의 복구용 Snapshot을 생성합니다. Codex가 완전히 종료되어 있어야
+합니다. 계속하시겠습니까?")가 뜨고, 승인해야만 실제 적용이 시작된다.
+
+- **버튼을 누른다고 바로 안전하다고 믿지 않는다.** 버튼의 활성 조건(Plan 존재 여부)은 1차 UI
+  판단일 뿐이고, 실제 안전성(Codex 실행 여부, backup/로컬 상태가 Preview 때와 같은지, 물리적으로
+  안전한 fast-forward인지)은 클릭한 바로 그 순간 `RestoreExecutor`가 처음부터 다시 확인한다 — UI는
+  Preview를 다시 해석하거나 판단을 대신하지 않는다.
+- **중간 실패가 나도 100% 원상복구.** 적용 직전에 항상 복구용 Snapshot을 만들고, Snapshot 이후
+  어디서 실패하든(사용자 취소 포함) 자동으로 Rollback한다 — "취소해서 복원", "오류가 나서 복원",
+  "복원 자체가 실패한 CRITICAL 상태"를 서로 다른 문구로 구분해서 보여준다.
+- **적용 중에는 다른 조작을 막는다.** Export/새 Import Preview 시작/프로젝트 경로 재지정/Codex 폴더
+  변경 버튼이 전부 비활성화된다.
+- **알려진 제약을 항상 먼저 보여준다.** 이 backup에 실제로 해당하는지와 무관하게, Codex Desktop
+  사이드바 반영 여부 미검증·`local_image` 미지원·새 프로젝트 자동 생성 미지원·`.jsonl.zst` 이어받기
+  미지원·분기(Diverged) 자동 적용 미지원을 같은 화면에 항상 표시한다 — "성공했다"는 결과만 보고
+  제약을 놓치는 일이 없게 하기 위해서다.
+- **지원 범위는 그대로다.** New Import, 완전 동일(NoOp), 안전이 증명된 IncomingAhead fast-forward,
+  현재 PC가 더 최신인 경우(Skip)만 실제로 적용하고, 분기(Diverged)나 확인 불가(Unverifiable)는
+  적용 자체를 전체 차단한다.
+
+자세한 스펙(Snapshot/Rollback 설계, 공식 `codex-rs` 소스 조사 결과, Phase 07_01에서 고친 안전성
+문제 목록, 알려진 한계)은 [`docs/safe-restore-phase7.md`](./docs/safe-restore-phase7.md) 참고.
 
 ---
 
@@ -389,13 +422,14 @@ Phase 7).
 | 05_01 | Backup V1 Freeze / Restore Sufficiency Hardening | **완료** |
 | 6 | Import Preview — 검증, RevisionRelation 판정(timestamp 아닌 실제 내용 기준), 경로 재매핑 제안 | **완료** |
 | 06_01~06_03 | Revision Relation Hardening / Apply Preconditions Freeze / Preview Source Identity Pinning | **완료** |
-| 7 | Safe Restore — Snapshot → Apply(New/IncomingAhead fast-forward만) → 검증 → Rollback | **완료** |
-| 07_01 | Restore hardening / 실제 사용자 데이터 검증 / Apply UI | 예정 |
+| 7 | Restore Core — Snapshot → Apply(New/IncomingAhead fast-forward만) → 검증 → Rollback | **완료** |
+| 07_01 | Restore Hardening + Apply UI — 안전성/정합성 하드닝, Apply 버튼, 실제 `.codex` clone E2E | **완료** |
+| 8 | Release / self-contained EXE / final QA | 예정 |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure
 정책, 첨부 정책, 체크섬/atomic export 정책을 담고 있다. Import Preview/`ImportPlan`/Preflight 스펙은
-[`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md)에, Safe Restore(Phase 7) 스펙과
+[`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md)에, Safe Restore(Phase 7/07_01) 스펙과
 공식 `codex-rs` 소스 조사 결과는 [`docs/safe-restore-phase7.md`](./docs/safe-restore-phase7.md)에 있다.
 
 ---
@@ -414,6 +448,10 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
 - Export가 `attachments\`(붙여넣기 텍스트)/`visualizations\`/`generated_images\` 폴더의 실제 파일은
   아직 포함하지 않는다 — 구조적으로 안전하게 참조를 추적할 방법을 찾지 못했다(`docs/codexbackup-format-v1.md` §2 참고).
   `local_image` 참조(스크린샷 등)는 포함한다.
+- **(Phase 07_01)** Import된 대화가 Codex Desktop 앱 사이드바에 올바른 프로젝트로 묶여 보이는지는
+  아직 검증하지 못했다 — Core/CLI의 project 배정 authority(`threads.project_id`)는 공식 소스로
+  확정했지만 Electron Desktop 소스는 조사하지 못했다. 실제 clone 기반 E2E도 New Import 계열만
+  수행했고 IncomingAhead(fast-forward)는 여전히 합성 데이터로만 검증했다(`docs/safe-restore-phase7.md` §10.6).
 
 ---
 

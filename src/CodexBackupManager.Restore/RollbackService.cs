@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using CodexBackupManager.Backup.Container;
+using Microsoft.Data.Sqlite;
 
 namespace CodexBackupManager.Restore;
 
@@ -63,7 +64,62 @@ public static class RollbackService
             }
         }
 
+        // 요구사항 6 — state DB를 복구했으면(=이번 Restore가 SQL write를 했으면), 복구 후 다시
+        // read-only로 열어 기본적인 integrity/threads 상태까지 확인한다. byte-level hash가 이미
+        // snapshot과 정확히 같음을 위에서 확인했으므로 이 결과는 "복구가 됐다"의 재확인일 뿐이지만,
+        // 파일은 정확한데 어떤 이유로든 SQLite 자체가 손상된 상태로 열리는 경우까지 방어한다.
+        SnapshotFileEntry? stateDbEntry = manifest.Files.FirstOrDefault(f => f.RelativeLabel == "state-db" && f.ExistedBefore);
+        if (stateDbEntry is not null)
+        {
+            string? integrityError = CheckStateDbIntegrity(stateDbEntry.OriginalAbsolutePath);
+            if (integrityError is not null)
+            {
+                return new Result(false, $"CRITICAL: 복구 후 state DB integrity 확인 실패: {integrityError}");
+            }
+        }
+
         return new Result(true, null);
+    }
+
+    /// <summary>
+    /// 복구된 state DB를 read-only로 열어 <c>PRAGMA quick_check</c>와 <c>threads</c> 테이블을 실제로
+    /// 조회할 수 있는지 확인한다. 문제가 없으면 <c>null</c>.
+    /// </summary>
+    private static string? CheckStateDbIntegrity(string stateDbPath)
+    {
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = stateDbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+                Cache = SqliteCacheMode.Private,
+            };
+
+            using var connection = new SqliteConnection(builder.ConnectionString);
+            connection.Open();
+
+            using (SqliteCommand quickCheck = connection.CreateCommand())
+            {
+                quickCheck.CommandText = "PRAGMA quick_check";
+                object? result = quickCheck.ExecuteScalar();
+                if (result is string text && !string.Equals(text, "ok", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"quick_check 결과: {text}";
+                }
+            }
+
+            using SqliteCommand countThreads = connection.CreateCommand();
+            countThreads.CommandText = "SELECT COUNT(*) FROM threads";
+            countThreads.ExecuteScalar();
+
+            return null;
+        }
+        catch (SqliteException ex)
+        {
+            return ex.Message;
+        }
     }
 
     private static void RestoreOriginal(string snapshotDirectory, SnapshotFileEntry entry)

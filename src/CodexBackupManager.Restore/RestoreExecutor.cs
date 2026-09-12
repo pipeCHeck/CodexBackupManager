@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using CodexBackupManager.Backup.Import;
-using CodexBackupManager.Backup.Reading;
+using CodexBackupManager.Codex;
+using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Codex.Locating;
 using CodexBackupManager.Domain.Codex.Catalog;
 using Microsoft.Data.Sqlite;
@@ -23,7 +23,10 @@ public enum RestoreOutcome
     /// <summary>Codex 실행 중, fresh preflight 실패, 또는 계획 생성 거부 — write 0건.</summary>
     NotReady,
 
-    /// <summary>첫 mutation 이후 실패해 Snapshot 기반으로 정상 Rollback됐다.</summary>
+    /// <summary>사용자가 취소했다 — Snapshot 기반으로 정상 Rollback됐다.</summary>
+    Cancelled,
+
+    /// <summary>첫 mutation 이후 실제 오류(취소가 아님)로 실패해 Snapshot 기반으로 정상 Rollback됐다.</summary>
     RolledBack,
 
     /// <summary>Rollback 자체가 실패했다 — 수동 개입이 필요한 CRITICAL 상태.</summary>
@@ -42,43 +45,79 @@ public sealed record RestoreResult(
     string? SnapshotId);
 
 /// <summary>
-/// Phase 7의 최상위 진입점. frozen <see cref="ImportPlan"/>을 받아 순서대로
-/// (1)Codex 실행 확인 (2)fresh preflight (3)Operation Plan 생성 (4)Snapshot (5)실제 write
-/// (6)post-validation을 수행하고, 첫 mutation 이후 어디서든 실패하면 Snapshot으로 Rollback한다
-/// (Phase 7 요구사항 4/5/7/16/17/18).
+/// Phase 7/07_01의 최상위 진입점. frozen <see cref="ImportPlan"/>을 받아 순서대로
+/// (1)Codex 실행 확인 (2)fresh preflight (3)backup identity pin (4)Operation Plan 생성 (5)Snapshot
+/// (6)Codex 실행 재확인 (7)실제 write (8)post-validation을 수행하고, 첫 mutation 이후 어디서든
+/// 실패(취소 포함)하면 Snapshot으로 Rollback한다.
 /// </summary>
 /// <remarks>
-/// <b>relation을 다시 판정하지 않는다.</b> <paramref name="freshLocalCatalog"/>는 호출자가 Apply
-/// 직전에 새로 만들어서 넘겨야 한다(<see cref="ImportPlanPreflightValidator"/>와 같은 계약) —
-/// 이 클래스는 그 카탈로그를 다시 만들지 않는다.
+/// <para>
+/// <b>fresh catalog를 이 클래스가 직접 책임진다(Phase 07_01 요구사항 4).</b> production 진입점
+/// (<see cref="Apply(ImportPlan,string,string?,IRestoreFaultInjectionHook?,CancellationToken)"/>)은
+/// <see cref="ImportPlan"/>과 Codex Home 경로만 받는다 — 호출자가 예전에 만들어 둔 카탈로그
+/// (예: App의 <c>_lastCatalog</c>)를 넘기는 구조는 만들지 않는다. "그 순간"의 카탈로그는 이
+/// 메서드 안에서 <see cref="CodexDetectionService"/>/<see cref="CodexCatalogBuilder"/>로 새로
+/// 만든다. 테스트는 <see cref="Apply(ImportPlan,string,CodexProcessGuard.RunningProcessLister,Func{string,CodexCatalog},string?,IRestoreFaultInjectionHook?,CancellationToken)"/>
+/// (internal)로 프로세스 목록/카탈로그 빌더를 주입한다.
+/// </para>
+/// <para>
+/// <b>backup TOCTOU를 Apply 전체에 걸쳐 닫는다(요구사항 5).</b> <see cref="PinnedBackupSource"/>를
+/// Preflight 직전에 한 번만 열고, 계획 수립과 실제 적용 내내 같은 reader를 재사용한다 — Planner와
+/// Executor가 각자 <c>plan.Backup.BackupFilePath</c>를 다시 여는 구조는 없앴다.
+/// </para>
 /// </remarks>
 public static class RestoreExecutor
 {
+    /// <summary>production 진입점. fresh catalog는 이 메서드가 직접 만든다.</summary>
+    /// <param name="onStatusChanged">
+    /// UI(Phase 07_01 Apply 화면)가 진행 단계를 보여줄 수 있도록 하는 선택적 콜백. 안전성 판단에는
+    /// 전혀 관여하지 않는 순수 알림용이다 — 값을 넘기지 않아도 Apply 동작은 동일하다.
+    /// </param>
     public static RestoreResult Apply(
         ImportPlan plan,
         string codexHomePath,
-        CodexCatalog freshLocalCatalog,
-        CodexProcessGuard.RunningProcessLister processLister,
         string? snapshotRoot = null,
         IRestoreFaultInjectionHook? faultInjection = null,
+        Action<string>? onStatusChanged = null,
+        CancellationToken cancellationToken = default)
+        => Apply(
+            plan, codexHomePath,
+            CodexProcessGuard.SystemRunningProcessLister,
+            BuildFreshCatalog,
+            snapshotRoot, faultInjection, onStatusChanged, cancellationToken);
+
+    /// <summary>
+    /// 테스트 전용 확장 진입점(<c>InternalsVisibleTo</c>로 Restore.Tests에만 노출). 프로세스 목록과
+    /// fresh catalog 생성 방법을 주입할 수 있다 — production 코드는
+    /// <see cref="Apply(ImportPlan,string,string?,IRestoreFaultInjectionHook?,Action{string}?,CancellationToken)"/>만 쓴다.
+    /// </summary>
+    internal static RestoreResult Apply(
+        ImportPlan plan,
+        string codexHomePath,
+        CodexProcessGuard.RunningProcessLister processLister,
+        Func<string, CodexCatalog> catalogBuilder,
+        string? snapshotRoot = null,
+        IRestoreFaultInjectionHook? faultInjection = null,
+        Action<string>? onStatusChanged = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrWhiteSpace(codexHomePath);
-        ArgumentNullException.ThrowIfNull(freshLocalCatalog);
         ArgumentNullException.ThrowIfNull(processLister);
+        ArgumentNullException.ThrowIfNull(catalogBuilder);
 
         faultInjection ??= NoOpRestoreFaultInjectionHook.Instance;
         snapshotRoot ??= SnapshotService.DefaultSnapshotRoot();
+        onStatusChanged ??= static _ => { };
 
-        CodexProcessGuard.Result processCheck = CodexProcessGuard.Check(processLister);
-        if (processCheck.IsRunning)
+        onStatusChanged("안전성 확인 중");
+
+        if (CodexProcessGuard.Check(processLister).IsRunning)
         {
-            return new RestoreResult(
-                RestoreOutcome.NotReady,
-                "Codex가 현재 실행 중입니다. 안전한 복원을 위해 Codex를 종료한 뒤 다시 시도해 주세요.",
-                null, null);
+            return new RestoreResult(RestoreOutcome.NotReady, CodexRunningMessage, null, null);
         }
+
+        CodexCatalog freshLocalCatalog = catalogBuilder(codexHomePath);
 
         ImportPlanPreflightValidator.Result preflight = ImportPlanPreflightValidator.Validate(plan, freshLocalCatalog, cancellationToken);
         if (!preflight.IsReady)
@@ -86,7 +125,13 @@ public static class RestoreExecutor
             return new RestoreResult(RestoreOutcome.NotReady, MessageForPreflightStatus(preflight.Status), preflight.Status, null);
         }
 
-        RestoreOperationPlanResult planResult = RestoreOperationPlanner.Build(plan, freshLocalCatalog, codexHomePath, cancellationToken);
+        using PinnedBackupSource pinnedBackup = PinnedBackupSource.Open(plan.Backup.BackupFilePath, cancellationToken);
+        if (!pinnedBackup.MatchesExpected(plan.Backup))
+        {
+            return new RestoreResult(RestoreOutcome.NotReady, MessageForPreflightStatus(ImportPlanPreflightStatus.BackupChanged), ImportPlanPreflightStatus.BackupChanged, null);
+        }
+
+        RestoreOperationPlanResult planResult = RestoreOperationPlanner.Build(plan, freshLocalCatalog, codexHomePath, pinnedBackup, cancellationToken);
         if (!planResult.Success)
         {
             return new RestoreResult(
@@ -101,6 +146,7 @@ public static class RestoreExecutor
             return new RestoreResult(RestoreOutcome.NothingToDo, "적용할 변경 사항이 없습니다(모두 이미 최신 상태입니다).", null, null);
         }
 
+        onStatusChanged("Snapshot 생성 중");
         IReadOnlyList<(string Label, string AbsolutePath)> snapshotTargets = ComputeSnapshotTargets(codexHomePath, opPlan);
         SnapshotCreateResult snapshot = SnapshotService.Create(snapshotRoot, codexHomePath, plan.Backup.BackupFileSha256, snapshotTargets);
         if (!snapshot.Success)
@@ -108,15 +154,30 @@ public static class RestoreExecutor
             return new RestoreResult(RestoreOutcome.NotReady, $"복구용 Snapshot을 만들지 못해 적용을 시작하지 않았습니다: {snapshot.FailureReason}", null, null);
         }
 
-        faultInjection.Check(RestoreFaultInjectionPoint.AfterSnapshot);
-
+        // 요구사항 12 — AfterSnapshot 지점은 아직 mutation 전이지만, 여기서 강제 예외가 나도
+        // 바깥으로 그냥 튀지 않고 일관된 Result를 돌려줘야 한다는 정책을 정했다: 이 지점부터는
+        // try 블록 안에서 실행해, 예외가 나면 (아직 아무것도 안 썼더라도) 같은 Rollback 경로를
+        // 타 항상 명확한 결과(RolledBack 또는 Cancelled)를 돌려준다 — "Snapshot은 만들었는데 그
+        // 다음에 뭔가 실패했다"를 애매하게 던지지 않는다.
         try
         {
-            ExecuteMutations(plan, codexHomePath, opPlan, faultInjection, cancellationToken);
+            faultInjection.Check(RestoreFaultInjectionPoint.AfterSnapshot);
 
+            // 요구사항 3 — Apply 시작 시 한 번, 그리고 Snapshot 완료 후 첫 mutation 직전에 한 번 더
+            // Codex 실행 여부를 확인한다. 아직 mutation을 하나도 하지 않았으므로(Snapshot은 읽기만
+            // 한다) Rollback 없이 그냥 중단해도 안전하다 — 여기서는 예외를 던지지 않고 바로 반환한다.
+            if (CodexProcessGuard.Check(processLister).IsRunning)
+            {
+                return new RestoreResult(RestoreOutcome.NotReady, CodexRunningMessage, null, snapshot.Manifest!.SnapshotId);
+            }
+
+            onStatusChanged("적용 중");
+            ExecuteMutations(codexHomePath, opPlan, pinnedBackup, faultInjection, cancellationToken);
+
+            onStatusChanged("검증 중");
             faultInjection.Check(RestoreFaultInjectionPoint.BeforePostValidation);
             cancellationToken.ThrowIfCancellationRequested();
-            RestoreValidator.Result validation = RestoreValidator.Validate(plan, codexHomePath, cancellationToken);
+            RestoreValidator.Result validation = RestoreValidator.Validate(plan, opPlan, codexHomePath, cancellationToken);
             if (!validation.Success)
             {
                 throw new InvalidOperationException(validation.FailureReason ?? "post-apply validation 실패");
@@ -124,30 +185,47 @@ public static class RestoreExecutor
 
             return new RestoreResult(RestoreOutcome.Succeeded, "적용이 완료됐습니다.", null, snapshot.Manifest!.SnapshotId);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 요구사항 16: Snapshot을 만든 "이후"의 실패는 취소(OperationCanceledException 포함)든
-            // 다른 예외든 구분하지 않는다 — 첫 mutation 이후에는 중간 상태를 남기지 않고 항상
-            // Rollback한다. Snapshot 생성 전 취소/실패는 이 try 블록에 들어오지 않으므로(즉시 return),
-            // 그 경우는 원래 예외/취소가 그대로 호출자에게 전파된다(쓰기 자체가 없었으므로 안전하다).
+            // 요구사항 13: 취소와 실제 오류를 구분해서 사용자에게 보여준다. 어느 쪽이든 Snapshot을
+            // 만든 "이후"의 실패는 항상 Rollback한다 — 원문/path는 메시지에 담지 않는다.
+            bool wasCancelled = ex is OperationCanceledException;
+            onStatusChanged("Rollback 중");
             RollbackService.Result rollback = RollbackService.Rollback(snapshot.Manifest!, snapshot.SnapshotDirectory!);
-            return rollback.Success
-                ? new RestoreResult(RestoreOutcome.RolledBack, "적용을 취소하여 이전 상태로 복원했습니다.", null, snapshot.Manifest!.SnapshotId)
-                : new RestoreResult(
+
+            if (!rollback.Success)
+            {
+                return new RestoreResult(
                     RestoreOutcome.RollbackFailedCritical,
                     $"CRITICAL: 자동 복구에 실패했습니다. Snapshot({snapshot.Manifest!.SnapshotId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
                     null, snapshot.Manifest!.SnapshotId);
+            }
+
+            return wasCancelled
+                ? new RestoreResult(RestoreOutcome.Cancelled, "적용을 취소하여 이전 상태로 복원했습니다.", null, snapshot.Manifest!.SnapshotId)
+                : new RestoreResult(RestoreOutcome.RolledBack, "적용 중 오류가 발생해 이전 상태로 복원했습니다.", null, snapshot.Manifest!.SnapshotId);
         }
     }
 
+    private static CodexCatalog BuildFreshCatalog(string codexHomePath)
+    {
+        var detection = new CodexDetectionService().DetectFromUserSelection(codexHomePath);
+        if (detection.Installation is not { } installation)
+        {
+            throw new InvalidOperationException("Codex Home을 다시 확인할 수 없습니다.");
+        }
+
+        return CodexCatalogBuilder.Build(installation);
+    }
+
     private static void ExecuteMutations(
-        ImportPlan plan,
         string codexHomePath,
         RestoreOperationPlan opPlan,
+        PinnedBackupSource pinnedBackup,
         IRestoreFaultInjectionHook faultInjection,
         CancellationToken cancellationToken)
     {
-        using BackupReader reader = BackupReader.Open(plan.Backup.BackupFilePath);
+        Backup.Reading.BackupReader reader = pinnedBackup.Reader;
 
         bool firstRolloutDone = false;
         foreach (PlannedNewRolloutFile newFile in opPlan.NewRolloutFiles)
@@ -170,7 +248,7 @@ public static class RestoreExecutor
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (opPlan.ThreadInserts.Count == 0 && opPlan.ThreadRolloutPathUpdates.Count == 0)
+        if (opPlan.ThreadInserts.Count == 0 && opPlan.ThreadRolloutPathUpdates.Count == 0 && opPlan.ThreadMetadataUpdates.Count == 0)
         {
             return;
         }
@@ -208,6 +286,11 @@ public static class RestoreExecutor
             StateDatabaseWriter.UpdateRolloutPath(connection, transaction, update);
         }
 
+        foreach (PlannedThreadMetadataUpdate metadataUpdate in opPlan.ThreadMetadataUpdates)
+        {
+            StateDatabaseWriter.UpdateMetadata(connection, transaction, metadataUpdate);
+        }
+
         transaction.Commit();
         faultInjection.Check(RestoreFaultInjectionPoint.AfterSqliteCommit);
         cancellationToken.ThrowIfCancellationRequested();
@@ -218,16 +301,18 @@ public static class RestoreExecutor
     {
         var targets = new List<(string Label, string AbsolutePath)>();
 
+        bool hasSqlWrite = opPlan.ThreadInserts.Count > 0 || opPlan.ThreadRolloutPathUpdates.Count > 0 || opPlan.ThreadMetadataUpdates.Count > 0;
         IReadOnlyList<string> stateDbNames = CodexHomeLayout.FindStateDatabaseFileNames(codexHomePath);
-        if (stateDbNames.Count > 0 && (opPlan.ThreadInserts.Count > 0 || opPlan.ThreadRolloutPathUpdates.Count > 0))
+        if (stateDbNames.Count > 0 && hasSqlWrite)
         {
+            // 요구사항 6 — SQL write가 있으면 state DB 본체뿐 아니라 -wal/-shm도 항상 snapshot
+            // 대상에 등록한다. Restore가 SQLite를 열면서 이 sidecar들을 "새로" 만들 수 있는데,
+            // 원래 없었다면 ExistedBefore=false로 기록돼야 Rollback 시 정확히 지울 수 있다 —
+            // 존재 여부 판정 자체는 SnapshotService가 한다(여기서는 항상 등록만 한다).
             string stateDbPath = Path.Combine(codexHomePath, stateDbNames[0]);
             targets.Add(("state-db", stateDbPath));
-            string walPath = stateDbPath + "-wal";
-            if (File.Exists(walPath))
-            {
-                targets.Add(("state-db-wal", walPath));
-            }
+            targets.Add(("state-db-wal", stateDbPath + "-wal"));
+            targets.Add(("state-db-shm", stateDbPath + "-shm"));
         }
 
         foreach (PlannedNewRolloutFile newFile in opPlan.NewRolloutFiles)
@@ -242,6 +327,8 @@ public static class RestoreExecutor
 
         return targets;
     }
+
+    private const string CodexRunningMessage = "Codex가 현재 실행 중입니다. 안전한 복원을 위해 Codex를 종료한 뒤 다시 시도해 주세요.";
 
     private static string MessageForPreflightStatus(ImportPlanPreflightStatus status) => status switch
     {

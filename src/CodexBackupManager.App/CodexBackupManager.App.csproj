@@ -27,6 +27,7 @@
     <ProjectReference Include="..\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj" />
     <ProjectReference Include="..\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj" />
     <ProjectReference Include="..\CodexBackupManager.Backup\CodexBackupManager.Backup.csproj" />
+    <ProjectReference Include="..\CodexBackupManager.Restore\CodexBackupManager.Restore.csproj" />
   </ItemGroup>
 
   <ItemGroup>

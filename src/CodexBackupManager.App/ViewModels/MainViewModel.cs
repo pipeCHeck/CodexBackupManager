@@ -21,6 +21,7 @@ using CodexBackupManager.Domain.Codex.Conversation;
 using CodexBackupManager.Domain.Codex.Selection;
 using CodexBackupManager.Domain.Diagnostics;
 using CodexBackupManager.Domain.Paths;
+using CodexBackupManager.Restore;
 
 namespace CodexBackupManager.App.ViewModels;
 
@@ -41,6 +42,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly Func<string, string?> _exportFilePicker;
     private readonly Func<string?> _importFilePicker;
     private readonly Func<string?> _projectPathPicker;
+    private readonly Func<string, string, bool> _confirmDialog;
 
     private bool _isBusy;
     private bool _isConnected;
@@ -93,6 +95,13 @@ public sealed class MainViewModel : ObservableObject
     // Plan을 다시 만들 필요가 없다.
     private ImportPlan? _currentImportPlan;
 
+    // Phase 07_01 — Apply. RestoreExecutor가 유일한 안전성 판단 주체다: 여기서는 확인 대화상자를
+    // 띄우고, 진행 중 다른 조작(Export/새 Import Preview/경로 재지정/폴더 변경)을 막고, 결과 문구를
+    // 보여줄 뿐 Plan/Preflight를 다시 해석하지 않는다.
+    private bool _isApplying;
+    private string? _applyStatusText;
+    private CancellationTokenSource? _applyCancellation;
+
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
     /// <param name="settings">설정 저장소.</param>
@@ -110,6 +119,10 @@ public sealed class MainViewModel : ObservableObject
     /// Import Preview에서 프로젝트 경로를 수동으로 재지정할 때 쓰는 폴더 선택 대화상자(Phase 06_01,
     /// 출력: 선택한 경로 또는 취소 시 <c>null</c>). 생략하면 <see cref="FolderPicker.PickProjectFolder"/>를 쓴다.
     /// </param>
+    /// <param name="confirmDialog">
+    /// Apply(Phase 07_01) 직전 확인 대화상자. (메시지, 제목) → 사용자가 "예"를 눌렀는지. 생략하면
+    /// <see cref="Services.ConfirmDialog.Confirm"/>을 쓴다.
+    /// </param>
     public MainViewModel(
         CodexDetectionService detection,
         SettingsStore settings,
@@ -117,7 +130,8 @@ public sealed class MainViewModel : ObservableObject
         Func<string?> folderPicker,
         Func<string, string?>? exportFilePicker = null,
         Func<string?>? importFilePicker = null,
-        Func<string?>? projectPathPicker = null)
+        Func<string?>? projectPathPicker = null,
+        Func<string, string, bool>? confirmDialog = null)
     {
         ArgumentNullException.ThrowIfNull(detection);
         ArgumentNullException.ThrowIfNull(settings);
@@ -131,16 +145,19 @@ public sealed class MainViewModel : ObservableObject
         _exportFilePicker = exportFilePicker ?? BackupFilePicker.PickSaveLocation;
         _importFilePicker = importFilePicker ?? BackupFilePicker.PickOpenLocation;
         _projectPathPicker = projectPathPicker ?? FolderPicker.PickProjectFolder;
+        _confirmDialog = confirmDialog ?? Services.ConfirmDialog.Confirm;
 
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
-        RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy);
-        ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync(), () => !IsBusy);
+        RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy && !IsApplying);
+        ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync(), () => !IsBusy && !IsApplying);
         SelectAllConversationsCommand = new RelayCommand(SelectAllConversations, () => TotalConversationCount > 0);
         ClearSelectionCommand = new RelayCommand(ClearAllSelections, () => HasSelection);
-        ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting);
+        ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting && !IsApplying);
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
-        ImportPreviewCommand = new RelayCommand(() => _ = ImportPreviewAsync(), () => !IsImportPreviewLoading);
-        CloseImportPreviewCommand = new RelayCommand(CloseImportPreview);
+        ImportPreviewCommand = new RelayCommand(() => _ = ImportPreviewAsync(), () => !IsImportPreviewLoading && !IsApplying);
+        CloseImportPreviewCommand = new RelayCommand(CloseImportPreview, () => !IsApplying);
+        ApplyCommand = new RelayCommand(() => _ = ApplyAsync(), () => _currentImportPlan is not null && !IsApplying);
+        CancelApplyCommand = new RelayCommand(CancelApply, () => IsApplying);
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -170,6 +187,17 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>현재 표시 중인 Import Preview를 닫는다(판정 결과를 버릴 뿐, Codex에는 아무 영향 없다).</summary>
     public RelayCommand CloseImportPreviewCommand { get; }
+
+    /// <summary>
+    /// 현재 frozen된 <see cref="_currentImportPlan"/>을 실제 Codex에 적용한다(Phase 07_01). 이
+    /// <c>CanExecute</c>는 1차 UI 조건일 뿐이다 — 실제 안전성 판단은 클릭 시점에
+    /// <see cref="RestoreExecutor"/>가 직접 fresh preflight/backup pin/Operation Plan 재검증으로
+    /// 수행한다.
+    /// </summary>
+    public RelayCommand ApplyCommand { get; }
+
+    /// <summary>진행 중인 Apply를 취소한다. Snapshot 이후라면 취소도 Rollback으로 처리된다.</summary>
+    public RelayCommand CancelApplyCommand { get; }
 
     /// <summary>Import Preview를 만드는 중인지.</summary>
     public bool IsImportPreviewLoading
@@ -248,6 +276,37 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _exportStatusText;
         private set => SetProperty(ref _exportStatusText, value);
+    }
+
+    /// <summary>
+    /// Apply가 진행 중인지(Phase 07_01). 진행 중에는 Export/새 Import Preview/경로 재지정/Codex
+    /// Home 변경을 모두 막는다.
+    /// </summary>
+    public bool IsApplying
+    {
+        get => _isApplying;
+        private set
+        {
+            if (SetProperty(ref _isApplying, value))
+            {
+                ApplyCommand.RaiseCanExecuteChanged();
+                CancelApplyCommand.RaiseCanExecuteChanged();
+                RefreshCommand.RaiseCanExecuteChanged();
+                ChangeFolderCommand.RaiseCanExecuteChanged();
+                ExportCommand.RaiseCanExecuteChanged();
+                ImportPreviewCommand.RaiseCanExecuteChanged();
+                CloseImportPreviewCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Apply 진행/결과 문구("안전성 확인 중" 등). 대화 원문이나 개인 절대경로는 담지 않는다.
+    /// </summary>
+    public string? ApplyStatusText
+    {
+        get => _applyStatusText;
+        private set => SetProperty(ref _applyStatusText, value);
     }
 
     /// <summary>탐지 결과 표. 라벨/값 쌍.</summary>
@@ -885,6 +944,7 @@ public sealed class MainViewModel : ObservableObject
         _lastImportBackupFilePath = null;
         _currentImportPlan = null;
         ImportPlanSummaryText = null;
+        ApplyCommand.RaiseCanExecuteChanged();
     }
 
     /// <summary>
@@ -926,6 +986,7 @@ public sealed class MainViewModel : ObservableObject
         // 않으므로 기존 상태가 그대로 유지된다).
         _currentImportPlan = null;
         ImportPlanSummaryText = null;
+        ApplyCommand.RaiseCanExecuteChanged();
 
         try
         {
@@ -983,6 +1044,14 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     private void RequestProjectPathOverride(string? projectId)
     {
+        if (_isApplying)
+        {
+            // Apply 진행 중에는 경로 재지정을 막는다(요구사항 15) — pin된 ImportPlan을 흔들 수 있는
+            // 조작이므로 버튼 자체가 항상 보이더라도(자식 ViewModel의 RelayCommand는 CanExecute를
+            // 다시 묻지 않는 고정 델리게이트라 여기서 직접 막는다) 여기서 차단한다.
+            return;
+        }
+
         if (_lastImportPreviewDomain is not { } currentPreview)
         {
             return;
@@ -1031,11 +1100,13 @@ public sealed class MainViewModel : ObservableObject
         {
             _currentImportPlan = null;
             ImportPlanSummaryText = null;
+            ApplyCommand.RaiseCanExecuteChanged();
             return;
         }
 
         ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
         _currentImportPlan = plan;
+        ApplyCommand.RaiseCanExecuteChanged();
 
         if (plan is null)
         {
@@ -1055,6 +1126,129 @@ public sealed class MainViewModel : ObservableObject
         // Codex가 지금(Apply 직전) 이 상태와 같은지는 Phase 7의 fresh preflight만 알 수 있다.
         ImportPlanSummaryText = "가져오기 계획 생성 완료 — 충돌 없음(적용 전 최종 검사가 필요합니다).";
     }
+
+    /// <summary>
+    /// Apply 전 항상 보여줘야 하는 알려진 제약 사항(Phase 07_01 요구사항 16). 이 backup/현재 상태에
+    /// 실제로 해당하는지와 무관하게, 사용자가 "성공했다"고 오해하지 않도록 항상 함께 표시한다.
+    /// </summary>
+    public static string KnownLimitationsText =>
+        "알려진 제약: Codex Desktop 사이드바에 프로젝트별로 정확히 표시되는지는 아직 별도 검증되지 " +
+        "않았습니다. local_image 첨부는 복원되지 않습니다. 새 프로젝트 자동 생성은 지원하지 않습니다. " +
+        ".jsonl.zst로 압축된 대화의 이어받기(Update)는 지원하지 않습니다. 분기(Diverged)된 대화는 자동" +
+        "적용하지 않습니다.";
+
+    /// <summary>
+    /// frozen된 <see cref="_currentImportPlan"/>을 실제로 적용한다(Phase 07_01). 여기서는
+    /// <see cref="ImportPlan"/>을 다시 해석하거나 Preflight를 다시 판단하지 않는다 — 확인 대화상자를
+    /// 띄우고, 다른 조작을 막고, <see cref="RestoreExecutor"/>의 결과를 그대로 보여줄 뿐이다.
+    /// </summary>
+    private async Task ApplyAsync()
+    {
+        if (_currentImportPlan is not { } plan)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(HomePath))
+        {
+            ApplyStatusText = "Codex Home 경로를 확인할 수 없습니다.";
+            return;
+        }
+
+        bool confirmed = _confirmDialog(
+            "백업 내용을 Codex에 적용합니다.\n적용 전에 현재 상태의 복구용 Snapshot을 생성합니다.\n" +
+            "Codex가 완전히 종료되어 있어야 합니다.\n계속하시겠습니까?",
+            "적용 확인");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        string codexHomePath = HomePath;
+        var cancellation = new CancellationTokenSource();
+        _applyCancellation = cancellation;
+        IsApplying = true;
+        ApplyStatusText = "안전성 확인 중…";
+
+        // RestoreExecutor.Apply의 onStatusChanged 콜백은 Task.Run 내부(백그라운드 스레드)에서
+        // 그대로 호출된다 — WPF 바인딩 대상 속성은 UI 스레드에서만 갱신해야 하므로, 호출 스레드(UI
+        // 스레드)의 SynchronizationContext로 다시 넘겨서(Post) 반영한다. ViewModel 자체는 WPF를
+        // 직접 참조하지 않는다(System.Threading만 사용).
+        SynchronizationContext? uiContext = SynchronizationContext.Current;
+
+        try
+        {
+            RestoreResult result = await Task.Run(
+                () => RestoreExecutor.Apply(
+                    plan,
+                    codexHomePath,
+                    onStatusChanged: status => ReportApplyStatus(status, uiContext),
+                    cancellationToken: cancellation.Token),
+                cancellation.Token).ConfigureAwait(true);
+
+            ApplyStatusText = DescribeApplyResult(result);
+
+            switch (result.Outcome)
+            {
+                case RestoreOutcome.Succeeded:
+                case RestoreOutcome.NothingToDo:
+                    // 적용된(또는 더 이상 적용할 것이 없는) Plan을 다시 Apply할 수 없게 무효화한다 —
+                    // 다시 적용하려면 새 Import Preview부터 시작해야 한다.
+                    _currentImportPlan = null;
+                    ApplyCommand.RaiseCanExecuteChanged();
+                    _logger.Info($"Apply 완료. outcome={result.Outcome} snapshotId={result.SnapshotId}");
+                    break;
+                default:
+                    _logger.Warning($"Apply 실패/중단. outcome={result.Outcome} snapshotId={result.SnapshotId}");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            // RestoreExecutor.Apply는 Snapshot 이후의 모든 예외(취소 포함)를 스스로 Rollback 처리해
+            // RestoreResult로 돌려준다 — 여기까지 예외가 올라온다면 Rollback 경로 자체에 들어가기
+            // 전(예: fresh catalog 생성 실패)의 예기치 않은 오류다.
+            _logger.Error("Apply 중 예기치 않은 오류", ex);
+            ApplyStatusText = $"적용 중 예기치 않은 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_applyCancellation, cancellation))
+            {
+                IsApplying = false;
+                _applyCancellation = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// RestoreExecutor의 진행 콜백(백그라운드 스레드에서 호출됨)을 UI 스레드로 옮겨 반영한다.
+    /// <paramref name="uiContext"/>가 없으면(예: 테스트에서 동기 컨텍스트 없이 실행) 그냥 직접 쓴다.
+    /// </summary>
+    private void ReportApplyStatus(string status, SynchronizationContext? uiContext)
+    {
+        if (uiContext is null)
+        {
+            ApplyStatusText = status;
+            return;
+        }
+
+        uiContext.Post(_ => ApplyStatusText = status, null);
+    }
+
+    /// <summary>진행 중인 Apply를 취소한다. Snapshot 이전이면 그냥 중단되고, 이후면 Rollback된다.</summary>
+    private void CancelApply() => _applyCancellation?.Cancel();
+
+    private static string DescribeApplyResult(RestoreResult result) => result.Outcome switch
+    {
+        RestoreOutcome.Succeeded => "적용 완료.",
+        RestoreOutcome.NothingToDo => "적용할 변경 사항이 없습니다(이미 최신 상태입니다).",
+        RestoreOutcome.Cancelled => "적용을 취소하여 이전 상태로 복원했습니다.",
+        RestoreOutcome.RolledBack => "적용 중 오류가 발생해 이전 상태로 복원했습니다.",
+        RestoreOutcome.RollbackFailedCritical => $"CRITICAL: {result.Message}",
+        RestoreOutcome.NotReady => result.Message,
+        _ => result.Message,
+    };
 
     /// <summary>
     /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 대량 선택/해제 시

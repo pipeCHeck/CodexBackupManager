@@ -31,20 +31,35 @@ namespace CodexBackupManager.Restore;
 /// </remarks>
 public static class RestoreOperationPlanner
 {
-    /// <summary>계획을 만든다. Codex에는 어떤 것도 쓰지 않는다(읽기만 한다).</summary>
+    /// <summary>
+    /// 계획을 만든다. Codex에는 어떤 것도 쓰지 않는다(읽기만 한다).
+    /// </summary>
+    /// <param name="pinnedBackup">
+    /// (Phase 07_01) Apply 시작 시 한 번만 연 backup source — 이 메서드는 이 reader만 쓰고
+    /// <paramref name="plan"/>의 경로로 파일을 새로 열지 않는다. 호출자(<see cref="RestoreExecutor"/>)가
+    /// 이미 identity를 확인한 바로 그 바이트를 계속 신뢰하기 위함이다(Preview↔Plan TOCTOU를 막은
+    /// Phase 06_03과 같은 원칙을 Apply 내부에도 적용).
+    /// </param>
     public static RestoreOperationPlanResult Build(
         ImportPlan plan,
         CodexCatalog freshLocalCatalog,
         string codexHomePath,
+        PinnedBackupSource pinnedBackup,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(freshLocalCatalog);
         ArgumentException.ThrowIfNullOrWhiteSpace(codexHomePath);
+        ArgumentNullException.ThrowIfNull(pinnedBackup);
 
         if (plan.HasBlockingIssues || plan.HasUnresolvedDivergence)
         {
             return Reject("Blocked 또는 분기 충돌(Diverged)이 있는 Plan은 계획을 만들지 않습니다.");
+        }
+
+        if (!pinnedBackup.MatchesExpected(plan.Backup))
+        {
+            return Reject("backup 파일이 Apply 시작 이후 바뀌었습니다.");
         }
 
         IReadOnlyList<string> stateDbNames = CodexHomeLayout.FindStateDatabaseFileNames(codexHomePath);
@@ -60,7 +75,7 @@ public static class RestoreOperationPlanner
             return Reject($"현재 state DB 스키마와 호환되지 않습니다: {string.Join(", ", schema.MissingColumns)}");
         }
 
-        using BackupReader reader = BackupReader.Open(plan.Backup.BackupFilePath);
+        BackupReader reader = pinnedBackup.Reader;
         BackupManifest manifest = reader.ReadManifest();
         BackupCatalogReader.Result backupCatalog = BackupCatalogReader.Build(reader, cancellationToken);
         var backupSliceReader = new BackupRolloutSliceReader(reader);
@@ -74,6 +89,7 @@ public static class RestoreOperationPlanner
         var rolloutAppends = new List<PlannedRolloutAppend>();
         var threadInserts = new List<PlannedThreadInsert>();
         var rolloutPathUpdates = new List<PlannedThreadRolloutPathUpdate>();
+        var threadMetadataUpdates = new List<PlannedThreadMetadataUpdate>();
         var copiedEntryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var rejections = new List<string>();
 
@@ -91,8 +107,10 @@ public static class RestoreOperationPlanner
 
                 case ImportPlannedAction.Update:
                     PlanFastForward(
-                        conversation, freshLocalCatalog, backupCatalog, backupSliceReader, codexHomePath,
-                        newRolloutFiles, rolloutAppends, rolloutPathUpdates, rejections, cancellationToken);
+                        conversation, freshLocalCatalog, backupCatalog, backupSliceReader, reader,
+                        metadataByThreadId, codexHomePath,
+                        newRolloutFiles, rolloutAppends, rolloutPathUpdates, threadMetadataUpdates,
+                        rejections, cancellationToken);
                     break;
 
                 case ImportPlannedAction.NoOp:
@@ -112,7 +130,8 @@ public static class RestoreOperationPlanner
             return new RestoreOperationPlanResult(null, rejections);
         }
 
-        var restorePlan = new RestoreOperationPlan(newRolloutFiles, rolloutAppends, threadInserts, rolloutPathUpdates);
+        var restorePlan = new RestoreOperationPlan(
+            newRolloutFiles, rolloutAppends, threadInserts, rolloutPathUpdates, threadMetadataUpdates);
         return new RestoreOperationPlanResult(restorePlan, []);
     }
 
@@ -137,6 +156,17 @@ public static class RestoreOperationPlanner
         if (string.IsNullOrWhiteSpace(metadata.ModelProvider))
         {
             rejections.Add($"{Redact(conversation.ThreadId)}: model_provider가 비어 있어 New Import를 할 수 없습니다(resume 실패 위험).");
+            return;
+        }
+
+        // 요구사항 9 — thread_source가 NULL이면 Codex UI 목록에서 사라진다(공식 Issue #23979,
+        // docs/codex-storage-format.md §7-5). 사용자가 실제로 선택한 대화(IsSelected)는 반드시
+        // Desktop/CLI 목록에 보여야 하므로 값이 없으면 추측해서 채우지 않고 New Import 자체를
+        // 거부한다. dependency-only(조상, IsSelected=false) thread는 독립적으로 목록에 보일 필요가
+        // 없으므로 이 게이트를 적용하지 않는다.
+        if (conversation.IsSelected && string.IsNullOrWhiteSpace(metadata.ThreadSource))
+        {
+            rejections.Add($"{Redact(conversation.ThreadId)}: thread_source가 비어 있어 New Import를 할 수 없습니다(Codex 목록에서 보이지 않을 위험).");
             return;
         }
 
@@ -214,10 +244,13 @@ public static class RestoreOperationPlanner
         CodexCatalog freshLocalCatalog,
         BackupCatalogReader.Result backupCatalog,
         IRolloutSliceReader backupSliceReader,
+        BackupReader reader,
+        Dictionary<string, BackupConversationMetadata> metadataByThreadId,
         string codexHomePath,
         List<PlannedNewRolloutFile> newRolloutFiles,
         List<PlannedRolloutAppend> rolloutAppends,
         List<PlannedThreadRolloutPathUpdate> rolloutPathUpdates,
+        List<PlannedThreadMetadataUpdate> threadMetadataUpdates,
         List<string> rejections,
         CancellationToken cancellationToken)
     {
@@ -249,6 +282,16 @@ public static class RestoreOperationPlanner
         if (currentFile.Kind == RolloutFileKind.ZstdCompressed)
         {
             rejections.Add($"{Redact(threadId)}: 압축(.jsonl.zst) 파일에는 append를 시도하지 않습니다.");
+            return;
+        }
+
+        // 요구사항 8 — archived 상태가 바뀌는 update는 이번 Phase에서 지원하지 않는다(파일을
+        // sessions\↔archived_sessions\로 옮기는 것까지 포함해야 하는데, 그 물리적 이동은 검증하지
+        // 않았다). local의 현재 archived 상태와 backup metadata의 archived가 다르면 전체 거부한다.
+        if (metadataByThreadId.TryGetValue(threadId, out BackupConversationMetadata? incomingMetadata) &&
+            incomingMetadata.Archived != currentFile.IsArchived)
+        {
+            rejections.Add($"{Redact(threadId)}: archived 상태가 바뀌는 update는 지원하지 않습니다(Unsupported).");
             return;
         }
 
@@ -326,7 +369,16 @@ public static class RestoreOperationPlanner
             string targetPath = Path.Combine(targetDir, fileName);
             string entryPath = newSlice.File.FullPath;
 
-            newRolloutFiles.Add(new PlannedNewRolloutFile(threadId, entryPath, targetPath, newSlice.LogicalByteLength, newSlice.Sha256Hex));
+            // 요구사항 7 — 새 segment는 backup entry 바이트를 그대로 복사한다(New Import와 동일한
+            // 연산). 따라서 검증 기준도 물리(physical) 길이/해시여야 한다 — newSlice.LogicalByteLength/
+            // Sha256Hex는 압축 해제된 "논리" 값이라 .jsonl.zst 새 segment에서는 실제로 복사되는
+            // 압축 바이트와 다르다(예전 버그, 정상 zst 파일도 검증에 실패했다). RolloutSlice.File은
+            // backup ZIP entry를 가리키므로 여기서 물리 길이/해시를 다시 재는 것이 유일하게 안전하다.
+            long physicalLength = reader.GetEntryLength(entryPath)
+                ?? throw new InvalidOperationException($"backup entry를 찾을 수 없습니다: {Redact(threadId)}");
+            string physicalHash = HashEntry(reader, entryPath);
+
+            newRolloutFiles.Add(new PlannedNewRolloutFile(threadId, entryPath, targetPath, physicalLength, physicalHash));
             leafFileChanged = true;
             newLeafTargetPath = targetPath;
         }
@@ -335,6 +387,60 @@ public static class RestoreOperationPlanner
         {
             rolloutPathUpdates.Add(new PlannedThreadRolloutPathUpdate(threadId, newLeafTargetPath));
         }
+
+        PlannedThreadMetadataUpdate? metadataUpdate = ComputeMetadataUpdate(threadId, incomingMetadata, freshLocalCatalog);
+        if (metadataUpdate is not null)
+        {
+            threadMetadataUpdates.Add(metadataUpdate);
+        }
+    }
+
+    /// <summary>
+    /// 요구사항 8 — "대화 자체가 진행되면서 자연스럽게 갱신되는" metadata만 반영한다. target PC
+    /// 고유 값(cwd/project_id/사이드바 배치 등)은 절대 건드리지 않는다. 아무 필드도 바뀌지 않으면
+    /// <c>null</c>을 돌려줘 불필요한 UPDATE를 만들지 않는다.
+    /// </summary>
+    private static PlannedThreadMetadataUpdate? ComputeMetadataUpdate(
+        string threadId, BackupConversationMetadata? incoming, CodexCatalog freshLocalCatalog)
+    {
+        if (incoming is null)
+        {
+            return null;
+        }
+
+        ThreadRow? localRow = freshLocalCatalog.AllConversations
+            .FirstOrDefault(e => string.Equals(e.ThreadId, threadId, StringComparison.OrdinalIgnoreCase))?.Row;
+        if (localRow is null)
+        {
+            return null;
+        }
+
+        long? updatedAtSeconds = incoming.UpdatedAtSeconds is { } incomingUpdatedAt &&
+            (localRow.UpdatedAtSeconds is not { } localUpdatedAt || incomingUpdatedAt > localUpdatedAt)
+            ? incoming.UpdatedAtSeconds
+            : null;
+        long? updatedAtMs = updatedAtSeconds is not null ? incoming.UpdatedAtMs : null;
+
+        long? tokensUsed = incoming.TokensUsed is { } incomingTokens &&
+            (localRow.TokensUsed is not { } localTokens || incomingTokens > localTokens)
+            ? incoming.TokensUsed
+            : null;
+
+        bool? hasUserEvent = incoming.HasUserEvent == true && localRow.HasUserEvent != true ? true : null;
+
+        string? nameIfMissing = string.IsNullOrWhiteSpace(localRow.Name) && !string.IsNullOrWhiteSpace(incoming.Name) ? incoming.Name : null;
+        string? modelIfMissing = string.IsNullOrWhiteSpace(localRow.Model) && !string.IsNullOrWhiteSpace(incoming.Model) ? incoming.Model : null;
+        string? cliVersionIfMissing = string.IsNullOrWhiteSpace(localRow.CliVersion) && !string.IsNullOrWhiteSpace(incoming.CliVersion) ? incoming.CliVersion : null;
+
+        if (updatedAtSeconds is null && tokensUsed is null && hasUserEvent is null &&
+            nameIfMissing is null && modelIfMissing is null && cliVersionIfMissing is null)
+        {
+            return null;
+        }
+
+        return new PlannedThreadMetadataUpdate(
+            threadId, updatedAtSeconds, updatedAtMs, tokensUsed, hasUserEvent,
+            nameIfMissing, modelIfMissing, cliVersionIfMissing);
     }
 
     private static string ResolveTargetDirectory(string codexHomePath, bool archived, DateTimeOffset? timestamp)

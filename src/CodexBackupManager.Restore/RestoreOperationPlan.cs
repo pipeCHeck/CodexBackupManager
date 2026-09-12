@@ -10,8 +10,13 @@ namespace CodexBackupManager.Restore;
 /// <param name="OwningThreadId">이 파일이 속한 thread(파일명에서 파싱한 자신의 thread id).</param>
 /// <param name="SourceEntryPath">backup ZIP 안의 경로(<c>payload/rollouts/…</c>).</param>
 /// <param name="TargetAbsolutePath">로컬에 새로 만들 절대경로.</param>
-/// <param name="ExpectedLength">entry의 바이트 길이(복사 직후 검증용).</param>
-/// <param name="ExpectedSha256Hex">entry의 SHA-256(복사 직후 검증용).</param>
+/// <param name="ExpectedLength">
+/// backup entry의 <b>물리(physical) 원본</b> 바이트 길이(복사 직후 검증용) — <c>.jsonl.zst</c>면
+/// 압축된 그대로의 길이다. <see cref="RolloutRestoreService.CreateNewFile"/>이 entry 바이트를 그대로
+/// 복사하므로 반드시 물리 길이/해시와 비교해야 한다(Phase 07_01에서 바로잡음 — 예전에는 IncomingAhead의
+/// 새 segment에서 논리(decompressed) 길이/해시를 넣어 정상 <c>.zst</c> 파일도 검증에 실패했다).
+/// </param>
+/// <param name="ExpectedSha256Hex">entry의 물리 원본 바이트 SHA-256(복사 직후 검증용).</param>
 public sealed record PlannedNewRolloutFile(
     string OwningThreadId,
     string SourceEntryPath,
@@ -66,6 +71,30 @@ public sealed record PlannedThreadInsert(
 public sealed record PlannedThreadRolloutPathUpdate(string ThreadId, string NewRolloutPathAbsolute);
 
 /// <summary>
+/// IncomingAhead가 기존 thread에 반영해도 안전한, "대화 자체가 진행되면서 자연스럽게 갱신되는"
+/// metadata만 담는다(Phase 07_01 요구사항 8). target PC 고유 값(<c>cwd</c>/<c>project_id</c>/사이드바
+/// 배치 등)은 여기 포함하지 않는다 — <see cref="StateDatabaseWriter.UpdateMetadata"/>가 이 필드들만
+/// 정확히 그 컬럼에 쓴다.
+/// </summary>
+/// <param name="ThreadId">대상 thread.</param>
+/// <param name="UpdatedAtSeconds">backup 쪽 <c>updated_at</c>(항상 반영 — 대화가 진행된 실제 시각).</param>
+/// <param name="UpdatedAtMs">backup 쪽 <c>updated_at_ms</c>(있으면).</param>
+/// <param name="TokensUsed">local과 backup 중 더 큰 값(단조 증가 지표이므로 절대 줄이지 않는다).</param>
+/// <param name="HasUserEvent">local 또는 backup 중 하나라도 true면 true(한 번 true면 되돌리지 않는다).</param>
+/// <param name="NameIfLocalMissing">local의 <c>name</c>이 비어 있을 때만 채워 넣을 값(있으면 절대 덮어쓰지 않는다).</param>
+/// <param name="ModelIfLocalMissing">local의 <c>model</c>이 비어 있을 때만 채워 넣을 값.</param>
+/// <param name="CliVersionIfLocalMissing">local의 <c>cli_version</c>이 비어 있을 때만 채워 넣을 값.</param>
+public sealed record PlannedThreadMetadataUpdate(
+    string ThreadId,
+    long? UpdatedAtSeconds,
+    long? UpdatedAtMs,
+    long? TokensUsed,
+    bool? HasUserEvent,
+    string? NameIfLocalMissing,
+    string? ModelIfLocalMissing,
+    string? CliVersionIfLocalMissing);
+
+/// <summary>
 /// frozen <c>ImportPlan</c> + fresh 로컬 상태로부터 계산한, 실제로 실행할 구체적 file/DB 연산
 /// 목록(요구사항 8). <see cref="RestoreOperationPlanner"/>만 이 값을 만든다 — relation/PlannedAction을
 /// 다시 판단하지 않는다.
@@ -74,16 +103,19 @@ public sealed record PlannedThreadRolloutPathUpdate(string ThreadId, string NewR
 /// <param name="RolloutAppends">기존 파일에 이어붙일 연산(plain jsonl만).</param>
 /// <param name="ThreadInserts">새 <c>threads</c> 행.</param>
 /// <param name="ThreadRolloutPathUpdates">기존 thread의 <c>rollout_path</c> 갱신.</param>
+/// <param name="ThreadMetadataUpdates">기존 thread의 안전한 metadata field 갱신(§8 정책).</param>
 public sealed record RestoreOperationPlan(
     IReadOnlyList<PlannedNewRolloutFile> NewRolloutFiles,
     IReadOnlyList<PlannedRolloutAppend> RolloutAppends,
     IReadOnlyList<PlannedThreadInsert> ThreadInserts,
-    IReadOnlyList<PlannedThreadRolloutPathUpdate> ThreadRolloutPathUpdates)
+    IReadOnlyList<PlannedThreadRolloutPathUpdate> ThreadRolloutPathUpdates,
+    IReadOnlyList<PlannedThreadMetadataUpdate> ThreadMetadataUpdates)
 {
     /// <summary>아무 write도 필요 없는(전부 NoOp/Skip인) 계획인지.</summary>
     public bool IsEmpty =>
         NewRolloutFiles.Count == 0 && RolloutAppends.Count == 0 &&
-        ThreadInserts.Count == 0 && ThreadRolloutPathUpdates.Count == 0;
+        ThreadInserts.Count == 0 && ThreadRolloutPathUpdates.Count == 0 &&
+        ThreadMetadataUpdates.Count == 0;
 }
 
 /// <summary>

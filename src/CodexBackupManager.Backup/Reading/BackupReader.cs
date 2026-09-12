@@ -30,6 +30,21 @@ public sealed class BackupReader : IDisposable
         return new BackupReader(archive);
     }
 
+    /// <summary>
+    /// 이미 열려 있는 스트림으로 연다(Phase 07_01 — 호출자가 identity를 먼저 확인한 뒤 같은 스트림을
+    /// 계속 재사용하고 싶을 때 쓴다 — 예: Restore 계층이 backup 파일을 한 번만 열어 hash를 확인하고,
+    /// 그 뒤의 계획 수립/실제 적용까지 같은 바이트를 계속 신뢰하기 위해). 스트림은 seek이 가능해야
+    /// 한다(ZIP 중앙 디렉터리를 읽어야 하므로).
+    /// </summary>
+    /// <param name="stream">이미 연 스트림.</param>
+    /// <param name="leaveOpen"><c>true</c>면 이 <see cref="BackupReader"/>를 Dispose해도 스트림은 닫지 않는다.</param>
+    public static BackupReader OpenFromStream(Stream stream, bool leaveOpen)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ZipArchive archive = new(stream, ZipArchiveMode.Read, leaveOpen);
+        return new BackupReader(archive);
+    }
+
     /// <summary>모든 entry 이름 목록(원본 순서).</summary>
     public IReadOnlyList<string> EntryNames => _archive.Entries.Select(e => e.FullName).ToList();
 

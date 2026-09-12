@@ -83,21 +83,34 @@ public static class CodexProcessGuard
         var result = new List<RunningProcessInfo>();
         foreach (System.Diagnostics.Process process in System.Diagnostics.Process.GetProcesses())
         {
+            // Dispose 전에 필요한 값(이름 + 실행 파일 경로)을 전부 안전하게 캡처해 둔다 — Dispose
+            // 이후 Process 속성에 접근하면 내부 핸들이 이미 해제돼 InvalidOperationException이
+            // 발생할 수 있다(Phase 07_01 코드 리뷰로 발견 — 예전 코드는 Dispose를 finally에서
+            // 부르고 그 다음 줄에서 process.ProcessName을 읽었다).
+            string processName;
             string? mainModulePath = null;
             try
             {
-                mainModulePath = process.MainModule?.FileName;
+                processName = process.ProcessName;
+                try
+                {
+                    mainModulePath = process.MainModule?.FileName;
+                }
+                catch
+                {
+                    // 접근 권한 문제 등 — 경로 없이 이름만으로 판정한다.
+                }
+
+                result.Add(new RunningProcessInfo(processName, mainModulePath));
             }
             catch
             {
-                // 접근 권한 문제 등 — 경로 없이 이름만으로 판정한다.
+                // 이름조차 읽을 수 없는 경우(프로세스가 그 사이 종료됨 등) — 이 프로세스는 목록에서 건너뛴다.
             }
             finally
             {
                 process.Dispose();
             }
-
-            result.Add(new RunningProcessInfo(process.ProcessName, mainModulePath));
         }
 
         return result;

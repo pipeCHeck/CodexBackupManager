@@ -150,4 +150,61 @@ public static class StateDatabaseWriter
             throw new InvalidOperationException($"rollout_path 갱신 대상 thread를 찾지 못했습니다(영향받은 행: {affected}).");
         }
     }
+
+    /// <summary>
+    /// IncomingAhead의 "안전한" metadata만 갱신한다(Phase 07_01 요구사항 8) —
+    /// <see cref="RestoreOperationPlanner"/>가 이미 target-PC 고유 값(cwd/project_id/사이드바 배치
+    /// 등)을 걸러내고 넘긴 필드만 여기서 SQL로 옮긴다. 값이 <c>null</c>인 필드는 컬럼 목록에서
+    /// 아예 빼서 건드리지 않는다(그 필드는 "이번에 갱신할 것 없음"이라는 뜻).
+    /// </summary>
+    public static void UpdateMetadata(SqliteConnection connection, SqliteTransaction transaction, PlannedThreadMetadataUpdate update)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(update);
+
+        var setClauses = new List<string>();
+        var parameters = new List<(string Name, object Value)>();
+
+        void Set(string column, object? value)
+        {
+            if (value is null)
+            {
+                return;
+            }
+
+            setClauses.Add($"{column} = ${column}");
+            parameters.Add(("$" + column, value));
+        }
+
+        Set("updated_at", update.UpdatedAtSeconds);
+        Set("updated_at_ms", update.UpdatedAtMs);
+        Set("tokens_used", update.TokensUsed);
+        Set("has_user_event", update.HasUserEvent is null ? null : (update.HasUserEvent.Value ? 1L : 0L));
+        Set("name", update.NameIfLocalMissing);
+        Set("model", update.ModelIfLocalMissing);
+        Set("cli_version", update.CliVersionIfLocalMissing);
+
+        if (setClauses.Count == 0)
+        {
+            // RestoreOperationPlanner는 최소 하나의 필드가 실제로 바뀔 때만 이 연산을 만들지만,
+            // 방어적으로 한 번 더 확인한다 — 빈 UPDATE 문을 만들지 않는다.
+            return;
+        }
+
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = $"UPDATE threads SET {string.Join(", ", setClauses)} WHERE id = $id";
+        foreach ((string name, object value) in parameters)
+        {
+            cmd.Parameters.AddWithValue(name, value);
+        }
+
+        cmd.Parameters.AddWithValue("$id", update.ThreadId);
+        int affected = cmd.ExecuteNonQuery();
+        if (affected != 1)
+        {
+            throw new InvalidOperationException($"metadata 갱신 대상 thread를 찾지 못했습니다(영향받은 행: {affected}).");
+        }
+    }
 }

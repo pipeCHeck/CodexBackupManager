@@ -4,20 +4,27 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 06_03` 커밋(`fcb6371`)까지 완료. Import Preview/`RevisionRelation`/
+마지막 갱신 기준: `Phase 7` 커밋(`a3de8e8`)까지 사용자가 커밋했고, 그 위에 **Phase 07_01(Restore
+Hardening / Apply UI / Real-Clone E2E)** 작업을 마쳤다(작업 트리에 변경 있음 — 아직 커밋 전, 새
+세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것). Import Preview/`RevisionRelation`/
 `ImportPlan`/Preflight contract는 Phase 6/06_01/06_02/06_03 전부를 기준으로 **FINAL FROZEN**이다
 (`docs/import-preview-phase6.md` 상단 배너 참고). Backup Format V1은 `Phase 05_01`(`be2f616`)을
 기준으로 **FROZEN**이다(`docs/codexbackup-format-v1.md` 상단 배너 참고). 그 위에 **Phase 7(Safe
-Restore / Fast-forward Apply Core)을 완료**했다 — 이 프로젝트에서 실제 Codex `.codex` write가
+Restore / Fast-forward Apply Core)**을 완료했다 — 이 프로젝트에서 실제 Codex `.codex` write가
 **처음** 등장하는 Phase다. 새 `CodexBackupManager.Restore`/`.Restore.Tests` 프로젝트를 신설해
 frozen `ImportPlan`을 실제로 적용한다: Codex 실행 여부 확인 → fresh preflight → 물리 안전성까지
 재확인하는 `RestoreOperationPlan` 생성 → Snapshot → 실제 write(rollout 파일 + `threads` SQLite
 INSERT/UPDATE) → post-apply validation, 그리고 이 중 어디서든 실패하면 Snapshot으로 자동 Rollback.
-이번 Phase가 실제로 지원하는 범위는 `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전이
-증명되는 fast-forward만, `LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단이다(고위험
-기능인 Diverged 자동 merge/backup 교체는 Phase 07_01로 미뤘다). 상세 스펙과 공식 `codex-rs` 소스
-조사 결과는 `docs/safe-restore-phase7.md` 참고. **Phase 7 작업은 아직 사용자가 커밋하지 않은
-상태**(작업 트리에 변경 있음) — 새 세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것.
+그 뒤 GitHub 코드 리뷰로 발견된 실제 안전성/정합성 문제를 **Phase 07_01**에서 전부 고쳤다(§2 표,
+`docs/safe-restore-phase7.md` §10) — ProcessGuard의 Dispose-순서 버그, Apply 내부 backup 재오픈
+TOCTOU, WAL/SHM Snapshot 누락, `.jsonl.zst` 새 segment 물리/논리 해시 혼동, IncomingAhead 메타데이터
+병합 정책 부재, New Import의 `thread_source` 누락 허용, 얕은 post-validation 등. 이번 Phase 07_01에서
+**Apply 버튼을 포함한 UI도 처음으로 연결**했고, 실제 `C:\Users\User\.codex`를 clone한 데이터로
+New Import 계열 시나리오를 검증했다(원본에는 세션 전체에서 단 한 번도 쓰지 않았다). 이번 Phase가
+실제로 지원하는 범위는 `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전이 증명되는 fast-forward만,
+`LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단이다(고위험 기능인 Diverged 자동
+merge/backup 교체는 여전히 미구현 — Phase 8 이후 후보). 상세 스펙과 공식 `codex-rs` 소스 조사 결과는
+`docs/safe-restore-phase7.md` 참고.
 
 ---
 
@@ -26,8 +33,9 @@ INSERT/UPDATE) → post-apply validation, 그리고 이 중 어디서든 실패�
 **Phase 1~5(Codex 탐색 → Read Model → Conversation Viewer → Selection → Export)까지 전부
 완료했고, 그 위에 Phase 05_01(Backup V1 Freeze), Phase 6(Import Preview), Phase 06_01(Revision
 Relation Hardening / Import Plan Finalization), Phase 06_02(Apply Preconditions Freeze / Stale
-Plan Protection), Phase 06_03(Preview Source Identity Pinning), 그리고 Phase 7(Safe Restore /
-Fast-forward Apply Core)까지 마쳤다.**
+Plan Protection), Phase 06_03(Preview Source Identity Pinning), Phase 7(Safe Restore /
+Fast-forward Apply Core), 그리고 Phase 07_01(Restore Hardening / Apply UI / Real-Clone E2E)까지
+마쳤다.**
 Phase 4는 04_01~04_07 사후 수정을 거쳐 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5는
 Restore Sufficiency Audit → Backup Format V1 확정 → `CodexBackupManager.Backup` 프로젝트
 (ExportPlanBuilder/BackupWriter/BackupReader/BackupValidator) → 최소 Export UI → 실제 `.codex`
@@ -62,10 +70,25 @@ Preview/`ImportPlan`/Preflight contract가 **최종 FROZEN**이다.
 실제 write → post-validation, 실패 시 자동 Rollback)를 중심으로 New Import(rollout 파일 복사 +
 `threads` INSERT)와 IncomingAhead의 안전한 fast-forward(같은 파일 끝에 완결된 줄 append 또는 새
 segment 파일 생성 — 물리 바이트 재확인 없이는 절대 하지 않는다)만 지원한다. Diverged/Unverifiable은
-여전히 Apply 전체 차단이고, Diverged 자동 merge 같은 고위험 기능은 이번 Phase에서 구현하지
-않았다(Phase 07_01로 미룸). 공식 `codex-rs` 소스 조사 결과와 상세 스펙은
-`docs/safe-restore-phase7.md` 참고 — 특히 `.codex-global-state.json`은 Electron Desktop 앱 전용
-상태로 밝혀져(코어 엔진에는 이 개념 자체가 없다) 이번 Phase에서 건드리지 않기로 했다.
+여전히 Apply 전체 차단이고, Diverged 자동 merge 같은 고위험 기능은 구현하지 않았다. 공식 `codex-rs`
+소스 조사 결과와 상세 스펙은 `docs/safe-restore-phase7.md` 참고 — 특히 `.codex-global-state.json`은
+Electron Desktop 앱 전용 상태로 밝혀져(코어 엔진에는 이 개념 자체가 없다) 건드리지 않기로 했다.
+
+**Phase 07_01(Restore Hardening / Apply UI / Real-Clone E2E)**은 Phase 7 커밋(`a3de8e8`)에 대한
+GitHub 코드 리뷰로 발견된 실제 안전성/정합성 문제를 고치고, 처음으로 Apply UI를 연결하고, 실제
+`.codex`를 clone한 데이터로 검증한 하드닝 Phase다 — Phase 7의 아키텍처 방향(계층 구조, Snapshot/
+Rollback 기반 설계)은 그대로 유지했다. 고친 것: `CodexProcessGuard`의 Dispose-후-속성-읽기 버그,
+Apply 안에서 backup 파일을 여러 번 다시 여는 TOCTOU(`PinnedBackupSource`로 한 번만 열어 재사용),
+SQLite Snapshot이 `-wal`/`-shm`을 놓치던 문제, `.jsonl.zst` 새 segment를 논리(압축 해제) 값으로
+검증해 항상 실패하던 버그(물리 값으로 교체), IncomingAhead 메타데이터 병합 정책 신설, New Import의
+`thread_source` 누락을 막는 안전장치, 얕았던 post-apply validation 강화, App이 예전 카탈로그를
+재사용하지 못하게 하는 fresh-catalog 소유권 재구성. `.codex-global-state.json`/Desktop 사이드바
+관련 서술은 "코스메틱 한계"라는 단정을 취소하고 "Core/CLI authority는 확정, Desktop 반영은
+미검증"으로 정정했다(`docs/safe-restore-phase7.md` §1.C/E/§10.6). Fault Injection 6개 지점 전부
+개별 테스트로 Rollback을 확인했고, 실제 `.codex`를 clone(New/archived/segmented-New 시나리오만,
+IncomingAhead는 여전히 합성 데이터로만 검증)해 실제 스키마 호환성을 검증했다 — 실제 원본에는 이
+세션 전체를 통틀어 단 한 번도 쓰지 않았다(`docs/safe-restore-phase7.md` §10.4/§10.7). 상세 내용은
+`docs/safe-restore-phase7.md` §10 전체 참고.
 
 ---
 
@@ -91,16 +114,18 @@ segment 파일 생성 — 물리 바이트 재확인 없이는 절대 하지 않
 | `1f29dc4` | Phase 06_01 | **Revision Relation Hardening / Import Plan Finalization.** 코드 리뷰/재검토로 발견된 Phase 6 안전성 경계 케이스 문제 수정: (1) `ConversationRevisionComparer`가 "같은 rollout id, 다른 slice 내용"을 **양쪽 다 마지막 slice일 때만** prefix 검사하던 것을 **각 쪽이 독립적으로 "여기서 끝나는지"** 보도록 수정 — `Local=[R1-short]`, `Incoming=[R1-long, R2]`처럼 한쪽만 끝나고 다른 쪽이 이어지는(뒤에 segment가 더 있어도) 정상적인 fast-forward를 예전엔 Diverged로 오판했다, (2) `ImportPreviewBuilder.DetermineRelation`이 로컬에 chain만 없으면 무조건 `New`로 판정하던 것을 — 로컬 catalog(`AllConversations`, dependency-only 포함)에 같은 ThreadId metadata가 있는데 chain만 없으면(rollout 삭제/손상) `Unverifiable`(Blocked)로 승격, 정말로 metadata도 chain도 전혀 없을 때만 `New`, (3) `ProjectPathMapping`에 `ManuallyLinked` 상태 + `WithManualOverride` 추가, `ImportPreviewBuilder.ApplyManualProjectPathOverride`로 NotFound/AutoLinked 프로젝트 모두 사용자가 폴더를 직접 재지정할 수 있게(미분류 "기타 대화"만 제외) — 실제 디렉터리 존재 확인 + `CanonicalPath` 정규화, 상태는 View code-behind가 아니라 `ImportPreview`/`ProjectPathMapping` 자체에 저장, (4) `ImportPlan`/`ImportPlanBuilder` 신설 — Preview를 Phase 7이 그대로 받아 적용할 수 있는 **freeze 경계**로 확정(`IsApplyReady`는 Blocked/RequiresDecision이 하나도 없어야 참). 실제 세그먼트 thread(21MB, 974줄, 3세그먼트)로 재검증하는 과정에서 "segment1 원본 파일이 공식 인정된 lineage cutoff(ordinal<967) 이후에도 별도로 계속 쓰인 바이트(줄 967~973)를 갖고 있을 수 있다"는 새 실측 사실을 발견 — 이 경우 그 cutoff 이후 내용까지 포함한 스냅샷은 fast-forward가 아니라 정당하게 Diverged로 판정돼야 하며, 실제로 그렇게 동작함을 확인했다. |
 | `0bfc7c8` | Phase 06_02 | **Apply Preconditions Freeze / Stale Plan Protection.** 코드 리뷰로 발견된 "Preview 이후 backup/로컬 상태가 바뀌어도 frozen `ImportPlan`이 이를 알아챌 방법이 없다"는 문제 수정: (1) `ImportBackupIdentity`에 `BackupFileLength`/`BackupFileSha256`(전체 `.codexbackup`의 streaming SHA-256, source of truth)/`BackupFormatVersion`을 추가 — `CreatedAtUtc`/`AppVersion`/`TotalConversationCount`는 참고용으로 격하, (2) `ImportPreviewBuilder`가 판정에 실제로 쓴 로컬/incoming `ConversationRevision`을 버리지 않고 `ImportConversationPreview.LocalRevision`/`IncomingRevision`으로 보존하도록 리팩터링, (3) `ImportConversationPrecondition`(`ExpectedPresence: MustNotExist`\|`MustExist`, `ExpectedLocalRevision`, `ExpectedIncomingRevision`) 신설 — `ImportPlanConversation`이 이걸 그대로 freeze해 갖고 있어 Phase 7이 relation을 다시 판정하지 않고도 "로컬이 그때와 같은지"만 비교할 수 있게 함, (4) `ImportPlanPreflightValidator`(read-only) 신설 — backup identity → Blocked → UnresolvedDivergence → 대화별 precondition(로컬 MustNotExist/MustExist 재확인, incoming revision 방어적 재확인) → target path(존재 확인 + canonical 재검증) 순으로 확인해 `Ready`/`BackupChanged`/`LocalStateChanged`/`TargetPathUnavailable`/`Blocked`/`UnresolvedDivergence` 중 하나를 돌려준다. RevisionRelation 판정 semantics 자체는 바꾸지 않았다. 실측으로 실제 프로젝트 하나의 `AutoLinked` 경로가 지금 이 PC에는 존재하지 않는다는 사실을 이 preflight가 최초로 발견했다(§4 참고, 버그 아님). |
 | `fcb6371` | Phase 06_03 | **Preview Source Identity Pinning.** 코드 리뷰로 발견된 "Preview가 실제로 읽은 backup 파일과, `ImportPlanBuilder`가 나중에 identity를 freeze할 때 다시 읽는 backup 파일이 서로 다른 파일일 수 있다"는 TOCTOU 문제 수정: (1) `ImportPreview`에 `SourceBackupIdentity`(`ImportBackupIdentity` 재사용) 필드 추가 — `ImportPreviewBuilder.Build(string, ...)`가 분석을 마친 직후 같은 경로를 다시 streaming hash해서 고정한다, (2) `ImportPlanBuilder.Build`가 더 이상 현재 파일을 새 identity로 "채택"하지 않는다 — `preview.SourceBackupIdentity`가 있어야 하고, 지금 그 경로를 다시 hash해서 길이+SHA-256이 정확히 같을 때만 Plan을 만들며, 다르면(1바이트 변조/다른 valid backup으로 교체/내용은 같은데 metadata만 달라 hash가 다른 경우 전부) Plan 생성 자체를 거부(`null`)한다 — CreatedAt/AppVersion/개수가 우연히 같아도 소용없다, (3) `BackupIdentityHasher`(공용 hashing/비교 로직, Backup.Import) 신설로 Preview 쪽 pin과 Plan 쪽 재확인이 같은 정의를 공유, (4) 수동 프로젝트 경로 재지정(`ApplyManualProjectPathOverride`)은 `preview with { Projects = ... }`로 다른 필드를 건드리지 않으므로 `SourceBackupIdentity`는 자동으로 보존됨을 테스트로 확인, (5) `MainViewModel`에 `_currentImportPlan` 필드 신설 — Preview 성공/경로 재지정 시 딱 한 곳(`UpdateImportPlanSummary`)에서만 `ImportPlanBuilder.Build`를 부르고 그 결과를 보존, Phase 7이 이 인스턴스를 그대로 받아 fresh preflight만 돌리면 됨, (6) `ImportPlanSummaryText` 문구를 "Apply 준비 완료"에서 "가져오기 계획 생성 완료 — 충돌 없음(적용 전 최종 검사가 필요합니다)"로 정정 — `IsApplyReady`는 Diverged/Unverifiable이 없다는 뜻일 뿐 실제 "지금 적용 가능"을 의미하지 않는다는 오해를 없앤다. |
-| (미커밋) | Phase 7 | **Safe Restore / Fast-forward Apply Core.** 이 프로젝트 최초로 실제 `.codex` write가 등장하는 Phase — 그래서 "기능을 많이 넣는 것"보다 "중간 실패가 나도 100% 원상복구"를 최우선으로 삼았다. 새 `CodexBackupManager.Restore`/`.Restore.Tests` 프로젝트 신설. 공식 `codex-rs` 소스 조사(`docs/safe-restore-phase7.md`)로 확정한 사실: (a) `threads` 테이블의 기본값 없는 NOT NULL 컬럼 9개(`rollout_path`/`created_at`/`updated_at`/`source`/`model_provider`/`cwd`/`title`/`sandbox_policy`/`approval_mode`) 실측 스키마와 공식 소스가 정확히 일치, (b) Codex 자신의 rollout writer도 이어지는 세션은 기존 파일에 그대로 append하지만 "다른 thread가 history_base 조상으로 참조 중인 파일"은 불변으로 취급함 — 그래서 append 전 이 조건을 직접 재확인하는 안전장치를 추가, (c) **`.codex-global-state.json`은 Electron Desktop 앱 전용 상태이고 `codex-rs` 코어 엔진에는 이 개념(`threadAssignmentsMigrated` 포함)이 아예 없다** — 애초 가정과 달리 프로젝트 배정 authority는 항상 `threads.project_id`뿐이므로 이번 Phase는 global-state를 전혀 건드리지 않는다(코스메틱 한계로 문서화). 계층: `CodexProcessGuard`(실행 중 프로세스 이름/경로 기반 판정) → `SchemaCompatibilityChecker`(버전 숫자가 아니라 `PRAGMA table_info` 구조 비교) → `RestoreOperationPlanner`(frozen `ImportPlan` + fresh 카탈로그 → 구체적 file/DB 연산 목록, 물리적으로 안전하지 않으면 계획 생성 자체를 거부 — 부분 성공 없음) → `SnapshotService`(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`에 temp→검증→publish) → `RestoreExecutor`(mutation 실행 + fault injection 지점 6곳) → `RestoreValidator`(post-apply 재검증) → `RollbackService`(snapshot 기준 byte-level 복구 + 재검증). 지원 범위는 `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전 증명된 fast-forward만(같은 rollout id의 물리 파일 tail이 정확히 일치할 때만 plain `.jsonl`에 append, `.jsonl.zst`에는 압축 append를 절대 시도하지 않음, 새 segment 파일 생성은 안전), `LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단(고위험 자동 merge는 Phase 07_01로 미룸). 실제 New Import/IncomingAhead append/새 segment 생성/두 PC 왕복(New→Update→Identical)/Codex 실행 중 차단/backup 변경 차단/history_base 조상 보호/압축 파일 차단/fault injection 4곳(첫 rollout 생성 후·SQLite 커밋 직전·직후·취소) 전부 실제 temp Codex Home에 파일+SQLite write를 수행해 검증했다. |
+| `a3de8e8` | Phase 7 | **Safe Restore / Fast-forward Apply Core.** 이 프로젝트 최초로 실제 `.codex` write가 등장하는 Phase — 그래서 "기능을 많이 넣는 것"보다 "중간 실패가 나도 100% 원상복구"를 최우선으로 삼았다. 새 `CodexBackupManager.Restore`/`.Restore.Tests` 프로젝트 신설. 공식 `codex-rs` 소스 조사(`docs/safe-restore-phase7.md`)로 확정한 사실: (a) `threads` 테이블의 기본값 없는 NOT NULL 컬럼 9개(`rollout_path`/`created_at`/`updated_at`/`source`/`model_provider`/`cwd`/`title`/`sandbox_policy`/`approval_mode`) 실측 스키마와 공식 소스가 정확히 일치, (b) Codex 자신의 rollout writer도 이어지는 세션은 기존 파일에 그대로 append하지만 "다른 thread가 history_base 조상으로 참조 중인 파일"은 불변으로 취급함 — 그래서 append 전 이 조건을 직접 재확인하는 안전장치를 추가, (c) `.codex-global-state.json`/`threadAssignmentsMigrated`는 `codex-rs` 코어 엔진에는 존재하지 않는다 — project/thread 배정의 Core/CLI authority는 `threads.project_id`뿐이다(Desktop 사이드바가 이 값을 실제로 반영하는지는 Phase 07_01에서 "미검증"으로 재정정, 아래 참고). 계층: `CodexProcessGuard`(실행 중 프로세스 이름/경로 기반 판정) → `SchemaCompatibilityChecker`(버전 숫자가 아니라 `PRAGMA table_info` 구조 비교) → `RestoreOperationPlanner`(frozen `ImportPlan` + fresh 카탈로그 → 구체적 file/DB 연산 목록, 물리적으로 안전하지 않으면 계획 생성 자체를 거부 — 부분 성공 없음) → `SnapshotService`(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`에 temp→검증→publish) → `RestoreExecutor`(mutation 실행 + fault injection 지점 6곳) → `RestoreValidator`(post-apply 재검증) → `RollbackService`(snapshot 기준 byte-level 복구 + 재검증). 지원 범위는 `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전 증명된 fast-forward만(같은 rollout id의 물리 파일 tail이 정확히 일치할 때만 plain `.jsonl`에 append, `.jsonl.zst`에는 압축 append를 절대 시도하지 않음, 새 segment 파일 생성은 안전), `LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단. 실제 New Import/IncomingAhead append/새 segment 생성/두 PC 왕복(New→Update→Identical)/Codex 실행 중 차단/backup 변경 차단/history_base 조상 보호/압축 파일 차단/fault injection 4곳(첫 rollout 생성 후·SQLite 커밋 직전·직후·취소) 전부 실제 temp Codex Home에 파일+SQLite write를 수행해 검증했다. GitHub 코드 리뷰에서 실제 안전성 문제가 발견돼 Phase 07_01에서 하드닝했다(아래 참고). |
+| (미커밋) | Phase 07_01 | **Restore Hardening / Apply UI / Real-Clone E2E.** Phase 7 코드 리뷰로 발견된 문제 수정(상세: `docs/safe-restore-phase7.md` §10, 요약: `CodexProcessGuard`의 Dispose-후-속성-읽기 버그, Apply 내부 backup 재오픈 TOCTOU→`PinnedBackupSource`로 한 번만 열어 재사용, SQLite Snapshot의 `-wal`/`-shm` 누락→항상 등록, `.jsonl.zst` 새 segment 논리/물리 해시 혼동→물리 값으로 교체, IncomingAhead 메타데이터 병합 정책(`PlannedThreadMetadataUpdate`) 신설, New Import `thread_source` 누락 차단, post-validation 강화(`threads` 행/rollout_path/archived/메타데이터/project_id 실제 일치까지 확인), fresh-catalog를 `RestoreExecutor` 자신이 만들도록 재구성, Codex 실행 여부 2차 재확인, 취소(`Cancelled`)와 실제 오류(`RolledBack`)의 결과 메시지 분리). Fault Injection 6개 지점 전부 개별 테스트로 Rollback 확인. `MainViewModel`에 `ApplyCommand`/확인 dialog/진행 상태 문구/`KnownLimitationsText`를 연결해 **처음으로 Apply UI**를 완성했다(`MainViewModelApplyTests.cs` 신규). 세션 스크래치패드 하네스로 실제 `.codex`를 clone해 New/archived/segmented-New Import를 검증했다(IncomingAhead는 여전히 합성 데이터로만 검증) — 실제 원본 `.codex`에는 세션 전체에서 단 한 번도 쓰지 않았음을 `Get-FileHash`로 재확인. `.codex-global-state.json`/Desktop 사이드바 반영 여부에 대한 이전 "코스메틱 한계" 결론을 취소하고 "Core/CLI 확정, Desktop 미검증"으로 정정했다. |
 
 **Phase 4는 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5(Export)는 커밋된 뒤 Phase 05_01
 hardening까지 마쳤다 — `docs/codexbackup-format-v1.md`가 이제 FROZEN 상태다. Phase 6(Import
 Preview), Phase 06_01(Revision Relation Hardening), Phase 06_02(Apply Preconditions Freeze /
 Stale Plan Protection), Phase 06_03(Preview Source Identity Pinning)까지 커밋됐다 —
 `docs/import-preview-phase6.md`가 FROZEN 상태다.** 그 위에 **Phase 7(Safe Restore / Fast-forward
-Apply Core)까지 마쳤다** — 실제 write 경로가 처음 생겼으므로 다음 세션은 반드시
-`docs/safe-restore-phase7.md`를 먼저 읽고, Phase 07_01(hardening/실제 검증)로 넘어가기 전에
-이번 Phase가 남긴 제약(§4)을 확인할 것.
+Apply Core, 커밋 `a3de8e8`)과 Phase 07_01(Restore Hardening / Apply UI / Real-Clone E2E)까지
+마쳤다** — 실제 write 경로와 Apply UI가 모두 생겼으므로 다음 세션은 반드시
+`docs/safe-restore-phase7.md`(§10이 Phase 07_01 addendum)를 먼저 읽고, Phase 8(Release)로
+넘어가기 전에 남은 제약(§4, `docs/safe-restore-phase7.md` §10.6)을 확인할 것.
 
 ---
 
@@ -398,10 +423,24 @@ Apply Core)까지 마쳤다** — 실제 write 경로가 처음 생겼으므로 
 14. **(Phase 06_01)** `Diverged` 상태의 사용자 결정 메커니즘(로컬 유지/backup으로 교체/복사본으로 가져오기)은 아직 없다 — `ImportPlan.HasUnresolvedDivergence`가 있으면 `IsApplyReady`가 항상 거짓이 되어 Phase 7이 적용을 거부해야 한다는 정책만 확정했다. 실제 선택지 구현은 Phase 7.
 15. **(Phase 06_02, 실측 발견)** 실제 `.codex` 데이터로 `ImportPlanPreflightValidator`를 돌려 보니, "아무것도 안 바뀐" 자기 자신 재비교인데도 `Ready`가 아니라 `TargetPathUnavailable`이 나왔다 — 원인은 버그가 아니라, 실제 17개 프로젝트 중 하나(`AutoLinked`로 자동 연결된 프로젝트)가 `.codex-global-state.json`에 기록된 경로 자체가 지금 이 PC에는 존재하지 않는 폴더이기 때문이었다(진단 로그로 프로젝트 표시 이름만 출력해 확인, 실제 경로는 출력하지 않음). `ProjectPathMapper.Resolve`는 canonical path 문자열 비교만 하고 `Directory.Exists`는 확인하지 않으므로, Phase 6/06_01의 Preview는 이 상태를 몰랐고 **이번 Phase의 `ImportPlanPreflightValidator`가 이 사실을 실제로 최초로 잡아낸 것** — 이미 존재하던 실제 환경 조건이지 이번 Phase가 만든 회귀가 아니다. Phase 7은 이런 프로젝트를 만나면 해당 대화들의 `TargetProjectPath`를 재지정(폴더 다시 선택)하도록 사용자에게 요구해야 한다. **(Phase 06_03에서 재확인)** 같은 실제 프로젝트("test")가 여전히 같은 이유로 `TargetPathUnavailable`을 낸다 — Phase 06_03은 이 계층을 건드리지 않았으므로 회귀가 아니라 그대로다.
 16. **(Phase 06_03)** `ImportPreviewBuilder.Build(BackupReader, ...)` 오버로드(경로를 모른 채 이미 연 reader로 직접 Preview를 만드는 경로)로 만든 `ImportPreview`는 `SourceBackupIdentity`가 항상 `null`이다 — 이 Preview로는 `ImportPlanBuilder.Build`가 항상 `null`을 돌려준다(Plan을 만들 수 없음). 현재 실제 코드 경로(`MainViewModel`/모든 테스트)는 전부 경로 기반 `Build(string, ...)` 오버로드만 쓰므로 문제가 되지 않지만, 향후 이 reader 오버로드를 외부에 새로 노출할 일이 있으면 이 제약을 기억할 것.
-17. **(Phase 7)** `.codex-global-state.json`은 건드리지 않기로 확정했다 — 공식 `codex-rs` 소스에 이 파일/`threadAssignmentsMigrated` 개념 자체가 없고(Electron Desktop 앱 전용 상태로 추정), 코어 엔진은 `threads.project_id`만 authoritative로 본다(`docs/safe-restore-phase7.md` §1.C/E). 그 결과 Import된 대화가 SQL 기준(실제 `codex` CLI 목록/resume/필터링)으로는 정확히 프로젝트에 배정돼도, **Codex Desktop 앱 자신의 사이드바 UI**에는 global-state가 아직 동기화되지 않아 "기타 대화"로 보일 수 있다 — 기능 결함이 아니라 Electron 쪽 상태의 코스메틱 한계다.
-18. **(Phase 7)** 로컬에 아직 등록되지 않은 프로젝트(예: 사용자가 수동으로 고른, Codex가 모르는 새 폴더)로는 New Import 시 프로젝트 배정을 하지 않는다 — "기타 대화"로 들어간다. `projects`/`project_roots` 테이블에 새 프로젝트를 만드는 것은 이번 Phase 범위 밖이다(Phase 07_01 후보).
+17. **(Phase 7, Phase 07_01에서 정정)** `.codex-global-state.json`은 건드리지 않기로 확정했다 —
+    공식 `codex-rs` 소스에 이 파일/`threadAssignmentsMigrated` 개념 자체가 없고, 코어 엔진은
+    `threads.project_id`만 authoritative로 본다(`docs/safe-restore-phase7.md` §1.C/E). **다만
+    "Codex Desktop 앱 사이드바에는 코스메틱 한계로 반영이 안 될 수 있다"는 이전 결론은 Phase 07_01에서
+    취소했다** — Electron Desktop 소스를 조사하지 못했으므로 Desktop이 `threads.project_id`를 실제로
+    반영하는지는 **미검증**이며, Import된 대화가 Desktop 사이드바에서 올바른 프로젝트로 보이는지는
+    별도 통합 검증이 필요한 알려진 Release 한계다(`docs/safe-restore-phase7.md` §10.6).
+18. **(Phase 7, Phase 07_01에서도 미구현)** 로컬에 아직 등록되지 않은 프로젝트(예: 사용자가 수동으로
+    고른, Codex가 모르는 새 폴더)로는 New Import 시 프로젝트 배정을 하지 않는다 — "기타 대화"로
+    들어간다. `projects`/`project_roots` 테이블에 새 프로젝트를 만드는 것은 Phase 07_01에서도 범위
+    밖이었다(Phase 8 이후 후보).
 19. **(Phase 7)** attachment(`local_image` 등) 실제 파일 복원은 지원하지 않는다(Unsupported) — rollout JSONL 내부의 attachment 경로를 그대로 두고 파일 자체는 옮기지 않는다. 공식 소스 조사 결과 이미 기록된 rollout 안의 이미지 콘텐츠는 재개 시 다시 읽지 않는(이미 base64로 내재화돼 있는) 것으로 확인됐으므로, 대화 자체의 정상 재개/이어쓰기에는 영향이 없다 — "히스토리 편집" 같은 드문 조작에서만 원본 파일을 못 찾을 수 있다.
-20. **(Phase 7)** 실제 사용자 `.codex`를 그대로 clone해 Restore E2E를 돌리는 것은 이번 Phase에서 하지 않았다(용량/시간 제약, 그리고 "실제 `.codex`에는 자동 Restore 테스트를 절대 하지 말라"는 지시를 안전하게 지키기 위해 아예 손대지 않는 쪽을 택했다) — 전부 합성 temp Codex Home(`TestCodexHomeBuilder`, 실제 실측 스키마 그대로 반영)으로 검증했다. Phase 07_01에서 필요하면 상태 DB만 최소로 clone한 반쪽짜리 실제 데이터 검증을 추가로 고려할 것.
+20. **(Phase 7 → Phase 07_01에서 부분 해소)** 실제 사용자 `.codex`를 그대로 clone해 Restore E2E를
+    돌리는 것은 Phase 7에서는 하지 않았다. **Phase 07_01에서 실제로 수행했다** — 상태 DB
+    등 4개 파일만 clone하고(`sessions`/`archived_sessions`는 비운 채) production `RestoreExecutor.Apply`로
+    New/archived/segmented-New Import 3건을 검증했다(357→360 thread, 기존 행 무변경, 원본 4개
+    파일 SHA-256 불변). **IncomingAhead(fast-forward) 계열은 실제 rollout 파일 내용이 필요해 이번에도
+    clone으로 재현하지 않았다** — 여전히 합성 fixture로만 검증했다는 뜻이다(`docs/safe-restore-phase7.md` §10.4/§10.6).
 
 ---
 
@@ -425,11 +464,12 @@ Apply Core)까지 마쳤다** — 실제 write 경로가 처음 생겼으므로 
 | `CodexBackupManager.Backup.Tests` (Phase 5 신규, Phase 05_01/6/06_01/06_02/06_03 확장) | `ExportPlanBuilder`(dependency closure/dedupe/attachment/project 필터링 + **선택 대화 chain/metadata/ancestor/순환 누락 시 FatalErrors**), `BackupWriter`/`BackupReader`/`BackupValidator`(정상 export, 대상 파일 존재 시 시작 전 실패, 취소 시 temp 삭제 — 즉시 취소 + **300MB급 mid-copy 취소** 둘 다, Export 도중 원본 변경 감지 — 실제 파일 레이스로 재현, 100MB 스트리밍 bounded-memory, 변조 탐지, manifest 누락/버전 불일치/중복 entry/path traversal/참조 누락 검증 실패, **Windows 대소문자 충돌/checksums.json 자체 중복·불안전 경로(예외 없이 Fail)/manifest 개수 필드 불일치/project 참조 무결성/manifest.json 자체 변조 탐지**), `ImportPreviewBuilder`(실제 Export 파이프라인으로 만든 진짜 `.codexbackup`으로 New/Identical/IncomingAhead/LocalAhead/Diverged/Unverifiable 전부 재현, 여러 대화 혼합, dependency-only 분리, malformed backup → Preview 생성 금지, **Import Preview 동안 로컬 파일 수정 0건 확인**, 어떤 project에도 속하지 않은 선택 대화가 사라지지 않는지, **(Phase 06_01)** 로컬 metadata는 있는데 chain만 없으면 New가 아니라 Unverifiable, 반대로 metadata도 chain도 없어야만 진짜 New, dependency-only도 같은 원칙), `ProjectPathMapperTests`/`MetadataDifferenceAnalyzerTests`(canonical path 일치/불일치, metadata 필드별 차이), **`ImportPlanBuilderTests`**(Phase 06_01, 실패 Preview→null, New만 있으면 ApplyReady+BackupIdentity 일치, Diverged 있으면 HasUnresolvedDivergence, Unverifiable 있으면 HasBlockingIssues, TargetProjectPath가 project 소속 대화에만 채워지고 dependency-only는 null), **`TwoPcRoundTripTests`**(Phase 06_01 요구사항 5, temp fixture로 5단계 PC A↔B 왕복 시나리오 전체 재현 — IncomingAhead→Identical→LocalAhead→Diverged), 수동 경로 재지정 5건(NotFound/AutoLinked 재지정→ManuallyLinked, "기타 대화" 거부, 존재하지 않는 폴더/projectId 거부), **`ImportPlanPreflightValidatorTests`**(Phase 06_02, 14건 — backup 불변→Ready, backup 1바이트 변조/다른 valid backup으로 교체/CreatedAt·AppVersion·개수는 우연히 같지만 hash만 다름 3가지 모두 BackupChanged, New 이후 로컬에 같은 ThreadId 생김/IncomingAhead 이후 로컬이 이어써짐/다른 branch로 바뀜 3가지 모두 LocalStateChanged, IncomingAhead 미리보기 그대로면 Ready, 대상 프로젝트 폴더 삭제→TargetPathUnavailable, projectless 대화는 경로 확인 없이 정상, Diverged/Unverifiable 있으면 Ready 아님, preflight 검증 중 backup/로컬 파일 수정 0건, 24MB급 대형 rollout도 whole-file streaming hash로 정상 Ready 판정), **`PreviewSourceIdentityPinningTests`**(Phase 06_03, 8건 — Preview와 같은 backup으로 Plan 생성 성공, backup 1바이트 변조/다른 valid backup으로 교체/rollout 내용은 같은데 manifest metadata만 다름/CreatedAt·AppVersion·개수까지 같아도 hash만 다름 4가지 모두 Plan 생성 실패(`null`), 수동 경로 재지정 후 backup이 그대로면 성공(identity도 그대로 보존), 수동 경로 재지정 동안 backup이 바뀌면 실패, Plan 생성 후 backup이 바뀌는 경우는 기존 Preflight가 BackupChanged로 잡아냄을 재확인) | 전부 합성 임시 파일, 실제 사용자 데이터 없음 |
 | `CodexBackupManager.Codex.Tests` (Phase 6/06_01 확장) | 기존 항목 전부 + `ConversationRevisionComparerTests`(Identical/IncomingAhead/LocalAhead/Diverged 전 조합, 세그먼트 추가, parent cutoff 경계(ordinal/byte 둘 다 off-by-one까지), `.jsonl` vs `.jsonl.zst` 동일 내용, 같은 ThreadId·다른 lineage → Diverged, `ConversationRevisionBuilder`의 Unverifiable 판정 — 체인 없음/순환/조상 누락, **(Phase 06_01)** 한쪽만 끝나고 다른 쪽은 segment가 더 있어도 진짜 prefix면 IncomingAhead/LocalAhead(양방향), 진짜 prefix가 아니면 segment가 있어도 Diverged, 3개 이상 segment, `.jsonl.zst` 논리 바이트로도 동일 원칙 확인, 조상이 있는 체인에서도 leaf 자신의 segment transition이 같은 원칙으로 동작) | `ConversationTranscriptBuilder`/`ThreadDependencyResolver` 리팩터링(`ResolveFileSlices` 공유) 후에도 기존 178건 전부 회귀 없이 통과 확인 |
 | `CodexBackupManager.App.Tests` (Phase 06_03 확장) | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh, `CompactSummaryText`, `MainViewModelExportTests`(Phase 5, 실제 fixture Codex Home으로 전체 Export 파이프라인 end-to-end 검증), `MainViewModelImportPreviewTests`(Phase 6, 실제 fixture Codex Home 2개로 Export→Import Preview 왕복 — 전부 Identical 확인, malformed backup 처리, **(Phase 06_01)** 실제 fixture의 진짜 프로젝트(Alpha)를 폴더 선택으로 수동 재지정 → ManuallyLinked, **(Phase 06_03)** Preview 성공 시 `MainViewModel.CurrentImportPlan`(내부 접근자)이 frozen `ImportPlan`을 보존하고 문구가 "Apply 준비 완료"가 아닌 중립적 표현인지, 경로 재지정 후에도 `Plan.Backup`의 backup identity(SHA-256/길이)가 그대로 유지되는지, **(Phase 7)** 새 Preview를 시작하는 순간 기존 frozen Plan/문구가 즉시 무효화되는지), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다), **`DarkScrollBarOrientationTests`**(`App.xaml` 원본 마크업에서 ScrollBar 스타일+의존 리소스만 오려내 독립 `ResourceDictionary`로 파싱, STA 스레드에서 실제 `Track.Orientation`/커맨드 검증 — `Application` 인스턴스 없이 진행) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection`/`MainViewModel.CurrentImportPlan` 접근 |
-| **`CodexBackupManager.Restore.Tests`(Phase 7 신규)** | `RestoreExecutorTests`(15건) — New Import 실제 파일+SQLite 행 생성 확인, Identical→write 0, Codex 실행 중→write 0, backup 변경→write 0, Diverged→write 0, IncomingAhead plain jsonl 안전 append, IncomingAhead 새 segment 생성(+`rollout_path` 갱신), 압축(.jsonl.zst) update는 Blocked, 물리 파일에 논리 cutoff 이후 여분 바이트가 있으면 전체 거부, 다른 대화의 history_base 조상으로 참조되는 파일에는 append 안 함, fault injection 4곳(첫 rollout 생성 후/SQLite 커밋 직전·직후/취소)마다 Rollback 후 원래 hash와 동일, Two-PC 왕복(New→Update→Identical, ThreadId 유지) | 전부 `TestCodexHomeBuilder`(실측 threads 스키마 그대로 반영)로 만든 합성 temp Codex Home, 실제 사용자 `.codex`는 이 프로젝트의 어떤 테스트에서도 열지 않는다 |
+| **`CodexBackupManager.Restore.Tests`(Phase 7 신규, Phase 07_01 확장 — 15건→30건)** | `RestoreExecutorTests`(30건) — New Import 실제 파일+SQLite 행 생성 확인, Identical→write 0, Codex 실행 중→write 0, backup 변경→write 0, Diverged→write 0, IncomingAhead plain jsonl 안전 append, IncomingAhead 새 segment 생성(+`rollout_path` 갱신), 압축(.jsonl.zst) update는 Blocked, 물리 파일에 논리 cutoff 이후 여분 바이트가 있으면 전체 거부, 다른 대화의 history_base 조상으로 참조되는 파일에는 append 안 함, **fault injection 6개 지점 전부**(AfterSnapshot/AfterFirstRolloutCreate/AfterRolloutAppend/BeforeSqliteTransaction/AfterSqliteCommit/BeforePostValidation) 개별 Rollback 확인, 취소는 mutation 전/rollout 생성 후/append 후/커밋 후 각각 `Cancelled`로 구분, Two-PC 왕복(New→Update→Identical, ThreadId 유지) + Diverged write 0, **(Phase 07_01)** `CodexProcessGuardTests`(7건, 실제 spawn된 프로세스 포함— 별도 파일), Snapshot 이후 backup 바꿔치기 시도 차단(pin된 바이트로 계속 적용), WAL/SHM이 커밋 직후 실패에도 원래(없던) 상태로 복구, `.jsonl.zst` 새 segment의 물리 바이트 검증(+논리 revision도 함께 일치), IncomingAhead 메타데이터 병합(updated_at/tokens_used 갱신, 비어있는 name만 채움), `thread_source` 없는 New Import 거부 | 전부 `TestCodexHomeBuilder`(실측 threads 스키마 그대로 반영)로 만든 합성 temp Codex Home, 실제 사용자 `.codex`는 이 프로젝트의 자동화 테스트 어디에서도 열지 않는다(§7 clone 하네스는 세션 스크래치패드일 뿐 이 테스트 프로젝트에 포함되지 않는다) |
+| **`CodexBackupManager.App.Tests`(Phase 07_01 확장 — `MainViewModelApplyTests.cs` 신규, 4건)** | `ApplyCommand.CanExecute`가 frozen Plan 유무만 보는지, 확인 dialog에서 거부하면 아무 것도 호출되지 않는지(RED→GREEN으로 확인), 완전히 동일한 두 fixture Codex Home 사이의 Apply가 `NothingToDo`로 끝나고 Plan을 무효화하는지(실제 production `RestoreExecutor.Apply` 진입점, 실제 `CodexProcessGuard.SystemRunningProcessLister` 포함), `KnownLimitationsText`가 항상 채워져 있는지 | 실제 fixture Codex Home(`RepositoryFixtures.CopyCodexHomeFixtureToTemp`) 2개로 Export→Import Preview→Apply 왕복, 실제 사용자 `.codex`는 쓰지 않는다 |
 
-마지막 전체 실행 결과(Phase 7 포함): `Domain 64 + Codex 200 + Backup 88 + Restore 15 + App 90 = 457건
-전부 통과`, `dotnet build` 경고/오류 0. 의존 방향은 `App → Restore → Backup → Codex → Domain`(단방향,
-역방향 없음).
+마지막 전체 실행 결과(Phase 07_01 포함): `Domain 64 + Codex 200 + Backup 88 + Restore 30 + App 94 =
+476건 전부 통과`, `dotnet build` 경고/오류 0. 의존 방향은 `App → Restore → Backup → Codex → Domain`
+(단방향, 역방향 없음).
 
 **여전히 커버하지 못한 테스트 항목(정직하게 남김)**: 대량의 요구 테스트 목록 중 다음은
 자동화 테스트로 명시적으로 덮지 않았다 — 향후 Phase 7 작업 시 필요하면 추가할 것.
@@ -452,31 +492,30 @@ Apply Core)까지 마쳤다** — 실제 write 경로가 처음 생겼으므로 
 
 ## 7. 다음에 할 일이 주어지면
 
-Phase 7(Safe Restore / Fast-forward Apply Core)은 이미 완료했다 — `docs/safe-restore-phase7.md`가
-정식 스펙이다(write 대상/공식 소스 조사 결과/Snapshot·Rollback 구조/지원 범위/알려진 제약 전부).
-다음 세션이 **Phase 07_01(hardening/기능 확장)**을 시작하게 되면 먼저 확인할 것:
+Phase 7(Safe Restore / Fast-forward Apply Core, `a3de8e8`)과 Phase 07_01(Restore Hardening /
+Apply UI / Real-Clone E2E)까지 완료했다 — `docs/safe-restore-phase7.md`가 정식 스펙이다(write
+대상/공식 소스 조사 결과/Snapshot·Rollback 구조/지원 범위/알려진 제약 전부, §10이 Phase 07_01
+addendum). Apply 버튼을 포함한 UI도 이제 있다(`MainViewModel.ApplyCommand`,
+`MainWindow.xaml`의 Import Preview 오버레이 안). 다음 세션이 **Phase 8(Release / self-contained
+EXE / final QA)**을 시작하게 되면 먼저 확인할 것:
 
-- `docs/safe-restore-phase7.md`를 먼저 읽는다. `CodexBackupManager.Restore` 프로젝트가 이미 존재
-  하고(`RestoreExecutor`/`RestoreOperationPlanner`/`SnapshotService`/`RollbackService`/
-  `RestoreValidator`/`CodexProcessGuard`/`SchemaCompatibilityChecker`/`StateDatabaseWriter`/
-  `RolloutRestoreService`), 그 안의 안전 원칙(계획 생성 자체를 거부하면 write 0건, Snapshot 없이는
-  아무것도 안 씀, 물리 안전성 재확인 없이 append 안 함)을 그대로 신뢰하고 그 위에 기능을 더할 것 —
-  이미 있는 안전장치를 우회하거나 다시 만들지 말 것.
-- **이번 Phase가 의도적으로 지원하지 않은 것들**(§4 항목 17~20에 상세): `.codex-global-state.json`
-  미지원(공식 소스에 이 개념 자체가 없음, `threads.project_id`만 authoritative), 로컬에 없는 새
-  프로젝트 자동 생성 미지원, attachment(`local_image`) 실제 파일 복원 미지원, `Diverged` 자동
-  merge/backup 교체/복사본 가져오기 미지원(Apply 전체 차단만). Phase 07_01에서 이 중 무엇을 다룰지는
-  사용자가 명시적으로 지정할 것 — 임의로 범위를 넓히지 말 것.
-- **UI(Apply 버튼)는 아직 없다.** `MainViewModel.CurrentImportPlan`(Phase 06_03에서 이미 보존)을
-  받아 `RestoreExecutor.Apply`를 호출하는 View/ViewModel 연결은 이번 Phase 범위에 포함하지
-  않았다(핵심 write 엔진의 안전성을 먼저 확정하는 게 최우선이었다) — Phase 07_01에서 만들게 되면
-  사용자 확인 dialog("Snapshot을 만들고 적용합니다. 계속하시겠습니까?")와 진행 상태 표시, Apply
-  버튼 활성 조건(Plan 존재+Blocked/Diverged 없음)까지 만들되, **버튼을 누른 시점에 반드시 fresh
-  `CodexCatalogBuilder.Build`로 새 카탈로그를 만들어 `RestoreExecutor.Apply`에 넘길 것** — 오래된
-  카탈로그를 재사용하면 안 된다.
-- **실제 `.codex`로 Restore를 검증할 때도 여전히 read-only 원칙을 지킨다** — 자동화 테스트는 절대
-  실제 `.codex`에 실행하지 말 것(§4-20). 필요하면 사용자가 직접, 수동으로, 실제 백업을 만들어
-  temp Codex Home에 Import한 뒤 결과를 눈으로 확인하는 방식만 고려할 것.
+- `docs/safe-restore-phase7.md` §10.6(알려진 한계, Phase 07_01 최종본)을 먼저 읽는다. 특히: **Codex
+  Desktop 사이드바에 프로젝트별로 정확히 표시되는지 여전히 미검증**(Electron 소스 미조사 — Phase 8
+  진입 전 실제 Desktop 앱으로 통합 검증하거나, 검증하지 못하면 Release 문서에 알려진 한계로 명시할
+  것), 실제 clone E2E는 New 계열만 수행했고 IncomingAhead는 합성 데이터로만 검증, 다중 신규 segment
+  복합 케이스 미검증, `local_image`/새 프로젝트 자동 생성/`Diverged` 자동 merge/`.jsonl.zst` Update는
+  전부 여전히 미지원(Unsupported로 UI에 계속 노출해야 한다 — `MainViewModel.KnownLimitationsText`).
+- `CodexBackupManager.Restore` 프로젝트의 안전 원칙(계획 생성 자체를 거부하면 write 0건, Snapshot
+  없이는 아무것도 안 씀, 물리 안전성 재확인 없이 append 안 함, backup은 `PinnedBackupSource`로 Apply
+  전체에서 한 번만 읽음)을 그대로 신뢰하고 그 위에 기능을 더할 것 — 이미 있는 안전장치를 우회하거나
+  다시 만들지 말 것.
+- **실제 `.codex`로 검증할 때도 여전히 read-only/clone-only 원칙을 지킨다** — 자동화 테스트는 절대
+  실제 원본 `.codex`에 write하지 말 것. 이번 Phase까지는 매번 `Get-FileHash`로 원본 4개 파일
+  (`state_5.sqlite`/`session_index.jsonl`/`.codex-global-state.json`/`config.toml`)의 불변을
+  재확인해 왔다 — 이 습관을 계속 유지할 것.
+- Phase 8은 `dotnet publish -r win-x64 --self-contained /p:PublishSingleFile=true`(CLAUDE.md §38)
+  로 실제 단일 exe를 만들어 그 결과물로 최종 QA를 수행하는 게 핵심이다 — 아직 이 publish 명령을
+  실제로 실행/검증한 적이 없다.
 - `manifest.attachments[]`와 `BackupConversationMetadata`의 원본 38컬럼 필드가 여전히 Restore가
   쓸 수 있는 유일한 재료다 — `resolvedTitle` 같은 가공값을 원본 대신 쓰지 말 것.
 - `docs/codexbackup-format-v1.md`가 Backup V1의 정식 스펙이다(FROZEN) — `CLAUDE.md` §11~13은 이제 이
