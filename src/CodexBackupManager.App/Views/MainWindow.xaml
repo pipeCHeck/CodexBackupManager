@@ -162,9 +162,90 @@
         </Border>
       </Grid>
 
-      <!-- 프로젝트 / 대화 카탈로그 (Phase 2) + 대화 내용 placeholder (Phase 3 예정) -->
-      <Grid Grid.Row="1" Margin="0,14,0,0"
-            Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibility}}">
+      <!-- Phase 6 — Import Preview 오버레이. 미리보기가 있으면 카탈로그/뷰어 영역을 덮어 보여준다.
+           Codex에는 아무것도 쓰지 않는다 — 판정 결과를 보여주기만 한다(Phase 7 전까지 적용 없음). -->
+      <Border Grid.Row="1" Margin="0,14,0,0" Background="{StaticResource Panel}" CornerRadius="6" Padding="16"
+              Visibility="{Binding HasImportPreview, Converter={StaticResource BoolToVisibility}}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+              <TextBlock Text="백업 불러오기 미리보기" FontSize="15" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding CurrentImportPreview.SummaryText}" Foreground="{StaticResource Muted}"
+                         FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+            <Button Grid.Column="1" Content="닫기" Command="{Binding CloseImportPreviewCommand}"
+                    VerticalAlignment="Top" Padding="10,4" MinWidth="0" FontSize="11" />
+          </Grid>
+
+          <ScrollViewer Grid.Row="1" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding CurrentImportPreview.Projects}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel Margin="0,0,0,18">
+                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="13" />
+                    <TextBlock Text="{Binding PathMappingStatusText}" Foreground="{StaticResource Warn}"
+                               FontSize="11" Margin="0,2,0,0" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding SummaryText}" Foreground="{StaticResource Muted}"
+                               FontSize="11" Margin="0,4,0,8" />
+
+                    <ItemsControl ItemsSource="{Binding Conversations}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Grid Margin="0,0,0,5">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                              <TextBlock Text="{Binding StatusLabel}" Foreground="{StaticResource Muted}"
+                                         FontSize="11" Margin="10,0,0,0" />
+                              <TextBlock Text="{Binding MetadataDiffSummary}" Foreground="{StaticResource Warn}"
+                                         FontSize="10" Margin="8,0,0,0"
+                                         Visibility="{Binding HasMetadataDiff, Converter={StaticResource BoolToVisibility}}" />
+                            </StackPanel>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+
+          <TextBlock Grid.Row="2" Margin="0,10,0,0" Foreground="{StaticResource Bad}" TextWrapping="Wrap"
+                     Text="{Binding CurrentImportPreview.FailureMessage}" />
+        </Grid>
+      </Border>
+
+      <!-- 프로젝트 / 대화 카탈로그 (Phase 2) + 대화 내용 placeholder (Phase 3 예정). Import Preview
+           오버레이가 떠 있는 동안에는 같은 자리를 덮으므로 숨긴다. -->
+      <Grid Grid.Row="1" Margin="0,14,0,0">
+        <Grid.Style>
+          <Style TargetType="Grid">
+            <Setter Property="Visibility" Value="Collapsed" />
+            <Style.Triggers>
+              <MultiDataTrigger>
+                <MultiDataTrigger.Conditions>
+                  <Condition Binding="{Binding IsConnected}" Value="True" />
+                  <Condition Binding="{Binding HasImportPreview}" Value="False" />
+                </MultiDataTrigger.Conditions>
+                <Setter Property="Visibility" Value="Visible" />
+              </MultiDataTrigger>
+            </Style.Triggers>
+          </Style>
+        </Grid.Style>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="380" MinWidth="260" />
           <ColumnDefinition Width="Auto" />
@@ -371,10 +452,14 @@
            여기서는 신호만 보낸다). -->
       <Button Content="취소" Command="{Binding CancelExportCommand}" Margin="0,0,8,0"
               Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibility}}" />
+      <!-- Phase 6 — Import Preview. 선택 즉시 적용하지 않고 미리보기만 만든다(Codex에는 쓰지 않는다). -->
+      <Button Content="백업 불러오기" Command="{Binding ImportPreviewCommand}" Margin="0,0,8,0" />
       <TextBlock Text="Codex 원본 데이터는 읽기 전용으로만 접근합니다."
                  Foreground="{StaticResource Muted}" FontSize="11"
                  VerticalAlignment="Center" Margin="10,0,0,0" />
       <TextBlock Text="{Binding ExportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
+                 VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
+      <TextBlock Text="{Binding ImportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
                  VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
     </StackPanel>
   </Grid>

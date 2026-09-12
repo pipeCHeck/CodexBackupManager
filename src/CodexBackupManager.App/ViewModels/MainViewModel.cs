@@ -8,6 +8,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CodexBackupManager.App.Services;
+using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Backup.Manifest;
 using CodexBackupManager.Backup.Planning;
 using CodexBackupManager.Backup.Writing;
@@ -38,6 +39,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly FileLogger _logger;
     private readonly Func<string?> _folderPicker;
     private readonly Func<string, string?> _exportFilePicker;
+    private readonly Func<string?> _importFilePicker;
 
     private bool _isBusy;
     private bool _isConnected;
@@ -71,6 +73,12 @@ public sealed class MainViewModel : ObservableObject
     private string? _exportStatusText;
     private CancellationTokenSource? _exportCancellation;
 
+    // Phase 6 — Import Preview. Codex에는 아무것도 쓰지 않는다(판정/미리보기까지만).
+    private bool _isImportPreviewLoading;
+    private string? _importStatusText;
+    private ImportPreviewViewModel? _currentImportPreview;
+    private CancellationTokenSource? _importPreviewCancellation;
+
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
     /// <param name="settings">설정 저장소.</param>
@@ -80,12 +88,17 @@ public sealed class MainViewModel : ObservableObject
     /// <c>.codexbackup</c> 저장 위치 선택 대화상자(입력: 기본 파일 이름, 출력: 선택한 경로 또는 취소 시
     /// <c>null</c>). 생략하면 <see cref="BackupFilePicker.PickSaveLocation"/>을 쓴다.
     /// </param>
+    /// <param name="importFilePicker">
+    /// 불러올 <c>.codexbackup</c> 선택 대화상자(Phase 6, 출력: 선택한 경로 또는 취소 시 <c>null</c>).
+    /// 생략하면 <see cref="BackupFilePicker.PickOpenLocation"/>을 쓴다.
+    /// </param>
     public MainViewModel(
         CodexDetectionService detection,
         SettingsStore settings,
         FileLogger logger,
         Func<string?> folderPicker,
-        Func<string, string?>? exportFilePicker = null)
+        Func<string, string?>? exportFilePicker = null,
+        Func<string?>? importFilePicker = null)
     {
         ArgumentNullException.ThrowIfNull(detection);
         ArgumentNullException.ThrowIfNull(settings);
@@ -97,6 +110,7 @@ public sealed class MainViewModel : ObservableObject
         _logger = logger;
         _folderPicker = folderPicker;
         _exportFilePicker = exportFilePicker ?? BackupFilePicker.PickSaveLocation;
+        _importFilePicker = importFilePicker ?? BackupFilePicker.PickOpenLocation;
 
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
         RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy);
@@ -105,6 +119,8 @@ public sealed class MainViewModel : ObservableObject
         ClearSelectionCommand = new RelayCommand(ClearAllSelections, () => HasSelection);
         ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting);
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
+        ImportPreviewCommand = new RelayCommand(() => _ = ImportPreviewAsync(), () => !IsImportPreviewLoading);
+        CloseImportPreviewCommand = new RelayCommand(() => CurrentImportPreview = null);
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -128,6 +144,48 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>진행 중인 Export를 취소한다(Phase 05_01). Export 중일 때만 활성화된다.</summary>
     public RelayCommand CancelExportCommand { get; }
+
+    /// <summary><c>.codexbackup</c> 파일을 선택해 Import Preview를 만든다(Phase 6). Codex에는 아무것도 쓰지 않는다.</summary>
+    public RelayCommand ImportPreviewCommand { get; }
+
+    /// <summary>현재 표시 중인 Import Preview를 닫는다(판정 결과를 버릴 뿐, Codex에는 아무 영향 없다).</summary>
+    public RelayCommand CloseImportPreviewCommand { get; }
+
+    /// <summary>Import Preview를 만드는 중인지.</summary>
+    public bool IsImportPreviewLoading
+    {
+        get => _isImportPreviewLoading;
+        private set
+        {
+            if (SetProperty(ref _isImportPreviewLoading, value))
+            {
+                ImportPreviewCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Import Preview 진행/결과 문구. 대화 원문이나 개인 절대경로는 담지 않는다.</summary>
+    public string? ImportStatusText
+    {
+        get => _importStatusText;
+        private set => SetProperty(ref _importStatusText, value);
+    }
+
+    /// <summary>현재 만들어진 Import Preview. 아직 없으면 <c>null</c>.</summary>
+    public ImportPreviewViewModel? CurrentImportPreview
+    {
+        get => _currentImportPreview;
+        private set
+        {
+            if (SetProperty(ref _currentImportPreview, value))
+            {
+                OnPropertyChanged(nameof(HasImportPreview));
+            }
+        }
+    }
+
+    /// <summary>Import Preview 결과가 있어 화면에 보여줄 수 있는지.</summary>
+    public bool HasImportPreview => CurrentImportPreview is not null;
 
     /// <summary>Export가 진행 중인지. 재실행을 막고 취소 버튼 표시 여부를 결정하는 데 쓴다.</summary>
     public bool IsExporting
@@ -776,6 +834,77 @@ public sealed class MainViewModel : ObservableObject
     /// 여기서는 신호만 보낸다.
     /// </summary>
     private void CancelExport() => _exportCancellation?.Cancel();
+
+    /// <summary>
+    /// <c>.codexbackup</c> 파일을 선택해 Import Preview를 만든다(Phase 6). core
+    /// (<see cref="ImportPreviewBuilder"/>)를 그대로 호출할 뿐이다 — ZIP/rollout 비교 로직을 여기서
+    /// 직접 만들지 않는다. Codex 파일에는 어떤 것도 쓰지 않는다(판정/미리보기까지만).
+    /// </summary>
+    private async Task ImportPreviewAsync()
+    {
+        string? path = _importFilePicker();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (_lastCatalog is not { } catalog)
+        {
+            ImportStatusText = "카탈로그가 아직 준비되지 않았습니다.";
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _importPreviewCancellation = cancellation;
+        IsImportPreviewLoading = true;
+        ImportStatusText = "백업 파일을 확인하는 중…";
+        CurrentImportPreview = null;
+
+        try
+        {
+            ImportPreview preview = await Task.Run(
+                () => ImportPreviewBuilder.Build(path, catalog, cancellation.Token),
+                cancellation.Token).ConfigureAwait(true);
+
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            CurrentImportPreview = new ImportPreviewViewModel(preview);
+
+            if (preview.Success)
+            {
+                int total = preview.Projects.Sum(p => p.Conversations.Count);
+                ImportStatusText = $"백업 확인 완료 — 대화 {total}개.";
+                _logger.Info(
+                    $"Import Preview 완료. projects={preview.Projects.Count} conversations={total} " +
+                    $"dependencyOnly={preview.DependencyOnlyConversations.Count} warnings={preview.Warnings.Count}");
+            }
+            else
+            {
+                ImportStatusText = "이 백업 파일을 사용할 수 없습니다.";
+                _logger.Warning($"Import Preview 검증 실패. errors={preview.ValidationErrors.Count}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ImportStatusText = "Import Preview를 취소했습니다.";
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("Import Preview 중 오류", ex);
+            ImportStatusText = $"백업을 확인하는 중 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_importPreviewCancellation, cancellation))
+            {
+                IsImportPreviewLoading = false;
+                _importPreviewCancellation = null;
+            }
+        }
+    }
 
     /// <summary>
     /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 대량 선택/해제 시

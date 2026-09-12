@@ -4,25 +4,32 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 5` 커밋(`472f2aa`)까지 완료. 그 위에 GitHub 코드 리뷰로 발견된 Phase 5
-정합성 문제를 고치는 **Phase 05_01(Backup V1 Freeze / Restore Sufficiency Hardening)을 완료**했다
-— 이 작업이 끝나야 Backup Format V1이 "FROZEN"으로 확정된다(`docs/codexbackup-format-v1.md` 상단
-배너 참고). **Phase 05_01 작업은 아직 사용자가 커밋하지 않은 상태**(작업 트리에 변경 있음) —
-새 세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것.
+마지막 갱신 기준: `Phase 05_01` 커밋(`be2f616`)까지 완료. Backup Format V1은 이 커밋을 기준으로
+**FROZEN**으로 확정됐다(`docs/codexbackup-format-v1.md` 상단 배너 참고). 그 위에
+**Phase 6(Import Preview + Update/Divergence Analysis)까지 완료**했다 — `.codexbackup`을 검증하고,
+현재 PC Codex와 실제 rollout lineage/내용으로 비교해 `New`/`Identical`/`IncomingAhead`/`LocalAhead`/
+`Diverged`/`Unverifiable`를 판정하고 미리보기까지 하지만, **Codex에는 아무것도 쓰지 않는다**(Apply는
+Phase 7). **Phase 6 작업은 아직 사용자가 커밋하지 않은 상태**(작업 트리에 변경 있음) — 새 세션은
+`git log`/`git status`로 실제 커밋 여부를 다시 확인할 것.
 
 ---
 
 ## 1. 한 줄 요약
 
 **Phase 1~5(Codex 탐색 → Read Model → Conversation Viewer → Selection → Export)까지 전부
-완료했고, 그 위에 Phase 05_01(Backup V1 Freeze / Restore Sufficiency Hardening)까지 마쳤다.**
+완료했고, 그 위에 Phase 05_01(Backup V1 Freeze / Restore Sufficiency Hardening)과
+Phase 6(Import Preview + Update/Divergence Analysis)까지 마쳤다.**
 Phase 4는 04_01~04_07 사후 수정을 거쳐 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5는
 Restore Sufficiency Audit → Backup Format V1 확정 → `CodexBackupManager.Backup` 프로젝트
 (ExportPlanBuilder/BackupWriter/BackupReader/BackupValidator) → 최소 Export UI → 실제 `.codex`
 데이터 검증까지 마쳤고, 사용자가 커밋한 뒤 GitHub 코드 리뷰에서 Restore/Validator 정합성 문제
 몇 가지가 발견돼 Phase 05_01에서 고쳤다(§3 Export 항목, `docs/codexbackup-format-v1.md` §5에
-전체 목록). **Import/Apply/Restore(Phase 6/7)는 아직 손대지 않았다** — 다음에 할 일이 명시적으로
-주어지지 않으면 Phase 6을 추측해서 미리 시작하지 말 것.
+전체 목록) — 이 커밋(`be2f616`)을 기준으로 Backup Format V1이 FROZEN이다.
+**Phase 6은 `.codexbackup`을 선택하면 검증 → 내용 표시 → 현재 PC Codex와 실제 rollout
+lineage/내용 비교(timestamp 아님) → 프로젝트 경로 재매핑 제안 → Phase 7 계획(Preview)까지만 한다.
+Codex에는 write가 0건이다**(§3 "Import Preview" 항목, `docs/import-preview-phase6.md`에 전체 스펙).
+**Apply/Restore(Phase 7)는 아직 손대지 않았다** — 다음에 할 일이 명시적으로 주어지지 않으면 Phase 7을
+추측해서 미리 시작하지 말 것.
 
 ---
 
@@ -43,11 +50,12 @@ Restore Sufficiency Audit → Backup Format V1 확정 → `CodexBackupManager.Ba
 | `e599d9e` | Phase 04_07 | **Phase 4의 마지막 UI 수정.** 상단 진단 영역을 Compact/Expand 구조로 재구성(기본 접힘, `MainViewModel.CompactSummaryText`로 Desktop/CLI/Sessions/Threads 한 줄 요약, "상세 정보" `ToggleButton`으로 기존 Rows/ProbeRows 펼침/접힘, `MaxHeight`+내부 `ScrollViewer`로 창 전체를 다시 잡아먹지 않게 제한), 본문 Grid의 고정 `RowDefinition Height="220"` 제거(→ `Auto`, 남는 공간은 프로젝트/Viewer 영역이 가져감), `App.xaml` 다크 `ScrollBar`의 horizontal 정합성 수정(`Track.Orientation`이 `ScrollBar.Orientation`을 실제로 따라가도록 `TemplateBinding` 추가 — 이전엔 안 따라갔다, PageUp/PageDown↔PageLeft/PageRight 커맨드 분리) |
 
 | `472f2aa` | Phase 5 | **Export.** Restore Sufficiency Audit(실제 `state_5.sqlite.threads` 38컬럼 전수 실측 + 공식 Codex Rust 소스 대조 → `ThreadRow`를 38컬럼 보존하도록 확장 — 이때는 아직 `source` 컬럼이 누락된 상태였다, 아래 Phase 05_01 참고), `ThreadDependencyResolver` 추출(Viewer의 `ConversationTranscriptBuilder`와 Export가 동일한 dependency closure 규칙 공유), `CodexBackupManager.Backup`/`.Backup.Tests` 프로젝트 신설(`ExportPlanBuilder`/`ManifestBuilder`/`ChecksumService`/`BackupWriter`/`BackupReader`/`BackupValidator`), `.codexbackup` V1 포맷 확정(`docs/codexbackup-format-v1.md`), 스트리밍 복사+incremental SHA-256(대형 rollout도 메모리 비례 증가 없음), atomic publish(temp→self-validate→move), Export 도중 원본 변경 감지, `LocalImageAttachmentScanner`(non-text content 첨부 정책), 최소 Export UI(`MainViewModel.ExportCommand`, `SaveFileDialog`) |
-| (미커밋) | Phase 05_01 | **Backup V1 Freeze / Restore Sufficiency Hardening.** GitHub 코드 리뷰로 발견된 Phase 5 정합성 문제 10건 수정: (1) `threads.source`(NOT NULL) 컬럼이 `ThreadRow`/`ThreadRowReader`에서 누락돼 있던 것을 발견·수정 + 38컬럼 전체를 실제 스키마와 기계적으로 대조하는 회귀 테스트(`ThreadRowSchemaCoverageTests`/`BackupConversationMetadataCoverageTests`) 추가, (2) `resolvedTitle` 등 가공값이 원본 `title`/`name`/`firstUserMessage`/`preview`/`rollout_path` 등을 대체하던 것을 원본 필드 전부 별도 보존으로 수정, (3) 선택 대화의 chain/metadata/ancestor 누락을 warning으로 넘기던 것을 `ExportPlan.FatalErrors`로 승격해 Export 전체 FAIL(temp도 안 만듦), (4) 첨부 원본 경로 ↔ entry 경로 역매핑(`manifest.attachments[]`/`BackupAttachmentMetadata`) 신설, (5) `LocalImageAttachmentScanner`가 `ConversationItemParser`와 동일한 file-level authoritative-source 정책(event_msg 있으면 그것만, 없을 때만 response_item)을 쓰도록 수정, (6)~(9) `BackupValidator` hardening(malformed 입력에서 예외 대신 항상 Fail 반환, Windows 대소문자 충돌 검출, manifest 내부 개수/참조 일관성 검사, `manifest.json`도 체크섬 보호 대상에 포함 — 순환 아님을 재확인), (10) `CancelExportCommand` + 조건부 취소 버튼 추가(300MB급 실제 mid-copy 취소 확인) |
+| `be2f616` | Phase 05_01 | **Backup V1 Freeze / Restore Sufficiency Hardening.** GitHub 코드 리뷰로 발견된 Phase 5 정합성 문제 10건 수정: (1) `threads.source`(NOT NULL) 컬럼이 `ThreadRow`/`ThreadRowReader`에서 누락돼 있던 것을 발견·수정 + 38컬럼 전체를 실제 스키마와 기계적으로 대조하는 회귀 테스트(`ThreadRowSchemaCoverageTests`/`BackupConversationMetadataCoverageTests`) 추가, (2) `resolvedTitle` 등 가공값이 원본 `title`/`name`/`firstUserMessage`/`preview`/`rollout_path` 등을 대체하던 것을 원본 필드 전부 별도 보존으로 수정, (3) 선택 대화의 chain/metadata/ancestor 누락을 warning으로 넘기던 것을 `ExportPlan.FatalErrors`로 승격해 Export 전체 FAIL(temp도 안 만듦), (4) 첨부 원본 경로 ↔ entry 경로 역매핑(`manifest.attachments[]`/`BackupAttachmentMetadata`) 신설, (5) `LocalImageAttachmentScanner`가 `ConversationItemParser`와 동일한 file-level authoritative-source 정책(event_msg 있으면 그것만, 없을 때만 response_item)을 쓰도록 수정, (6)~(9) `BackupValidator` hardening(malformed 입력에서 예외 대신 항상 Fail 반환, Windows 대소문자 충돌 검출, manifest 내부 개수/참조 일관성 검사, `manifest.json`도 체크섬 보호 대상에 포함 — 순환 아님을 재확인), (10) `CancelExportCommand` + 조건부 취소 버튼 추가(300MB급 실제 mid-copy 취소 확인) |
+| (미커밋) | Phase 6 | **Import Preview + Update/Divergence Analysis.** `.codexbackup`을 선택하면 `BackupValidator`로 검증 → 현재 PC Codex와 실제 rollout lineage/내용을 비교해 `RevisionRelation`(New/Identical/IncomingAhead/LocalAhead/Diverged/Unverifiable)을 판정 → 프로젝트 경로 재매핑 제안 → Phase 7 계획(Preview)까지만 한다. **timestamp로 판정하지 않는다** — `ConversationRevision`/`RolloutSlice`(논리적 슬라이스 fingerprint, 압축 해제 후 바이트+SHA-256)로 실제 내용을 비교한다. 새 모델(`Domain.Codex.Import`: `RolloutSlice`/`ConversationRevision`/`RevisionRelation`/`MetadataDifferences`/`ProjectPathMapping`), `ConversationRevisionBuilder`/`ConversationRevisionComparer`(Codex 프로젝트, `IRolloutSliceReader`로 로컬 파일/backup ZIP entry를 추상화해 같은 코드 공유), `ThreadDependencyResolver.ResolveFileSlices` 신설(Viewer의 `ConversationTranscriptBuilder`도 이걸 쓰도록 리팩터링 — 파일별 cutoff 판단이 drift하지 않게), `BackupCatalogReader`(backup의 `payload/rollouts/`만으로 로컬과 같은 `ThreadChainResolver` lineage를 재구성 — manifest에 별도 lineage 필드를 추가하지 않았다), `ImportPreviewBuilder`/`ImportConflictAnalyzer`/`MetadataDifferenceAnalyzer`/`ProjectPathMapper`(Backup 프로젝트), 최소 Import Preview UI(`MainViewModel.ImportPreviewCommand`, `OpenFileDialog`). Codex에는 write가 0건이다. 상세 스펙은 `docs/import-preview-phase6.md`. |
 
 **Phase 4는 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5(Export)는 커밋된 뒤 Phase 05_01
-hardening까지 마쳤다 — `docs/codexbackup-format-v1.md`가 이제 FROZEN 상태다.** Phase 6(Import
-Preview)~7(Safe Restore)은 아직 시작 전이다.
+hardening까지 마쳤다 — `docs/codexbackup-format-v1.md`가 이제 FROZEN 상태다. Phase 6(Import
+Preview)도 완료했다(미커밋).** Phase 7(Safe Restore)은 아직 시작 전이다.
 
 ---
 
@@ -161,6 +169,52 @@ Preview)~7(Safe Restore)은 아직 시작 전이다.
   **Phase 05_01에서 `CancelExportCommand`를 추가했다** — Export 중에만 보이는 취소 버튼, 300MB급
   payload 복사 도중 취소해도 temp가 즉시 삭제되고 목적지가 생기지 않음을 실제 파일로 확인했다.
 
+### Import Preview — Phase 6(전체 스펙은 `docs/import-preview-phase6.md`)
+
+- **timestamp로 판정하지 않는다.** `updated_at`/파일 수정 시각은 UI 참고 정보일 뿐이고,
+  `RevisionRelation`(New/Identical/IncomingAhead/LocalAhead/Diverged/Unverifiable) 판정은 항상 실제
+  rollout lineage + 논리적 바이트 내용(`ConversationRevision`/`RolloutSlice`)으로 결정된다.
+- **전체 파일이 아니라 "이 conversation이 실제로 소비하는 슬라이스"만 비교한다.** child가 parent
+  rollout의 중간에서 분기한 뒤 parent가 계속 쓰였어도, 그 이후 내용은 fingerprint에 포함하지
+  않는다 — Export의 dependency closure 경계 판정과 완전히 같다(`ThreadDependencyResolver`).
+  `.jsonl.zst`는 스트리밍으로 압축 해제한 논리 바이트 기준으로 비교한다(Backup V1 payload 자체는
+  여전히 원본 압축 바이트 그대로 유지 — 이건 바뀌지 않았다).
+- **새 lineage 규칙을 만들지 않았다.** `ThreadDependencyResolver`에 `ResolveFileSlices`를 추가해
+  "파일별로 어디까지 포함하는가"(ordinal/byte cutoff) 판단을 뽑아냈고, Viewer의
+  `ConversationTranscriptBuilder.ReadChainMessages`도 이 메서드를 쓰도록 리팩터링했다 — Viewer/
+  Export/Import Preview 세 곳이 완전히 같은 코드로 lineage 경계를 판단한다(drift 없음, 기존 178개
+  Codex.Tests 전부 그대로 통과해 회귀 없음을 확인했다).
+- **backup 쪽 lineage는 manifest가 아니라 rollout 파일 자체에서 다시 만든다.** `BackupCatalogReader`가
+  `payload/rollouts/`의 파일명(`RolloutFileNamePattern`)과 각 파일의 `session_meta`(로컬과 완전히
+  같은 파서, `CodexSessionParser`에 스트림 오버로드 추가)로 `ThreadChainResolver.Resolve`를 그대로
+  호출한다 — manifest에 별도 lineage 필드를 추가하지 않았다(원본 파일이 이미 진실을 담고 있다).
+  이 재구성은 `payload/rollouts/` 전체를 대상으로 하므로, 선택 대화든 dependency-only 조상이든
+  manifest에 나열된 어떤 thread의 ancestry도 해석할 수 있다(Phase 05_01의 "부분 성공 금지" 덕분에
+  closure가 항상 완전하다).
+- **`IRolloutSliceReader`로 로컬 파일과 backup ZIP entry를 추상화했다.** `ConversationRevisionBuilder`/
+  `ConversationRevisionComparer`(Codex 프로젝트)는 바이트를 "어디서" 읽는지 모른다 —
+  `LocalFileRolloutSliceReader`(로컬 `File.Open`)와 `BackupRolloutSliceReader`(ZIP entry `Open()`,
+  Backup 프로젝트)가 같은 인터페이스 뒤에서 교체된다.
+- **"같은 rollout id, 다른 길이"는 실제로 byte prefix인지 다시 읽어서 확인한다.** 두 슬라이스의 전체
+  해시만 비교해서는 "한쪽이 다른 쪽의 이어쓰기"인지 "우연히 길이가 다른 발산"인지 구분할 수 없다 —
+  `ConversationRevisionComparer`는 더 긴 쪽을 짧은 쪽 길이로 다시 잘라 해시해 짧은 쪽과 정확히
+  일치할 때만 `IncomingAhead`/`LocalAhead`로 판정하고, 아니면 `Diverged`다. 마지막 슬라이스가 아닌
+  위치에서 같은 rollout id인데 내용이 다르면(이론상 발생하면 안 됨) 안전하게 `Diverged`로 취급한다.
+- **metadata 차이는 revision 관계와 완전히 분리한다.** `MetadataDifferenceAnalyzer`가 cwd/프로젝트
+  연결/고정 여부/섹션/제목/최근 사용 시각 차이를 별도로 보여줄 뿐, Phase 6은 병합 정책을 정하지
+  않는다(Phase 7의 몫).
+- **선택 대화가 어떤 project 그룹에도 안 걸리는 경우를 방어한다.** 실제 UI 선택은 항상 로컬
+  카탈로그의 "기타 대화" 그룹을 거치므로 이론상 발생하지 않지만, 만약 그런 경우가 생기면
+  `ImportPreviewBuilder`가 조용히 화면에서 빠뜨리지 않고 "기타 대화" fallback 그룹에 넣는다(실제
+  `.codex` 데이터로 최초 발견 → 테스트로 RED 확인 → 수정, 아래 §9 실제 데이터 검증 참고).
+- **프로젝트 경로 재매핑은 판정만 한다.** `ProjectPathMapper`가 backup의 원본 루트 경로를 현재 PC의
+  로컬 프로젝트 canonical path와 대조해 자동 연결을 제안할 뿐, Codex에는 쓰지 않는다(실제 재지정은
+  Phase 7).
+- **UI는 core를 그대로 호출할 뿐이다.** `MainViewModel.ImportPreviewCommand`가
+  `ImportPreviewBuilder.Build()`를 부르고, ZIP/rollout 비교 로직은 전혀 갖고 있지 않다. 결과는
+  `ImportPreviewViewModel`로 감싸 내부 enum 영어명이 아니라 한국어 라벨(신규/동일/업데이트 가능/
+  현재 PC가 더 최신/분기 충돌/확인 불가)로 보여준다.
+
 ---
 
 ## 4. 알려진 미해결 항목 / 주의사항
@@ -174,6 +228,9 @@ Preview)~7(Safe Restore)은 아직 시작 전이다.
 7. ~~`ThreadRow`가 `threads.source` 컬럼을 누락했었다~~ — **Phase 05_01에서 수정 완료**(§3 Export 항목). 재발 방지 회귀 테스트 추가됨.
 8. SHA-256은 accidental corruption 탐지용이며 전자서명(authenticity 보장)이 아니다 — `docs/codexbackup-format-v1.md` §3.3에 명시. 위조된 payload+체크섬 쌍을 함께 다시 만들면 이 검증을 통과할 수 있다.
 9. 첨부 dedupe는 원본 절대경로 문자열 비교(대소문자 무시) 기준이다 — 심볼릭 링크 등으로 실제로는 같은 파일을 다른 경로가 가리키는 경우까지는 동일 파일로 인식하지 못할 수 있다(실측 사례 없음).
+10. **(Phase 6)** 이 PC의 실제 `.codex` 데이터에는 `Diverged`/`LocalAhead` 실제 사례가 없어(같은 rollout이 두 PC에서 각각 앞서가는 상황은 실제로 두 PC를 오간 이력이 있어야 함), 합성 스냅샷(실제 rollout 파일을 복사해 앞부분만 자르거나 뒷부분을 다르게 바꾼 것)으로 재현·검증했다. `New`/`Identical`/`IncomingAhead`는 실제 데이터만으로도(Export 후 자기 자신과 비교, 실제로 두 PC를 흉내낸 합성 스냅샷) 확인했다.
+11. **(Phase 6)** 프로젝트 경로 재매핑(`ProjectPathMapper`)은 canonical path 일치 여부로만 자동 연결한다 — 프로젝트가 이동/이름 변경됐지만 사용자가 알고 있는 경우의 수동 재지정 UI는 최소한(폴더 선택 다이얼로그 없이 상태 표시만)만 만들었다. 실제 폴더 재지정은 Phase 7에서 Apply와 함께 완성할 것.
+12. **(Phase 6)** dependency-only(조상) 대화의 metadata 차이는 계산하지만 UI에는 노출하지 않는다(요구사항 11 — 조상은 상세 정보에서만) — 필요하면 `ImportConversationPreview.Metadata`는 이미 갖고 있으므로 UI만 추가하면 된다.
 
 ---
 
@@ -194,45 +251,61 @@ Preview)~7(Safe Restore)은 아직 시작 전이다.
 |---|---|---|
 | `CodexBackupManager.Domain.Tests` | `CanonicalPath`, `ConversationSelectionState` | WPF 비의존, 순수 |
 | `CodexBackupManager.Codex.Tests` | 탐지/카탈로그/rollout 파서/`ConversationItemParser`/`ConversationTranscriptBuilder`/`ThreadDependencyResolver`/확장된 `ThreadRowReader` 등 | 합성 fixture(`tests/Fixtures/CodexHome`) 사용, 실제 사용자 데이터 커밋 안 함 |
-| `CodexBackupManager.Backup.Tests` (Phase 5 신규, Phase 05_01 확장) | `ExportPlanBuilder`(dependency closure/dedupe/attachment/project 필터링 + **선택 대화 chain/metadata/ancestor/순환 누락 시 FatalErrors**), `BackupWriter`/`BackupReader`/`BackupValidator`(정상 export, 대상 파일 존재 시 시작 전 실패, 취소 시 temp 삭제 — 즉시 취소 + **300MB급 mid-copy 취소** 둘 다, Export 도중 원본 변경 감지 — 실제 파일 레이스로 재현, 100MB 스트리밍 bounded-memory, 변조 탐지, manifest 누락/버전 불일치/중복 entry/path traversal/참조 누락 검증 실패, **Windows 대소문자 충돌/checksums.json 자체 중복·불안전 경로(예외 없이 Fail)/manifest 개수 필드 불일치/project 참조 무결성/manifest.json 자체 변조 탐지**) | 전부 합성 임시 파일, 실제 사용자 데이터 없음 |
-| `CodexBackupManager.App.Tests` | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh, `CompactSummaryText`, **`MainViewModelExportTests`**(Phase 5, 실제 fixture Codex Home으로 전체 Export 파이프라인 end-to-end 검증)), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다), **`DarkScrollBarOrientationTests`**(`App.xaml` 원본 마크업에서 ScrollBar 스타일+의존 리소스만 오려내 독립 `ResourceDictionary`로 파싱, STA 스레드에서 실제 `Track.Orientation`/커맨드 검증 — `Application` 인스턴스 없이 진행) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection` 접근 |
+| `CodexBackupManager.Backup.Tests` (Phase 5 신규, Phase 05_01 확장, Phase 6 확장) | `ExportPlanBuilder`(dependency closure/dedupe/attachment/project 필터링 + **선택 대화 chain/metadata/ancestor/순환 누락 시 FatalErrors**), `BackupWriter`/`BackupReader`/`BackupValidator`(정상 export, 대상 파일 존재 시 시작 전 실패, 취소 시 temp 삭제 — 즉시 취소 + **300MB급 mid-copy 취소** 둘 다, Export 도중 원본 변경 감지 — 실제 파일 레이스로 재현, 100MB 스트리밍 bounded-memory, 변조 탐지, manifest 누락/버전 불일치/중복 entry/path traversal/참조 누락 검증 실패, **Windows 대소문자 충돌/checksums.json 자체 중복·불안전 경로(예외 없이 Fail)/manifest 개수 필드 불일치/project 참조 무결성/manifest.json 자체 변조 탐지**), **`ImportPreviewBuilder`**(Phase 6, 실제 Export 파이프라인으로 만든 진짜 `.codexbackup`으로 New/Identical/IncomingAhead/LocalAhead/Diverged/Unverifiable 전부 재현, 여러 대화 혼합, dependency-only 분리, malformed backup → Preview 생성 금지, **Import Preview 동안 로컬 파일 수정 0건 확인**, 어떤 project에도 속하지 않은 선택 대화가 사라지지 않는지), **`ProjectPathMapperTests`**/**`MetadataDifferenceAnalyzerTests`**(canonical path 일치/불일치, metadata 필드별 차이) | 전부 합성 임시 파일, 실제 사용자 데이터 없음 |
+| `CodexBackupManager.Codex.Tests` (Phase 6 확장) | 기존 항목 전부 + **`ConversationRevisionComparerTests`**(Identical/IncomingAhead/LocalAhead/Diverged 전 조합, 세그먼트 추가, parent cutoff 경계(ordinal/byte 둘 다 off-by-one까지), `.jsonl` vs `.jsonl.zst` 동일 내용, 같은 ThreadId·다른 lineage → Diverged, `ConversationRevisionBuilder`의 Unverifiable 판정 — 체인 없음/순환/조상 누락) | `ConversationTranscriptBuilder`/`ThreadDependencyResolver` 리팩터링(`ResolveFileSlices` 공유) 후에도 기존 178건 전부 회귀 없이 통과 확인 |
+| `CodexBackupManager.App.Tests` | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh, `CompactSummaryText`, `MainViewModelExportTests`(Phase 5, 실제 fixture Codex Home으로 전체 Export 파이프라인 end-to-end 검증), **`MainViewModelImportPreviewTests`**(Phase 6, 실제 fixture Codex Home 2개로 Export→Import Preview 왕복 — 전부 Identical 확인, malformed backup 처리)), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다), **`DarkScrollBarOrientationTests`**(`App.xaml` 원본 마크업에서 ScrollBar 스타일+의존 리소스만 오려내 독립 `ResourceDictionary`로 파싱, STA 스레드에서 실제 `Track.Orientation`/커맨드 검증 — `Application` 인스턴스 없이 진행) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection` 접근 |
 
-마지막 전체 실행 결과(Phase 05_01 포함): `Domain 64 + Codex 178 + Backup 30 + App 84 = 356건 전부
+마지막 전체 실행 결과(Phase 6 포함): `Domain 64 + Codex 194 + Backup 52 + App 86 = 396건 전부
 통과`, `dotnet build` 경고/오류 0. 의존 방향은 `App → Backup → Codex → Domain`(단방향, 역방향 없음).
 
 **여전히 커버하지 못한 테스트 항목(정직하게 남김)**: 대량의 요구 테스트 목록 중 다음은
-자동화 테스트로 명시적으로 덮지 않았다 — 향후 Phase 6/7 작업 시 필요하면 추가할 것.
-- 실제 `.jsonl.zst` 파일로의 byte-for-byte 보존(합성 데이터로만 검증, §4-3 참고)
+자동화 테스트로 명시적으로 덮지 않았다 — 향후 Phase 7 작업 시 필요하면 추가할 것.
+- 실제 `.jsonl.zst` 파일로의 byte-for-byte 보존(합성 데이터로만 검증, §4-3 참고). Phase 6의 revision
+  비교도 같은 한계 — `.zst` 쪽은 합성 fixture로만 확인했다.
 - Writer의 일반 예외(디스크 풀 등) 발생 시 temp 삭제 — "원본 변경 감지"/"취소" 예외 경로는 실제로
   검증했지만, 그 밖의 임의 예외 종류까지 전부 개별 테스트하지는 않았다(다만 `finally` 블록이
   예외 종류에 무관하게 temp를 지우므로 구조적으로는 커버된다)
 - selection snapshot에 없는 대화가 "우연히" 다른 곳에서 독립적으로 export되지 않는다는 것은
   `ExportPlanBuilder` 테스트로 확인했지만, UI 트리 체크박스 조작까지 엮은 end-to-end는 아니다
+- **(Phase 6)** 실제 `.codex` 데이터에 3단계 이상 분기(조상의 조상)나 `Diverged`/`LocalAhead` 실제
+  사례가 없어, 실제 rollout 파일을 복사한 합성 스냅샷으로 재현했다(§4-10 참고) — 진짜로 두 PC를
+  오간 이력이 있는 데이터는 아직 검증하지 못했다.
 
 실제 `.codex` 데이터 재검증용 스크래치패드 하네스 패턴(세션마다 새로 만들어야 함, 세션 scratchpad 디렉터리에 위치):
-`CodexDetectionService` → `CodexCatalogBuilder.Build` → `ConversationTranscriptBuilder.Build` 순으로 실제 카탈로그/transcript를 만들고, 대화 원문은 출력하지 않고 개수/해시/구조 메타데이터만 출력하는 방식을 계속 써왔다.
+`CodexDetectionService` → `CodexCatalogBuilder.Build` → `ConversationTranscriptBuilder.Build` 순으로 실제 카탈로그/transcript를 만들고, 대화 원문은 출력하지 않고 개수/해시/구조 메타데이터만 출력하는 방식을 계속 써왔다. Phase 6에서는 여기에 `ExportPlanBuilder`/`ManifestBuilder`/`BackupWriter`로 실제 선택 대화(최대 40개, 세그먼트/분기 사례 우선 포함)를 진짜 `.codexbackup`으로 만들고, `ImportPreviewBuilder.Build`로 그 backup을 같은 카탈로그와 다시 비교(자기 자신이므로 전부 `Identical`이어야 함)하는 절차를 추가했다 — 실제 rollout 파일 하나를 복사해 앞부분만 자르거나(IncomingAhead/LocalAhead 재현) 뒷부분을 다르게 바꿔(Diverged 재현) 합성 스냅샷도 실제 파일 기반으로 만들었다.
 
 ---
 
 ## 7. 다음에 할 일이 주어지면
 
-Phase 6(Import Preview)을 시작하게 되면 먼저 확인할 것:
-- `docs/codexbackup-format-v1.md`는 이제 **FROZEN**이다(Phase 05_01 완료 기준) — Phase 6은 이 스펙을
-  그대로 신뢰하고 시작해도 된다. 스펙을 바꿔야 할 발견이 있으면 먼저 이 문서를 갱신할 것.
-- `CodexBackupManager.Backup.Reading.BackupReader`/`Validation.BackupValidator`가 이미 "읽기/검증"을
-  구현해 뒀다 — Import Preview는 이걸 그대로 재사용해야 한다(새로 만들지 말 것). `BackupValidator`는
-  이제 malformed 입력에서도 예외를 던지지 않고 항상 `BackupValidationResult`를 돌려주므로(Phase
-  05_01), Import Preview UI가 외부 `.codexbackup` 파일을 열 때 안전하게 그 결과를 그대로 화면
-  데이터로 쓸 수 있다.
+Phase 7(Safe Restore/Apply)을 시작하게 되면 먼저 확인할 것:
+- `docs/import-preview-phase6.md`가 Phase 6의 정식 스펙이다(`RevisionRelation` 정의/fast-forward
+  판정 규칙/divergence 규칙/metadata diff 정책/path remapping preview 전부 여기 있다). Phase 7은
+  `ImportPreview`(=`Backup.Import.ImportPreview`)를 입력으로 받아 실제로 적용하는 계층이다 —
+  Preview 판정 로직을 다시 만들지 말 것.
+- **Phase 6의 `ImportPlannedAction`이 이미 기본 정책을 정해 뒀다**: `New`→Import,
+  `Identical`→NoOp(다시 쓰지 않기), `IncomingAhead`→Fast-forward Update, `LocalAhead`→Skip(로컬을
+  뒤로 되돌리지 않기), `Diverged`→RequiresDecision(자동 merge 금지, 사용자 결정 필요),
+  `Unverifiable`→Blocked(적용 금지). Phase 7은 이 계획을 실행하는 Snapshot/Rollback/실제 쓰기를
+  더하는 것이지, 판정 정책 자체를 다시 정하는 게 아니다.
+- **Fast-forward(IncomingAhead) 적용은 파일 append/복사 + state DB 갱신이 필요하다** —
+  `ConversationRevision`/`RolloutSlice`가 이미 "정확히 어느 rollout id부터 몇 바이트가 새로
+  추가됐는지"를 알고 있으므로(`ConversationRevisionComparer`의 prefix 검증 로직 재사용 가능), 이
+  정보를 그대로 Restore 계획에 활용할 것 — 처음부터 다시 diff를 계산하지 말 것.
+- **Diverged는 자동 merge하지 않는다.** Phase 6은 판정만 했다 — Phase 7에서 "로컬 유지/backup으로
+  교체(고위험)/복사본으로 가져오기" 중 어떤 선택지를 어떻게 구현할지 아직 결정된 게 없다. 두
+  rollout을 메시지 단위로 임의로 합치는 시도는 하지 말 것(요구사항으로 명시적으로 금지됨).
+- `ProjectPathMapper`가 자동 연결 후보만 제안해 뒀다 — 사용자가 수동으로 재지정하는 UI(폴더 선택
+  다이얼로그)와 그 결과를 실제로 Codex에 반영하는 로직은 Phase 7에서 완성할 것.
 - `manifest.attachments[]`(원본 경로 ↔ entry 경로 역매핑)와 `BackupConversationMetadata`의 원본
-  38컬럼 필드 전부가 Import Preview/Restore가 실제로 쓸 수 있는 재료다 — `resolvedTitle` 같은
-  가공값이 아니라 원본 필드를 기준으로 Restore 로직을 설계할 것.
-- `docs/codexbackup-format-v1.md`가 Backup V1의 정식 스펙이다 — `CLAUDE.md` §11~13은 이제 이 문서로
-  대체된 **초안**이니 그대로 구현하지 말 것(§11~13을 갱신하거나 이 문서를 가리키게 정리하는 것도
-  고려할 것).
-- Import 시 프로젝트 경로 재매핑(원본 절대경로는 manifest에 있지만 다른 PC에선 유효하지 않을 수
-  있다), Thread ID 충돌 처리(기본 "건너뛰기"), 실제 Codex에 적용(Apply)은 전부 Phase 7의 영역이다 —
-  Phase 6은 "미리보기"까지만.
+  38컬럼 필드 전부가 Restore가 실제로 쓸 수 있는 재료다 — `resolvedTitle` 같은 가공값이 아니라
+  원본 필드를 기준으로 Restore 로직을 설계할 것.
+- `docs/codexbackup-format-v1.md`가 Backup V1의 정식 스펙이다(FROZEN) — `CLAUDE.md` §11~13은 이제 이
+  문서로 대체된 **초안**이니 그대로 구현하지 말 것.
+- Thread ID 충돌 처리(기본 "건너뛰기"), Snapshot/Rollback, Codex 실행 여부 확인은 전부 Phase 7의
+  영역이다 — Phase 6은 판정/미리보기까지만 하고 Codex에 아무것도 쓰지 않았다(실제 `.codex` 데이터로
+  재확인: 이번 세션 작업 전후 `state_5.sqlite`/`-wal`/`-shm`/`session_index.jsonl`/
+  `.codex-global-state.json`/`config.toml` 해시 전부 동일).
 - Phase 5가 의도적으로 제외한 것(`attachments\`/`visualizations\`/`generated_images\` 실제 파일,
   §3 Export 항목·§4 참고)을 Import/Restore 완전성 기준에 포함시킬지는 아직 결정되지 않았다 — 사용자
   요청 없이 임의로 범위를 넓히지 말 것.

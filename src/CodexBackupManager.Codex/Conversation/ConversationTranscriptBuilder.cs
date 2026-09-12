@@ -5,7 +5,6 @@ using System.Threading;
 using CodexBackupManager.Codex.Threads;
 using CodexBackupManager.Domain.Codex.Conversation;
 using CodexBackupManager.Domain.Codex.Rollout;
-using CodexBackupManager.Domain.Codex.Sessions;
 using CodexBackupManager.Domain.Codex.Threads;
 
 namespace CodexBackupManager.Codex.Conversation;
@@ -136,29 +135,18 @@ public static class ConversationTranscriptBuilder
         List<string> warnings,
         CancellationToken cancellationToken)
     {
-        var messages = new List<ConversationMessage>();
+        // 파일별 컷오프 계산 자체는 Export(Phase 5)/Import Preview(Phase 6)와 공유하는
+        // ThreadDependencyResolver.ResolveFileSlices가 한다 — 여기서는 그 결과대로 파싱만 한다.
+        var link = new ThreadDependencyResolver.ChainLink(chain.ThreadId, chain, files);
+        IReadOnlyList<ThreadDependencyResolver.FileSlice> slices = ThreadDependencyResolver.ResolveFileSlices(
+            link, externalTargetRolloutId, externalCutoffOrdinal, externalCutoffByteOffset);
 
-        for (int i = 0; i < files.Count; i++)
+        var messages = new List<ConversationMessage>();
+        foreach (ThreadDependencyResolver.FileSlice slice in slices)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RolloutFileReference file = files[i];
-
-            bool isExternalTarget = externalTargetRolloutId is not null &&
-                string.Equals(externalTargetRolloutId, file.OwnRolloutId, StringComparison.OrdinalIgnoreCase);
-
-            if (isExternalTarget)
-            {
-                messages.AddRange(ReadOneFile(file, externalCutoffOrdinal, externalCutoffByteOffset, warnings, cancellationToken));
-                // 이 thread를 상속한 대상(다른 thread의 분기, 또는 이 체인을 상속하는 다음 조상)
-                // 입장에서는 이 지점 이후로 이어지는 세그먼트는 무관한 별도 연속이다.
-                return messages;
-            }
-
-            HistoryBaseReference? nextOwnHistoryBase = i + 1 < chain.Files.Count ? chain.FileHistoryBases[i + 1] : null;
-            long? internalOrdinalCutoff = nextOwnHistoryBase?.EndOrdinalExclusive;
-            long? internalByteCutoff = nextOwnHistoryBase?.EndByteOffset;
-
-            messages.AddRange(ReadOneFile(file, internalOrdinalCutoff, internalByteCutoff, warnings, cancellationToken));
+            messages.AddRange(ReadOneFile(
+                slice.File, slice.CutoffOrdinalExclusive, slice.CutoffByteOffsetExclusive, warnings, cancellationToken));
         }
 
         return messages;

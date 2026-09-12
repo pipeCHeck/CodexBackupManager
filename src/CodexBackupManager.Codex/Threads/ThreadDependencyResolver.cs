@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using CodexBackupManager.Domain.Codex.Rollout;
+using CodexBackupManager.Domain.Codex.Sessions;
 using CodexBackupManager.Domain.Codex.Threads;
 
 namespace CodexBackupManager.Codex.Threads;
@@ -107,4 +108,65 @@ public static class ThreadDependencyResolver
 
         return chain.Files;
     }
+
+    /// <summary>
+    /// <see cref="ChainLink"/> 하나에 실제로 적용할 파일별 컷오프(ordinal/byte)를 계산한다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Conversation.ConversationTranscriptBuilder"/>(메시지 읽기)와 Phase 6의
+    /// <c>ConversationRevisionBuilder</c>(fingerprint 해싱)가 이 메서드를 공유한다 — "어느 파일까지,
+    /// 어디까지 포함하는가"를 두 곳이 각자 다시 구현하면 언젠가 미묘하게 어긋난다(drift). 여기서
+    /// 새로운 경계 규칙을 만들지 않는다 — 전부 기존 <see cref="ThreadChain.FileHistoryBases"/>와
+    /// 외부에서 넘어온 컷오프(다음 링크의 <c>ParentEndOrdinalExclusive</c>/<c>ParentEndByteOffset</c>)를
+    /// 그대로 적용할 뿐이다.
+    /// </para>
+    /// <para>
+    /// <paramref name="link"/>.Files는 이미 <see cref="SelectFiles"/>가 골라 둔 파일 목록이다(외부
+    /// 분기 대상까지만 자른 부분집합, 또는 leaf 자신이면 전체). 이 메서드는 그 목록의 각 파일에
+    /// 컷오프를 매기고, 외부 분기 대상 파일을 만나면 그 파일에서 멈춘다(그 뒤는 이 링크가 상속하는
+    /// 대상 관점에서 무관한 별도 연속이므로 애초에 <see cref="SelectFiles"/>가 잘라냈어야 한다 — 그래도
+    /// 안전하게 다시 한번 멈춘다).
+    /// </para>
+    /// </remarks>
+    /// <param name="link">대상 링크(이미 <see cref="SelectFiles"/>로 파일이 골라져 있다).</param>
+    /// <param name="externalTargetRolloutId">
+    /// 다음(자식) thread가 분기 지점으로 가리킨 rollout ID. <c>null</c>이면 외부 컷오프를 적용하지 않는다.
+    /// </param>
+    /// <param name="externalCutoffOrdinalExclusive">외부 분기 대상 파일에 적용할 ordinal 컷오프.</param>
+    /// <param name="externalCutoffByteOffsetExclusive">외부 분기 대상 파일에 적용할 byte offset 컷오프.</param>
+    public static IReadOnlyList<FileSlice> ResolveFileSlices(
+        ChainLink link,
+        string? externalTargetRolloutId,
+        long? externalCutoffOrdinalExclusive,
+        long? externalCutoffByteOffsetExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(link);
+
+        var result = new List<FileSlice>(link.Files.Count);
+        for (int i = 0; i < link.Files.Count; i++)
+        {
+            RolloutFileReference file = link.Files[i];
+
+            bool isExternalTarget = externalTargetRolloutId is not null &&
+                string.Equals(externalTargetRolloutId, file.OwnRolloutId, StringComparison.OrdinalIgnoreCase);
+
+            if (isExternalTarget)
+            {
+                result.Add(new FileSlice(file, externalCutoffOrdinalExclusive, externalCutoffByteOffsetExclusive));
+                return result; // 이 지점 이후로 이어지는 세그먼트는 무관한 별도 연속이다.
+            }
+
+            HistoryBaseReference? nextOwnHistoryBase = i + 1 < link.Chain.Files.Count ? link.Chain.FileHistoryBases[i + 1] : null;
+            result.Add(new FileSlice(file, nextOwnHistoryBase?.EndOrdinalExclusive, nextOwnHistoryBase?.EndByteOffset));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// <see cref="ResolveFileSlices"/>가 계산한, 파일 하나 + 그 파일에 적용할 컷오프.
+    /// 둘 다 <c>null</c>이면 파일 전체가 포함된다.
+    /// </summary>
+    public sealed record FileSlice(RolloutFileReference File, long? CutoffOrdinalExclusive, long? CutoffByteOffsetExclusive);
 }

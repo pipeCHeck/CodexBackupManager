@@ -7,9 +7,14 @@ namespace CodexBackupManager.Backup.Manifest;
 /// <c>.codexbackup</c> 파일의 <c>manifest.json</c>. 스펙은 <c>docs/codexbackup-format-v1.md</c> §3.2.
 /// </summary>
 /// <remarks>
-/// <c>checksums.json</c>과 달리 이 파일 자신은 체크섬 목록에 없다 — 파일 내용이 확정되기 전에는
-/// 자기 자신의 해시를 계산할 수 없어 순환이 생기기 때문이다(§3.3). 무결성은 "정상 JSON 파싱 +
-/// <see cref="BackupFormatVersion"/> 존재"로 판정한다.
+/// <b>Phase 05_01 정정</b>: <c>manifest.json</c>도 이제 <c>checksums.json</c>에 체크섬으로 기록된다
+/// (<see cref="Writing.BackupWriter"/>가 payload를 전부 쓴 뒤 manifest 바이트를 확정해 그 SHA-256을
+/// checksums 목록에 추가한다). <c>checksums.json</c>이 <c>manifest.json</c>의 해시를 기록하지만
+/// <c>manifest.json</c>은 <c>checksums.json</c> 내용을 전혀 참조하지 않으므로 방향이 하나뿐이라
+/// 순환이 아니다 — 최초 설계는 이걸 순환으로 오판해 manifest를 체크섬 보호 대상에서 뺐었다(틀린
+/// 판단이었다, §3.3). 여전히 체크섬으로 보호되지 않는 건 <c>checksums.json</c> 자기 자신뿐이다(이건
+/// 진짜 순환 — 자기 자신의 최종 바이트를 알아야 자기 자신의 해시를 계산할 수 있다). 그 무결성은
+/// "정상 JSON 파싱" + 그 안의 각 항목이 실제 ZIP entry와 길이/해시가 일치하는지로 간접 검증한다.
 /// </remarks>
 public sealed record BackupManifest
 {

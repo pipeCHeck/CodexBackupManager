@@ -3,7 +3,8 @@
 OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내보내기 · 불러오기 · 복원하는 **Windows 데스크톱 프로그램**.
 
 > **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
-> **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) 완료.** Phase 6 Import Preview는
+> **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
+> **+ Phase 6(Import Preview) 완료.** Codex에는 아직 아무것도 쓰지 않는다 — Phase 7(Safe Restore)은
 > 아직 예정입니다.
 
 ---
@@ -75,7 +76,8 @@ CodexBackupManager/
 │  ├─ project-status-and-handoff.md              현재 상태/다음 작업 인계 문서 ★★ 세션 시작 시 가장 먼저 읽을 것
 │  ├─ phase0-codex-investigation-2026-09-11.md   조사 원본 기록
 │  ├─ codex-storage-format.md                    구현 기준 문서 ★ 먼저 읽을 것
-│  └─ codexbackup-format-v1.md                   Phase 5 Export 포맷 스펙 + Restore Sufficiency Audit
+│  ├─ codexbackup-format-v1.md                   Backup Format V1 스펙(FROZEN) + Restore Sufficiency Audit
+│  └─ import-preview-phase6.md                   Phase 6 Import Preview 스펙(RevisionRelation/fast-forward/divergence/metadata diff/path remapping)
 ├─ scripts/verify-phase1.ps1
 ├─ src/
 │  ├─ CodexBackupManager.Domain/     의존성 0. 값 객체와 모델만
@@ -88,6 +90,9 @@ CodexBackupManager/
 │  │    Codex/Selection/ConversationSelectionState
 │  │                                 Phase 4 백업 선택의 단일 source of truth(ThreadId 기준,
 │  │                                 WPF 의존성 없음 — Viewer 포커스와 완전히 분리된 상태)
+│  │    Codex/Import/…                Phase 6 — RolloutSlice/ConversationRevision(revision
+│  │                                 fingerprint), RevisionRelation, MetadataDifferences,
+│  │                                 ProjectPathMapping. 전부 순수 데이터, I/O 없음
 │  ├─ CodexBackupManager.Codex/      Codex 데이터 접근 (Read-Only)
 │  │    Locating/CodexLocator        CODEX_HOME → %USERPROFILE%\.codex → 저장된 경로 → 사용자 선택
 │  │    Locating/CodexHomeValidator  Valid / Probable / Invalid + 사유
@@ -110,19 +115,30 @@ CodexBackupManager/
 │  │                                 ExportPlanBuilder가 이 하나의 코드를 공유한다)
 │  │    Attachments/LocalImageAttachmentScanner
 │  │                                 rollout content가 참조하는 local_image 첨부 경로를 찾는다
-│  ├─ CodexBackupManager.Backup/     `.codexbackup` Export/검증 (Phase 5)
+│  │    Rollout/RolloutSliceHasher, IRolloutSliceReader
+│  │                                 Phase 6 — rollout 슬라이스의 SHA-256/길이를 스트리밍으로 계산.
+│  │                                 로컬 파일/backup ZIP entry를 같은 인터페이스로 추상화
+│  │    Revisions/ConversationRevisionBuilder, ConversationRevisionComparer
+│  │                                 Phase 6 — thread의 revision fingerprint를 만들고 두 revision을
+│  │                                 비교해 RevisionRelation을 판정(timestamp 아닌 실제 내용 기준)
+│  ├─ CodexBackupManager.Backup/     `.codexbackup` Export/검증 (Phase 5) + Import Preview (Phase 6)
 │  │    Planning/ExportPlanBuilder   선택 ThreadId → 무엇을 내보낼지 계산(dedupe/dependency closure)
 │  │    Manifest/…                  manifest.json 모델 + 직렬화
 │  │    Checksums/…                 checksums.json 모델 + 직렬화
 │  │    Writing/BackupWriter        스트리밍 ZIP 작성 + atomic publish + self-validation
 │  │    Reading/BackupReader        `.codexbackup` 읽기 전용 리더
 │  │    Validation/BackupValidator  manifest/체크섬/path traversal/JSONL 최소 parse 검증
+│  │    Import/ImportPreviewBuilder Phase 6 진입점 — 검증 → backup lineage 재구성 → RevisionRelation
+│  │                                 판정 → metadata diff → path mapping까지, Codex에는 쓰지 않는다
+│  │    Import/BackupCatalogReader  backup의 payload/rollouts/만으로 로컬과 같은 lineage 재구성
+│  │    Import/ImportConflictAnalyzer, MetadataDifferenceAnalyzer, ProjectPathMapper
 │  └─ CodexBackupManager.App/        WPF (MVVM). 로직 없음
 └─ tests/
    ├─ CodexBackupManager.Domain.Tests/
-   ├─ CodexBackupManager.Codex.Tests/
-   ├─ CodexBackupManager.Backup.Tests/
-   ├─ CodexBackupManager.App.Tests/  ViewModel 단위 테스트(Selection tri-state, Viewer 독립성 등)
+   ├─ CodexBackupManager.Codex.Tests/    Revisions/ConversationRevisionComparerTests(Phase 6) 포함
+   ├─ CodexBackupManager.Backup.Tests/  Import/ImportPreviewBuilderTests 등(Phase 6) 포함
+   ├─ CodexBackupManager.App.Tests/  ViewModel 단위 테스트(Selection tri-state, Viewer 독립성,
+   │                                 MainViewModelImportPreviewTests 등)
    └─ Fixtures/CodexHome/            합성 가짜 Codex Home (실제 데이터 아님)
 ```
 
@@ -289,10 +305,42 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 - **자기 자신을 다시 검증한 뒤에만 최종 파일이 된다.** temp 파일로 먼저 쓰고, `BackupValidator`로
   다시 열어 manifest/체크섬/path traversal 등을 전부 검사한 뒤에만 최종 `.codexbackup`으로 옮긴다.
   검증 실패·취소·예외 시 temp만 지우고 기존 파일은 건드리지 않는다.
-- Import/Restore는 이 Phase의 범위가 아니다 — `BackupReader`/`BackupValidator`는 "읽기/검증"까지만
-  하고, Codex에 적용하는 기능(Phase 6/7)은 아직 없다.
+- Import Preview는 Phase 6에서 완료했다(아래 참고) — `BackupReader`/`BackupValidator`(읽기/검증)를
+  그대로 재사용한다. Codex에 실제로 적용하는 기능(Apply/Restore, Phase 7)은 아직 없다.
 
 자세한 포맷 스펙과 설계 근거는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md) 참고.
+
+---
+
+## Phase 6이 표시하는 것
+
+하단에 **[백업 불러오기]** 버튼이 생긴다. `.codexbackup` 파일을 고르면(`OpenFileDialog`)
+`BackupValidator`로 즉시 검증하고, 통과하면 카탈로그/뷰어 영역을 덮는 **Import Preview** 패널이
+뜬다 — 프로젝트별로 대화 상태(신규/동일/업데이트 가능/현재 PC가 더 최신/분기 충돌/확인 불가)와
+경로 재매핑 상태를 보여준다. **선택 즉시 적용하지 않는다** — Codex에는 어떤 write도 없다(Apply는
+Phase 7).
+
+- **timestamp가 아니라 실제 rollout 내용으로 판정한다.** 같은 ThreadId를 로컬과 backup 양쪽이 갖고
+  있으면 "중복"으로 건너뛰지 않고, 실제로 소비되는 rollout byte 구간(`ConversationRevision`/
+  `RolloutSlice`)을 비교해 `RevisionRelation`(신규/동일/업데이트 가능/현재 PC가 더 최신/분기
+  충돌/확인 불가)을 판정한다 — 두 PC를 오가며 같은 대화를 이어서 작업하는 시나리오를 지원하기
+  위해서다.
+- **lineage 판단은 Viewer/Export와 완전히 같은 코드를 쓴다.** `ThreadDependencyResolver`에
+  파일별 컷오프 계산(`ResolveFileSlices`)을 추출해 Viewer(`ConversationTranscriptBuilder`)도 이걸
+  쓰도록 리팩터링했다 — 세 곳(Viewer/Export/Import Preview)이 절대 서로 다른 lineage 규칙으로
+  갈라지지 않는다.
+- **분기(Diverged)는 자동 merge하지 않는다.** "같은 rollout id, 다른 길이"는 실제로 byte prefix인지
+  다시 읽어서 확인한 뒤에만 fast-forward로 인정하고, 그렇지 않으면 분기 충돌로 표시할 뿐 Phase 6이
+  임의로 합치지 않는다.
+- **metadata 차이는 대화 내용 관계와 분리해서 보여준다.** cwd/프로젝트 연결/고정 여부/섹션/제목/
+  최근 사용 시각이 달라도 대화 내용 자체는 완전히 같을 수 있다 — 이 둘을 섞지 않는다.
+- **경로 재매핑은 제안만 한다.** backup 프로젝트의 원본 경로가 현재 PC의 로컬 프로젝트와 canonical
+  path로 일치하면 자동 연결 표시를 하지만, 실제 재지정/적용은 Phase 7의 몫이다.
+- **core와 UI가 분리돼 있다.** `MainViewModel.ImportPreviewCommand`가 `ImportPreviewBuilder.Build()`를
+  그대로 호출할 뿐, ZIP/rollout 비교 로직을 직접 갖고 있지 않다.
+
+자세한 스펙(RevisionRelation 정의, fast-forward/divergence 판정 알고리즘, metadata diff 정책,
+경로 재매핑)은 [`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md) 참고.
 
 ---
 
@@ -336,12 +384,14 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 | 3 | Conversation Viewer — User / Assistant 메시지 | **완료** |
 | 4 | Selection — 프로젝트/대화 다중 선택 | **완료** |
 | 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | **완료** |
-| 6 | Import Preview — Manifest/체크섬 검사, 충돌 검사, 경로 재매핑 | 예정 |
+| 05_01 | Backup V1 Freeze / Restore Sufficiency Hardening | **완료** |
+| 6 | Import Preview — 검증, RevisionRelation 판정(timestamp 아닌 실제 내용 기준), 경로 재매핑 제안 | **완료** |
 | 7 | Safe Restore — Snapshot → Apply → 검증 → Rollback | 예정 |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure
-정책, 첨부 정책, 체크섬/atomic export 정책을 담고 있다.
+정책, 첨부 정책, 체크섬/atomic export 정책을 담고 있다. Import Preview(Phase 6) 스펙은
+[`docs/import-preview-phase6.md`](./docs/import-preview-phase6.md)에 있다.
 
 ---
 
@@ -350,8 +400,12 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
 - `.zst` 압축 rollout은 우리가 직접 압축한 fixture로만 검증했다. 실제 Codex `.zst` 실물은 아직
   확인하지 못했다(조사 시점 이 PC에 0개). `docs/codex-storage-format.md` §9 참고.
 - `ThreadChainResolver.ResolveAncestry`(분기 조상 체인 계산)는 `ConversationTranscriptBuilder`(Viewer)와
-  `ExportPlanBuilder`(Export)가 `ThreadDependencyResolver`를 통해 **똑같이** 호출한다 — 실제
-  segmented/forked 대화로 두 경로가 일치함을 실측 확인했다.
+  `ExportPlanBuilder`(Export)/Import Preview(`ConversationRevisionBuilder`)가
+  `ThreadDependencyResolver`를 통해 **똑같이** 호출한다 — 실제 segmented/forked 대화로 세 경로가
+  일치함을 실측 확인했다.
+- **(Phase 6)** 이 PC의 실제 `.codex` 데이터에는 진짜로 두 PC를 오간 `Diverged`/`LocalAhead` 사례가
+  없어, 실제 rollout 파일을 복사·수정한 합성 스냅샷으로 재현·검증했다(`New`/`Identical`/
+  `IncomingAhead`는 실제 Export→Import Preview 왕복으로 직접 확인).
 - Export가 `attachments\`(붙여넣기 텍스트)/`visualizations\`/`generated_images\` 폴더의 실제 파일은
   아직 포함하지 않는다 — 구조적으로 안전하게 참조를 추적할 방법을 찾지 못했다(`docs/codexbackup-format-v1.md` §2 참고).
   `local_image` 참조(스크린샷 등)는 포함한다.

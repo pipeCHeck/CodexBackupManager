@@ -35,15 +35,43 @@ public static class RolloutStreamReader
         CancellationToken cancellationToken = default)
     {
         using FileStream fileStream = new(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using Stream contentStream = kind == RolloutFileKind.ZstdCompressed
-            ? new DecompressionStream(fileStream, leaveOpen: true)
-            : fileStream;
-        using StreamReader reader = new(contentStream);
-
-        while (reader.ReadLine() is { } line)
+        foreach (string line in ReadLines(fileStream, kind, cancellationToken))
         {
-            cancellationToken.ThrowIfCancellationRequested();
             yield return line;
+        }
+    }
+
+    /// <summary>
+    /// 이미 열린 원시(raw) 스트림에서 한 줄씩 읽는다(Phase 6 — backup ZIP entry처럼 파일 경로가 없는
+    /// 출처에서도 같은 압축 해제/줄 읽기 로직을 재사용하기 위함). 호출자가 스트림 소유권을 가진다 —
+    /// 이 메서드는 <c>.zst</c>면 내부적으로 <see cref="DecompressionStream"/>으로 감싸 읽을 뿐,
+    /// 전달받은 <paramref name="rawStream"/>은 닫지 않는다(leaveOpen).
+    /// </summary>
+    public static IEnumerable<string> ReadLines(
+        Stream rawStream,
+        RolloutFileKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        // rawStream은 호출자 소유다. kind가 PlainJsonl이면 contentStream은 rawStream 그 자체이므로
+        // "using Stream contentStream = ..." 형태로 감쌌다가는 여기서 rawStream까지 닫아버린다 —
+        // DecompressionStream을 새로 만든 경우에만 그것만 닫는다.
+        Stream? decompression = kind == RolloutFileKind.ZstdCompressed
+            ? new DecompressionStream(rawStream, leaveOpen: true)
+            : null;
+        Stream contentStream = decompression ?? rawStream;
+
+        try
+        {
+            using StreamReader reader = new(contentStream, leaveOpen: true);
+            while (reader.ReadLine() is { } line)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return line;
+            }
+        }
+        finally
+        {
+            decompression?.Dispose();
         }
     }
 
@@ -57,6 +85,22 @@ public static class RolloutStreamReader
     {
         int count = 0;
         foreach (string line in ReadLines(filePath, kind))
+        {
+            if (count >= maxLines)
+            {
+                yield break;
+            }
+
+            count++;
+            yield return line;
+        }
+    }
+
+    /// <summary>처음 몇 줄만 읽고 멈춘다(스트림 버전, 호출자가 스트림을 소유·정리한다).</summary>
+    public static IEnumerable<string> ReadFirstLines(Stream rawStream, RolloutFileKind kind, int maxLines)
+    {
+        int count = 0;
+        foreach (string line in ReadLines(rawStream, kind))
         {
             if (count >= maxLines)
             {

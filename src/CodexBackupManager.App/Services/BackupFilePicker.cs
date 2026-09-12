@@ -24,4 +24,18 @@ public static class BackupFilePicker
 
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
+
+    /// <summary>불러올 <c>.codexbackup</c> 경로를 고르게 한다(Phase 6). 취소하면 <c>null</c>.</summary>
+    public static string? PickOpenLocation()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "백업 불러오기",
+            Filter = "Codex Backup (*.codexbackup)|*.codexbackup",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+
+        return dialog.ShowDialog() == true ? dialog.FileName : null;
+    }
 }

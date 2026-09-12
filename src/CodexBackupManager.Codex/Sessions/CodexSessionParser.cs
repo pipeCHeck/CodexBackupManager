@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
@@ -38,23 +39,11 @@ public static class CodexSessionParser
 
         try
         {
-            foreach (string line in RolloutStreamReader.ReadFirstLines(file.FullPath, file.Kind, MaxLinesToSearch))
-            {
-                if (string.IsNullOrWhiteSpace(line))
-                {
-                    continue;
-                }
-
-                SessionMetadata? parsed = TryParseSessionMetaLine(line, file);
-                if (parsed is not null)
-                {
-                    return new ParseResult(parsed, null);
-                }
-            }
-
-            return new ParseResult(
-                null,
-                $"{file.FileName}: 처음 {MaxLinesToSearch}줄 안에서 session_meta를 찾지 못했습니다.");
+            return ParseSessionMetadata(
+                RolloutStreamReader.ReadFirstLines(file.FullPath, file.Kind, MaxLinesToSearch),
+                file.FileName,
+                file.FullPath,
+                file.IsArchived);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -62,7 +51,60 @@ public static class CodexSessionParser
         }
     }
 
-    private static SessionMetadata? TryParseSessionMetaLine(string line, RolloutFileReference file)
+    /// <summary>
+    /// 이미 열린 원시 스트림에서 <c>session_meta</c>를 읽는다(Phase 6 — backup ZIP entry). 호출자가
+    /// 스트림을 소유·정리한다. <paramref name="sourceFilePathForRecord"/>는 <see cref="SessionMetadata.SourceFilePath"/>에
+    /// 그대로 들어간다 — 로컬 파일이면 실제 경로, backup이면 ZIP entry 경로를 넘기면 된다.
+    /// </summary>
+    public static ParseResult ParseSessionMetadata(
+        Stream rawStream,
+        RolloutFileKind kind,
+        string fileNameForMessages,
+        string sourceFilePathForRecord,
+        bool isArchived)
+    {
+        ArgumentNullException.ThrowIfNull(rawStream);
+
+        try
+        {
+            return ParseSessionMetadata(
+                RolloutStreamReader.ReadFirstLines(rawStream, kind, MaxLinesToSearch),
+                fileNameForMessages,
+                sourceFilePathForRecord,
+                isArchived);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new ParseResult(null, $"{fileNameForMessages}: 파일을 읽을 수 없습니다 ({ex.GetType().Name}).");
+        }
+    }
+
+    private static ParseResult ParseSessionMetadata(
+        IEnumerable<string> firstLines,
+        string fileNameForMessages,
+        string sourceFilePathForRecord,
+        bool isArchived)
+    {
+        foreach (string line in firstLines)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            SessionMetadata? parsed = TryParseSessionMetaLine(line, sourceFilePathForRecord, isArchived);
+            if (parsed is not null)
+            {
+                return new ParseResult(parsed, null);
+            }
+        }
+
+        return new ParseResult(
+            null,
+            $"{fileNameForMessages}: 처음 {MaxLinesToSearch}줄 안에서 session_meta를 찾지 못했습니다.");
+    }
+
+    private static SessionMetadata? TryParseSessionMetaLine(string line, string sourceFilePath, bool isArchived)
     {
         JsonDocument document;
         try
@@ -132,8 +174,8 @@ public static class CodexSessionParser
                 ForkedFromId = GetString(payload, "forked_from_id"),
                 ForkedFromOrdinalExclusive = GetInt64(payload, "forked_from_ordinal_exclusive"),
                 HistoryBase = historyBase,
-                SourceFilePath = file.FullPath,
-                IsArchived = file.IsArchived,
+                SourceFilePath = sourceFilePath,
+                IsArchived = isArchived,
             };
         }
     }
