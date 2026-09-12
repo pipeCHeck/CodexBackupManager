@@ -19,4 +19,18 @@ public static class FolderPicker
 
         return dialog.ShowDialog() == true ? dialog.FolderName : null;
     }
+
+    /// <summary>
+    /// Phase 06_01 — Import Preview에서 프로젝트 경로를 수동으로 재지정할 때 쓴다. 취소하면 <c>null</c>.
+    /// </summary>
+    public static string? PickProjectFolder()
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "프로젝트 폴더를 선택하세요",
+            Multiselect = false,
+        };
+
+        return dialog.ShowDialog() == true ? dialog.FolderName : null;
+    }
 }

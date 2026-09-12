@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using CodexBackupManager.Backup.Manifest;
@@ -10,6 +11,7 @@ using CodexBackupManager.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Import;
 using CodexBackupManager.Domain.Codex.Threads;
+using CodexBackupManager.Domain.Paths;
 
 namespace CodexBackupManager.Backup.Import;
 
@@ -122,7 +124,7 @@ public static class ImportPreviewBuilder
         localByThreadId.TryGetValue(conversation.ThreadId, out ConversationEntry? localEntry);
 
         RevisionRelation relation = DetermineRelation(
-            conversation.ThreadId, localCatalog.Chains, localSliceReader,
+            conversation.ThreadId, localCatalog.Chains, localByThreadId.ContainsKey(conversation.ThreadId), localSliceReader,
             backupCatalog.Chains, backupSliceReader, warnings, cancellationToken);
 
         MetadataDifferences metadataDiff = MetadataDifferenceAnalyzer.Compare(localEntry, conversation);
@@ -141,15 +143,36 @@ public static class ImportPreviewBuilder
     private static RevisionRelation DetermineRelation(
         string threadId,
         IReadOnlyDictionary<string, ThreadChain> localChains,
+        bool existsInLocalCatalog,
         IRolloutSliceReader localSliceReader,
         IReadOnlyDictionary<string, ThreadChain> backupChains,
         IRolloutSliceReader backupSliceReader,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
-        if (!localChains.ContainsKey(threadId))
+        bool hasLocalChain = localChains.ContainsKey(threadId);
+
+        // Phase 06_01 정정: "New"는 현재 Codex에 이 ThreadId가 정말로 전혀 없을 때만이다 — chain이
+        // 없다는 사실 하나만으로 New로 단정하지 않는다. state DB/카탈로그(dependency-only/internal
+        // thread를 포함해 CodexCatalog.AllConversations 전체)에 같은 ThreadId metadata가 있는데
+        // rollout 파일 삭제/경로 손상/파싱 실패 등으로 chain만 없는 상태라면, 이건 "새 대화"가 아니라
+        // "로컬 상태가 손상돼 안전하게 판정할 수 없는" 경우다 — New로 잘못 분류하면 Phase 7이 이미
+        // 존재하는 대화를 "새 Import"로 취급해 위험한 동작을 할 수 있다.
+        // Phase 06_01 정정: "New"는 현재 Codex에 이 ThreadId가 정말로 전혀 없을 때만이다 — chain이
+        // 없다는 사실 하나만으로 New로 단정하지 않는다. state DB/카탈로그(dependency-only/internal
+        // thread를 포함해 CodexCatalog.AllConversations 전체)에 같은 ThreadId metadata가 있는데
+        // rollout 파일 삭제/경로 손상/파싱 실패 등으로 chain만 없는 상태라면, 이건 "새 대화"가 아니라
+        // "로컬 상태가 손상돼 안전하게 판정할 수 없는" 경우다 — New로 잘못 분류하면 Phase 7이 이미
+        // 존재하는 대화를 "새 Import"로 취급해 위험한 동작을 할 수 있다.
+        if (!hasLocalChain && !existsInLocalCatalog)
         {
             return RevisionRelation.New;
+        }
+
+        if (!hasLocalChain)
+        {
+            warnings.Add("로컬에 이 대화의 metadata는 있지만 rollout 파일 체인을 찾을 수 없습니다.");
+            return RevisionRelation.Unverifiable;
         }
 
         ConversationRevisionBuildResult localResult =
@@ -170,5 +193,66 @@ public static class ImportPreviewBuilder
 
         return ConversationRevisionComparer.Compare(
             localResult.Revision, localSliceReader, incomingResult.Revision, backupSliceReader, cancellationToken);
+    }
+
+    /// <summary>
+    /// 사용자가 특정 프로젝트의 경로를 직접 재지정한 결과를 <paramref name="preview"/>에 반영한
+    /// 새 <see cref="ImportPreview"/>를 만든다(Phase 06_01 — 요구사항 3). Codex에는 아무것도 쓰지
+    /// 않는다 — 이 메서드는 <see cref="ImportPreview"/>(메모리 상의 Preview 결과)만 갱신한다.
+    /// </summary>
+    /// <remarks>
+    /// revision 비교 결과(<see cref="ImportConversationPreview.Relation"/>/<see cref="ImportConversationPreview.PlannedAction"/>)는
+    /// 경로 재매핑과 무관하므로 다시 계산하지 않는다 — 해당 프로젝트의
+    /// <see cref="ImportProjectPreview.PathMapping"/>만 교체한다. View code-behind가 아니라 이
+    /// 메서드(그리고 <see cref="ProjectPathMapping.WithManualOverride"/>)가 override 상태의 유일한
+    /// 저장 장소다 — Phase 7은 이 결과를 그대로 받아 쓰면 된다.
+    /// </remarks>
+    /// <param name="preview">기존 Preview(<see cref="ImportPreview.Success"/>가 <c>true</c>여야 한다).</param>
+    /// <param name="projectId">재지정할 프로젝트의 backup 쪽 원본 ID. "기타 대화"는 <c>null</c>이며 재지정할 수 없다.</param>
+    /// <param name="userSelectedPath">사용자가 고른 폴더 경로. 실제로 존재하는 디렉터리여야 한다.</param>
+    /// <exception cref="InvalidOperationException"><paramref name="preview"/>가 실패했거나, 대상 프로젝트가 "기타 대화"일 때.</exception>
+    /// <exception cref="ArgumentException">해당 <paramref name="projectId"/>를 가진 프로젝트가 없거나 경로가 비었을 때.</exception>
+    /// <exception cref="DirectoryNotFoundException"><paramref name="userSelectedPath"/>가 실제 디렉터리로 존재하지 않을 때.</exception>
+    public static ImportPreview ApplyManualProjectPathOverride(ImportPreview preview, string? projectId, string userSelectedPath)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userSelectedPath);
+
+        if (!preview.Success)
+        {
+            throw new InvalidOperationException("검증에 실패한 Preview에는 경로를 재지정할 수 없습니다.");
+        }
+
+        // Codex에는 쓰지 않지만, 사용자가 고른 경로 자체는 실제로 존재하는 폴더인지 확인한다 —
+        // 존재하지 않는 경로를 Import Plan에 그대로 흘려보내지 않는다.
+        if (!Directory.Exists(userSelectedPath))
+        {
+            throw new DirectoryNotFoundException("지정한 폴더가 존재하지 않습니다.");
+        }
+
+        CanonicalPath canonical = CanonicalPath.Create(userSelectedPath);
+
+        int matchIndex = -1;
+        for (int i = 0; i < preview.Projects.Count; i++)
+        {
+            if (string.Equals(preview.Projects[i].ProjectId, projectId, StringComparison.Ordinal))
+            {
+                matchIndex = i;
+                break;
+            }
+        }
+
+        if (matchIndex < 0)
+        {
+            throw new ArgumentException($"프로젝트를 찾을 수 없습니다: {projectId ?? "(null)"}", nameof(projectId));
+        }
+
+        ImportProjectPreview target = preview.Projects[matchIndex];
+        ProjectPathMapping updatedMapping = target.PathMapping.WithManualOverride(canonical.Display);
+
+        List<ImportProjectPreview> updatedProjects = preview.Projects.ToList();
+        updatedProjects[matchIndex] = target with { PathMapping = updatedMapping };
+
+        return preview with { Projects = updatedProjects };
     }
 }

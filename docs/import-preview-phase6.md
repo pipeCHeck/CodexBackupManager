@@ -5,8 +5,15 @@
 포맷으로 백업하는가"를 다룬다면, 이 문서는 "그 backup을 다른 PC의 현재 상태와 어떻게 비교하고
 보여주는가"를 다룬다.
 
-> **범위**: Phase 6은 판정과 미리보기까지만 한다. Codex 원본에는 어떤 write도 하지 않는다(SQLite
-> INSERT/UPDATE, rollout append/복사, global-state 변경, Snapshot/Rollback 전부 Phase 7의 역할).
+> **상태: FROZEN (Phase 06_01 완료 기준).** Phase 6에서 처음 확정한 스펙을 재검토로 발견된 안전성
+> 경계 케이스 문제(§4의 segment transition, §2의 New/Unverifiable 정책, §7 수동 경로 재지정, §8.1
+> `ImportPlan` freeze 경계)에 맞춰 Phase 06_01에서 수정했다. Phase 7(Safe Restore/Apply)은 이 문서를
+> 그대로 신뢰하고 시작해도 된다 — 특히 **`ImportPreview`가 아니라 `ImportPlan`을 입력으로 받을 것**
+> (§8.1). 이후 변경이 필요하면 이 문서를 먼저 갱신할 것.
+
+> **범위**: Phase 6/06_01은 판정과 미리보기(및 그 freeze)까지만 한다. Codex 원본에는 어떤 write도
+> 하지 않는다(SQLite INSERT/UPDATE, rollout append/복사, global-state 변경, Snapshot/Rollback 전부
+> Phase 7의 역할).
 
 ---
 
@@ -33,7 +40,7 @@ PC A에서 Thread X 작업 → Export → PC B에서 Import → 같은 Thread X 
 
 | 값 | 의미 | Phase 7 기본 계획(`ImportPlannedAction`) |
 |---|---|---|
-| `New` | backup ThreadId가 현재 로컬 Codex에 없음(`CodexCatalog.Chains`에 없음) | `Import` — 새로 Import |
+| `New` | backup ThreadId가 현재 로컬 Codex에 **정말로 전혀 없음**(chain도 metadata도 없음 — §2.1) | `Import` — 새로 Import |
 | `Identical` | 로컬과 backup이 완전히 같은 conversation revision | `NoOp` — 아무것도 하지 않음 |
 | `IncomingAhead` | 로컬이 backup의 논리적 prefix — backup이 같은 lineage 위에서 더 진행됨 | `Update` — Fast-forward 갱신 |
 | `LocalAhead` | backup이 로컬의 논리적 prefix — 로컬이 같은 lineage 위에서 더 진행됨 | `Skip` — 로컬을 뒤로 되돌리지 않음 |
@@ -50,6 +57,29 @@ LocalAhead     → 현재 PC가 더 최신
 Diverged       → 분기 충돌
 Unverifiable   → 확인 불가
 ```
+
+### 2.1 New vs Unverifiable(Phase 06_01 정정)
+
+**"New"는 반드시 chain과 metadata가 둘 다 없을 때만 판정한다.** 최초 구현은
+`!localChains.ContainsKey(threadId)`만 보고 `New`로 판정했는데, 이러면 다음 상황을 오판한다: 로컬
+state DB(`CodexCatalog.AllConversations` — 선택 대화든 dependency-only/internal thread든 전부
+포함)에 같은 ThreadId 행이 이미 있는데, rollout 파일이 삭제됐거나 경로가 손상돼 `Chains`에서만
+빠진 경우. 이건 "새 대화"가 아니라 "로컬 상태가 손상돼 안전하게 판정할 수 없는" 경우다 — `New`로
+잘못 분류하면 Phase 7이 이미 존재하는 대화를 "새 Import"로 취급해 위험한 동작(예: 기존 metadata를
+덮어쓰거나 중복 행을 만드는 시도)을 할 수 있다.
+
+판정 순서(`ImportPreviewBuilder.DetermineRelation`):
+
+```
+existsInLocalCatalog = localCatalog.AllConversations에 이 ThreadId가 있는지
+
+hasLocalChain=false, existsInLocalCatalog=false  → New
+hasLocalChain=false, existsInLocalCatalog=true   → Unverifiable("metadata는 있지만 chain 없음")
+hasLocalChain=true                                → 정상적으로 ConversationRevision을 만들어 비교
+```
+
+dependency-only(조상) thread도 같은 원칙을 그대로 적용한다 — `AllConversations`는 선택 대화와
+dependency-only thread를 구분하지 않고 전부 담고 있으므로 별도 분기가 필요 없다.
 
 ---
 
@@ -142,13 +172,66 @@ Compare(local, localReader, incoming, incomingReader, ct) → RevisionRelation
 1. `RolloutId`가 다르면 → **Diverged**(lineage 자체가 다르다 — 순환/무관한 대화를 같은 ThreadId로
    재사용한 경우 등, "안전한 쪽"으로 수렴한다).
 2. `RolloutId`가 같고 길이/해시가 완전히 같으면 → 다음 위치로.
-3. `RolloutId`가 같은데 길이/해시가 다르면:
-   - 이 위치가 **양쪽 다 마지막 슬라이스가 아니면** → **Diverged**(비-마지막 위치의 불일치는
-     이 leaf 기준으로 설명할 수 있는 시나리오가 없다 — 안전하게 발산 취급).
-   - **양쪽 다 마지막 슬라이스면**(같은 파일이 한쪽에서 더 길게 이어써졌을 가능성) → §4.1로.
+3. `RolloutId`가 같은데 길이/해시가 다르면 — **각 쪽이 "이 위치에서 끝나는지"를 독립적으로 본다**
+   (Phase 06_01 정정, §4.0 참고):
+   - **양쪽 다 여기서 끝나면**(`i`가 둘 다의 마지막 인덱스) → §4.1로(같은 파일이 한쪽에서 더 길게
+     이어써졌을 가능성).
+   - **한쪽만 여기서 끝나고 다른 쪽은 계속되면**(뒤에 segment가 더 있음) → §4.1과 같은 prefix
+     검증을 하되, "끝난 쪽"이 "계속되는 쪽"의 진짜 byte prefix일 때만 계속되는 쪽이 앞선 것으로
+     인정한다(§4.0).
+   - **양쪽 다 여기서 끝나지 않는데(둘 다 뒤에 더 있는데) 이미 다르면** → **Diverged**(이 leaf
+     기준으로 정상적인 fast-forward 시나리오로 설명할 수 없다 — 안전하게 발산 취급).
 
 공통 구간이 전부 일치했는데 슬라이스 개수가 다르면(한쪽에만 뒤이은 segment가 있음) →
 개수가 더 많은 쪽이 **더 진행된 쪽**(`IncomingAhead`/`LocalAhead`).
+
+### 4.0 Segment transition — 한쪽만 끝나고 다른 쪽은 계속돼도 fast-forward로 인정한다(Phase 06_01)
+
+최초 구현은 "양쪽 다 마지막 슬라이스일 때만" prefix 검사를 했다. 이러면 다음과 같은 정상 시나리오를
+오판했다:
+
+```
+Local    = [R1-short]
+Incoming = [R1-long, R2]
+```
+
+로컬은 R1이 아직 "A B"였을 때의 과거 snapshot이고, incoming에서는 그 뒤 R1에 "C D"가 이어써진
+다음 새 segment R2까지 생긴 상태다. R1은 로컬의 마지막 슬라이스지만 incoming의 마지막 슬라이스가
+아니므로(뒤에 R2가 더 있다), 예전 구현은 이 지점을 무조건 **Diverged**로 취급했다. 하지만 이건
+명백한 **IncomingAhead**여야 한다.
+
+**수정 원칙**: 같은 RolloutId에서 내용이 다를 때, 한쪽 revision이 바로 그 slice에서 끝나고 다른
+쪽은 동일 slice가 더 길거나 그 뒤 추가 segment까지 있으며, **짧은 쪽 slice가 긴 쪽 slice의 정확한
+logical byte prefix이면**, 뒤에 segment가 더 존재하더라도 정상 fast-forward로 인정한다:
+
+```
+Local    = [R1-short]
+Incoming = [R1-long, R2, R3]     ← R1-short가 R1-long의 정확한 prefix면 → IncomingAhead
+                                    (R2/R3가 몇 개 더 있어도 상관없다)
+
+Local    = [R1-long, R2]
+Incoming = [R1-short]            ← 반대 방향 → LocalAhead
+```
+
+단, **양쪽 모두 그 slice 뒤에도 계속되는 경우**는 여전히 안전하게 Diverged로 유지한다:
+
+```
+Local    = [R1-local, R2...]
+Incoming = [R1-incoming, R2...]  ← 둘 다 R1 뒤에 더 있는데 R1부터 이미 다르다 → Diverged
+```
+
+길이만 보고 판단하지 않는다 — §4.1과 동일하게 실제 prefix hash/byte 검증을 항상 거친다.
+
+**실측으로 확인된 함정**: 이 원칙을 실제 3-segment thread(21MB, segment1 974줄)로 검증하는 과정에서,
+**segment1 원본 rollout 파일이 이 체인이 공식적으로 인정하는 cutoff(segment2의 history_base,
+`ordinal<967`) 이후에도 별도로 계속 쓰인 바이트(967~973번째 줄)를 갖고 있을 수 있다**는 사실을
+처음 확인했다. 이 상태에서 segment1 **원본 파일 전체**를 "로컬의 과거 snapshot"으로 쓰면, 로컬이
+공식 cutoff보다 더 많은 바이트를 갖게 되어 §4.1의 prefix 검증에 실패하고 **정당하게 Diverged**로
+판정된다(끝난 쪽이 계속되는 쪽보다 같거나 더 길면 안전하게 발산 취급 — §4.1의 "shorterCandidate ≥
+longerCandidate" 가드). cutoff까지만 정확히 자른 스냅샷을 쓰면 `IncomingAhead`가 올바르게
+재현된다. 즉 **"원본 rollout 파일 전체" ≠ "이 thread 체인이 실제로 인정하는 논리적 범위"**라는
+원칙이 여기서도 그대로 적용된다 — Restore/검증 로직에서 파일 전체 길이를 그 thread의 전체 내용으로
+가정하지 말 것.
 
 ### 4.1 "같은 파일, 다른 길이" — 실제로 byte prefix인지 다시 읽어서 확인한다
 
@@ -156,11 +239,13 @@ Compare(local, localReader, incoming, incomingReader, ct) → RevisionRelation
 순수 발산"인지 구분할 수 없다(다른 두 해시로부터 prefix 관계를 대수적으로 유도할 수 없다). 그래서:
 
 1. 길이가 같은데 해시가 다르면 → 무조건 **Diverged**(append로 설명 불가).
-2. 길이가 다르면, **더 긴 쪽을 짧은 쪽의 길이만큼 다시 잘라 재해시**한다(`IRolloutSliceReader`로
-   해당 파일을 byte offset 컷오프로 다시 읽는다).
-3. 재해시 결과가 짧은 쪽과 **길이+해시 전부 정확히 일치**해야만 진짜 prefix로 인정하고
-   `IncomingAhead`(backup이 더 김) 또는 `LocalAhead`(로컬이 더 김)로 판정한다.
-4. 일치하지 않으면 → **Diverged**(길이만 다르고 내용은 처음부터 갈라진 경우).
+2. "끝난" 쪽이 "계속되는" 쪽과 같거나 더 길면 → 무조건 **Diverged**(끝난 쪽이 더 많은/같은 바이트를
+   갖고 있는데 상대는 별도로 계속됐다는 뜻 — 정상적인 이어쓰기로 설명할 수 없다).
+3. "끝난" 쪽이 더 짧으면, **"계속되는" 쪽을 "끝난" 쪽의 길이만큼 다시 잘라 재해시**한다
+   (`IRolloutSliceReader`로 해당 파일을 byte offset 컷오프로 다시 읽는다).
+4. 재해시 결과가 "끝난" 쪽과 **길이+해시 전부 정확히 일치**해야만 진짜 prefix로 인정하고
+   `IncomingAhead`(backup 쪽이 계속됨) 또는 `LocalAhead`(로컬 쪽이 계속됨)로 판정한다.
+5. 일치하지 않으면 → **Diverged**(길이만 다르고 내용은 처음부터 갈라진 경우).
 
 ---
 
@@ -210,13 +295,45 @@ ProjectPathMappingStatus
   NotApplicable   // "기타 대화"(미분류) 그룹 — 매핑 대상 아님
   AutoLinked      // 로컬 프로젝트와 canonical path가 일치해 자동 연결됨
   NotFound        // 일치하는 로컬 프로젝트를 찾지 못함 — 사용자가 폴더를 다시 지정해야 함
+  ManuallyLinked  // (Phase 06_01) 사용자가 직접 폴더를 선택해 재지정함
 ```
 
 backup manifest의 `project.originalRootPaths`를 현재 로컬 카탈로그(`CodexCatalog.Projects`)의 각
 프로젝트 `RootPaths`와 `CanonicalPath.AreSameLocation`(대소문자/`\\?\` prefix 무시)으로 비교해
-자동 연결을 제안한다. **판정만 한다** — 이 선택은 Phase 6에서 Codex에 쓰지 않는다. 프로젝트가 현재
-컴퓨터에 없어도(경로를 못 찾아도) conversation 자체의 Import 여부는 이 매핑과 무관하다(기존 설계
-원칙 유지).
+자동 연결을 제안한다. **자동 판정 자체는 Codex에 쓰지 않는다.** 프로젝트가 현재 컴퓨터에 없어도
+(경로를 못 찾아도) conversation 자체의 Import 여부는 이 매핑과 무관하다(기존 설계 원칙 유지).
+
+### 7.1 수동 경로 재지정(Phase 06_01)
+
+Preview 단계에서 사용자가 프로젝트 경로를 직접 재지정할 수 있다 — Phase 7이 실제 Apply를 하기
+전에 경로 결정을 미리 끝내 두기 위해서다.
+
+```
+ProjectPathMapping.CanManuallyOverride  // Status != NotApplicable("기타 대화"만 제외)
+ProjectPathMapping.WithManualOverride(resolvedLocalPath)
+  → Status를 ManuallyLinked로, ResolvedLocalPath를 새 값으로, LinkedLocalProjectId를 null로 바꾼
+    새 레코드를 돌려준다(순수 데이터, 파일 시스템 접근 없음). "기타 대화"에 부르면
+    InvalidOperationException.
+
+ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, projectId, userSelectedPath)
+  → 1. preview.Success가 아니면 InvalidOperationException
+    2. Directory.Exists(userSelectedPath)가 아니면 DirectoryNotFoundException
+    3. CanonicalPath.Create(userSelectedPath)로 정규화
+    4. projectId와 일치하는 프로젝트를 못 찾으면 ArgumentException
+    5. 그 프로젝트의 PathMapping만 WithManualOverride로 교체한 새 ImportPreview를 돌려준다
+       (다른 프로젝트/대화의 Relation·PlannedAction은 그대로 — 경로 재매핑은 revision 판정과
+       무관하므로 다시 계산하지 않는다)
+```
+
+**`NotFound`뿐 아니라 `AutoLinked`도 사용자가 원하면 덮어쓸 수 있다** — 자동 연결이 틀렸거나 다른
+경로를 쓰고 싶을 수 있기 때문이다. `NotApplicable`("기타 대화")에는 경로 선택 자체를 요구하지
+않는다(버튼을 아예 보여주지 않는다).
+
+**override 상태는 View code-behind가 아니라 이 메서드(그리고 `ProjectPathMapping` 자체)에만
+저장된다.** `MainViewModel`은 `_lastImportPreviewDomain`(원본 `ImportPreview`)을 들고 있다가,
+사용자가 폴더를 고르면 이 메서드로 새 `ImportPreview`를 만들어 그 필드를 교체할 뿐이다 — override
+상태 자체를 별도로 기억하는 로직이 ViewModel/View에 없다. 그래서 Phase 7은 이 필드가 반영된
+`ImportPlan`(§8.1)만 받으면 되고, UI가 무엇을 눌렀는지 다시 알아낼 필요가 없다.
 
 ---
 
@@ -266,6 +383,33 @@ ImportConversationPreview
 
 `ImportPreviewBuilder`는 core 조합만 한다 — ViewModel은 이 클래스만 부른다(요구사항 9).
 
+### 8.1 `ImportPreview` → `ImportPlan` freeze 경계(Phase 06_01)
+
+Phase 7이 UI 트리(`ImportPreviewViewModel`/`ProjectNodes` 등)를 다시 해석하지 않고 그대로 받아
+적용할 수 있도록, `Backup.Import.ImportPlanBuilder`가 `ImportPreview`를 `ImportPlan`으로 freeze한다:
+
+```
+ImportPlanBuilder.Build(preview, backupFilePath) → ImportPlan?     // preview.Success가 false면 null
+
+ImportPlan
+  Backup: ImportBackupIdentity(BackupFilePath, CreatedAtUtc, AppVersion, TotalConversationCount)
+  Projects: ImportPlanProject[](ProjectId, DisplayName, PathStatus, TargetProjectPath)
+  Conversations: ImportPlanConversation[](ThreadId, IsSelected, Relation, PlannedAction, TargetProjectPath)
+                 // 선택 대화 + dependency-only 전부(후자는 TargetProjectPath=null)
+  HasBlockingIssues       // Blocked(Unverifiable)가 하나라도 있으면 항상 참 — 예외 없음
+  HasUnresolvedDivergence // RequiresDecision(Diverged)이 하나라도 있으면 참
+  IsApplyReady            // !HasBlockingIssues && !HasUnresolvedDivergence
+```
+
+**`IsApplyReady`가 거짓이어도 `ImportPlan` 자체는 만들어진다** — "Preview는 가능하지만 지금 당장
+전부 적용하기엔 안전하지 않다"는 상태를 표현하기 위해서다(Diverged가 하나라도 있으면 Preview는
+계속 볼 수 있어야 하지만, 사용자 결정 없이 그대로 적용해서는 안 된다). **`Unverifiable`은 항상
+blocking이다** — 예외적으로 무시하고 진행하는 경로는 없다.
+
+Phase 7은 이 `ImportPlan`을 입력으로 받아야 한다 — `ImportPreview`나 `ImportPreviewViewModel`을
+다시 읽어 자기만의 판단을 내리지 말 것. `ImportPlanConversation.PlannedAction`이 이미 확정된
+계획이고, `TargetProjectPath`에 자동 연결/수동 재지정 결과가 이미 반영돼 있다.
+
 ---
 
 ## 9. 실제 데이터 검증 결과 요약
@@ -285,6 +429,22 @@ ImportConversationPreview
 - 작업 전후 `state_5.sqlite`/`-wal`/`-shm`/`session_index.jsonl`/`.codex-global-state.json`/
   `config.toml` SHA-256이 전부 동일 — Import Preview 동안 Codex 원본에 어떤 write도 없었다.
 
+### 9.1 Phase 06_01 재검증
+
+- 위 검증(40개 선택, 세그먼트 7·분기 3 포함)을 Phase 06_01 코드로 다시 실행 — **결과 완전히
+  동일**(42건 전부 `Identical`, metadata 차이 0건), 회귀 없음을 확인했다.
+- **실제 3-segment thread(segment1 21MB/974줄)로 segment transition IncomingAhead를 재현**했다.
+  처음에는 segment1 원본 파일을 그대로 "로컬의 과거 snapshot"으로 썼더니 `Diverged`가 나왔다 —
+  조사 결과 segment1 파일이 이 체인의 공식 cutoff(`ordinal<967`) 이후에도 7줄이 더 있었기 때문이었다
+  (§4.0 참고, 실측으로 새로 확인한 사실). segment2의 실제 history_base cutoff까지만 정확히 자른
+  스냅샷으로 다시 시도하니 `IncomingAhead`가 정확히 재현됐다.
+- 로컬에 metadata는 있지만 chain이 없는 상태(§2.1)는 합성 fixture로 RED→GREEN 확인했다(이 PC의
+  실제 `.codex`에는 이런 손상 상태가 존재하지 않는다 — 존재해서도 안 된다).
+- 실제 fixture Codex Home(`tests/Fixtures/CodexHome`)의 진짜 프로젝트("Alpha")를 대상으로 App
+  레이어(`MainViewModel`)에서 폴더 선택 → `ManuallyLinked` 재지정까지 end-to-end로 확인했다.
+- 작업 전후 source-of-truth 해시 6개 전부 동일(Phase 6 검증 때와 값도 동일 — 이 세션에서 `.codex`에
+  어떤 것도 쓰지 않았다는 뜻).
+
 **남은 한계**: 실제 데이터에는 진짜로 두 PC를 오간 `Diverged`/`LocalAhead` 사례가 없어 위 검증은
 실제 파일을 복사·수정한 합성 스냅샷 기반이다. `.jsonl.zst` 비교도 합성 fixture로만 확인했다(이
-PC에 실물 `.zst`가 0개, 기존 알려진 한계와 동일).
+PC에 실물 `.zst`가 0개, 기존 알려진 한계와 동일). 3단계 이상 분기(조상의 조상)도 실제 사례가 없다.

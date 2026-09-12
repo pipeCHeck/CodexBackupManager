@@ -40,6 +40,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly Func<string?> _folderPicker;
     private readonly Func<string, string?> _exportFilePicker;
     private readonly Func<string?> _importFilePicker;
+    private readonly Func<string?> _projectPathPicker;
 
     private bool _isBusy;
     private bool _isConnected;
@@ -78,6 +79,13 @@ public sealed class MainViewModel : ObservableObject
     private string? _importStatusText;
     private ImportPreviewViewModel? _currentImportPreview;
     private CancellationTokenSource? _importPreviewCancellation;
+    private string? _lastImportBackupFilePath;
+
+    // Phase 06_01 — override 상태는 View code-behind가 아니라 여기(도메인 ImportPreview 그 자체)에
+    // 저장한다. ImportPreviewBuilder.ApplyManualProjectPathOverride가 이 값만 갱신하고,
+    // ImportPreviewViewModel은 매번 이 값으로부터 다시 만든다.
+    private ImportPreview? _lastImportPreviewDomain;
+    private string? _importPlanSummaryText;
 
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
@@ -92,13 +100,18 @@ public sealed class MainViewModel : ObservableObject
     /// 불러올 <c>.codexbackup</c> 선택 대화상자(Phase 6, 출력: 선택한 경로 또는 취소 시 <c>null</c>).
     /// 생략하면 <see cref="BackupFilePicker.PickOpenLocation"/>을 쓴다.
     /// </param>
+    /// <param name="projectPathPicker">
+    /// Import Preview에서 프로젝트 경로를 수동으로 재지정할 때 쓰는 폴더 선택 대화상자(Phase 06_01,
+    /// 출력: 선택한 경로 또는 취소 시 <c>null</c>). 생략하면 <see cref="FolderPicker.PickProjectFolder"/>를 쓴다.
+    /// </param>
     public MainViewModel(
         CodexDetectionService detection,
         SettingsStore settings,
         FileLogger logger,
         Func<string?> folderPicker,
         Func<string, string?>? exportFilePicker = null,
-        Func<string?>? importFilePicker = null)
+        Func<string?>? importFilePicker = null,
+        Func<string?>? projectPathPicker = null)
     {
         ArgumentNullException.ThrowIfNull(detection);
         ArgumentNullException.ThrowIfNull(settings);
@@ -111,6 +124,7 @@ public sealed class MainViewModel : ObservableObject
         _folderPicker = folderPicker;
         _exportFilePicker = exportFilePicker ?? BackupFilePicker.PickSaveLocation;
         _importFilePicker = importFilePicker ?? BackupFilePicker.PickOpenLocation;
+        _projectPathPicker = projectPathPicker ?? FolderPicker.PickProjectFolder;
 
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
         RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy);
@@ -120,7 +134,7 @@ public sealed class MainViewModel : ObservableObject
         ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting);
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
         ImportPreviewCommand = new RelayCommand(() => _ = ImportPreviewAsync(), () => !IsImportPreviewLoading);
-        CloseImportPreviewCommand = new RelayCommand(() => CurrentImportPreview = null);
+        CloseImportPreviewCommand = new RelayCommand(CloseImportPreview);
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -186,6 +200,17 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>Import Preview 결과가 있어 화면에 보여줄 수 있는지.</summary>
     public bool HasImportPreview => CurrentImportPreview is not null;
+
+    /// <summary>
+    /// Phase 06_01 — Preview를 <see cref="ImportPlan"/>으로 freeze했을 때의 Apply 준비 상태 요약.
+    /// Diverged/Unverifiable이 하나도 없어야 Apply-ready다(요구사항 4). Phase 7이 참고할 값이며,
+    /// 이 문구를 보여주는 것 자체는 아무것도 적용하지 않는다.
+    /// </summary>
+    public string? ImportPlanSummaryText
+    {
+        get => _importPlanSummaryText;
+        private set => SetProperty(ref _importPlanSummaryText, value);
+    }
 
     /// <summary>Export가 진행 중인지. 재실행을 막고 취소 버튼 표시 여부를 결정하는 데 쓴다.</summary>
     public bool IsExporting
@@ -835,6 +860,15 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     private void CancelExport() => _exportCancellation?.Cancel();
 
+    /// <summary>Import Preview를 닫고 관련 상태를 전부 비운다(override 상태 포함).</summary>
+    private void CloseImportPreview()
+    {
+        CurrentImportPreview = null;
+        _lastImportPreviewDomain = null;
+        _lastImportBackupFilePath = null;
+        ImportPlanSummaryText = null;
+    }
+
     /// <summary>
     /// <c>.codexbackup</c> 파일을 선택해 Import Preview를 만든다(Phase 6). core
     /// (<see cref="ImportPreviewBuilder"/>)를 그대로 호출할 뿐이다 — ZIP/rollout 비교 로직을 여기서
@@ -859,6 +893,8 @@ public sealed class MainViewModel : ObservableObject
         IsImportPreviewLoading = true;
         ImportStatusText = "백업 파일을 확인하는 중…";
         CurrentImportPreview = null;
+        _lastImportPreviewDomain = null;
+        _lastImportBackupFilePath = path;
 
         try
         {
@@ -871,7 +907,9 @@ public sealed class MainViewModel : ObservableObject
                 return;
             }
 
-            CurrentImportPreview = new ImportPreviewViewModel(preview);
+            _lastImportPreviewDomain = preview;
+            CurrentImportPreview = new ImportPreviewViewModel(preview, RequestProjectPathOverride);
+            UpdateImportPlanSummary(preview);
 
             if (preview.Success)
             {
@@ -904,6 +942,73 @@ public sealed class MainViewModel : ObservableObject
                 _importPreviewCancellation = null;
             }
         }
+    }
+
+    /// <summary>
+    /// 사용자가 프로젝트 폴더를 직접 재지정한다(Phase 06_01, 요구사항 3). 실제 재지정 상태는
+    /// <see cref="ImportPreviewBuilder.ApplyManualProjectPathOverride"/>가 <see cref="_lastImportPreviewDomain"/>에
+    /// 만든 새 <see cref="ImportPreview"/>로 저장된다 — View code-behind에는 아무 상태도 두지 않는다.
+    /// Codex에는 여전히 아무것도 쓰지 않는다.
+    /// </summary>
+    private void RequestProjectPathOverride(string? projectId)
+    {
+        if (_lastImportPreviewDomain is not { } currentPreview)
+        {
+            return;
+        }
+
+        string? selected = _projectPathPicker();
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            return;
+        }
+
+        try
+        {
+            ImportPreview updated = ImportPreviewBuilder.ApplyManualProjectPathOverride(currentPreview, projectId, selected);
+            _lastImportPreviewDomain = updated;
+            CurrentImportPreview = new ImportPreviewViewModel(updated, RequestProjectPathOverride);
+            UpdateImportPlanSummary(updated);
+            ImportStatusText = "프로젝트 경로를 재지정했습니다.";
+            _logger.Info("Import Preview 프로젝트 경로 수동 재지정 완료.");
+        }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or InvalidOperationException)
+        {
+            // 사용자가 잘못된 경로를 고르거나(존재하지 않는 폴더), 재지정할 수 없는 프로젝트("기타
+            // 대화")를 시도한 경우. Codex에는 아무 영향이 없으므로 문구만 보여주고 되돌린다.
+            ImportStatusText = $"경로를 재지정할 수 없습니다: {ex.Message}";
+            _logger.Warning($"Import Preview 프로젝트 경로 재지정 실패. reason={ex.GetType().Name}");
+        }
+    }
+
+    /// <summary>
+    /// Preview를 <see cref="ImportPlan"/>으로 freeze해 Apply 준비 상태 문구를 갱신한다(요구사항 4).
+    /// Plan을 "만들기"만 할 뿐 여기서도 아무것도 적용하지 않는다.
+    /// </summary>
+    private void UpdateImportPlanSummary(ImportPreview preview)
+    {
+        if (!preview.Success || _lastImportBackupFilePath is not { } backupPath)
+        {
+            ImportPlanSummaryText = null;
+            return;
+        }
+
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        if (plan is null)
+        {
+            ImportPlanSummaryText = null;
+            return;
+        }
+
+        if (plan.IsApplyReady)
+        {
+            ImportPlanSummaryText = "Apply 준비 완료(Phase 7에서 사용).";
+            return;
+        }
+
+        int blockedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.Blocked);
+        int divergedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.RequiresDecision);
+        ImportPlanSummaryText = $"Apply 준비 안 됨 — 확인 불가 {blockedCount}건, 분기 충돌 {divergedCount}건(사용자 결정 필요).";
     }
 
     /// <summary>

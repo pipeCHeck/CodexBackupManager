@@ -225,6 +225,156 @@ public sealed class ConversationRevisionComparerTests : IDisposable
         Assert.Equal(RevisionRelation.LocalAhead, relation);
     }
 
+    // ── Phase 06_01: segment transition — 한쪽만 끝나고 다른 쪽은 계속돼도 fast-forward로 인정한다 ──
+
+    [Fact]
+    public void local이_짧고_incoming은_이어쓴_뒤_새_segment까지_있으면_IncomingAhead()
+    {
+        // Local  = [R1-short(A B)]
+        // Incoming = [R1-long(A B C D), R2(E F)]
+        // R1-short가 R1-long의 정확한 byte prefix이므로, incoming 쪽에 R2가 더 있어도 IncomingAhead여야 한다
+        // (예전 구현은 "둘 다 마지막일 때만" 검사해서 이 경우를 Diverged로 오판했다).
+        string localR1 = WriteJsonl(_localDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"));
+        string incomingR1 = WriteJsonl(_incomingDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"), Line(2, "C"), Line(3, "D"));
+        string incomingR2 = WriteJsonl(_incomingDir, "rollout-t_seg2.jsonl", Line(0, "E"), Line(1, "F"));
+
+        var localChains = new Dictionary<string, ThreadChain> { ["t"] = Chain("t", [Ref("t", null, localR1)]) };
+        var incomingChains = new Dictionary<string, ThreadChain>
+        {
+            ["t"] = Chain("t", [Ref("t", null, incomingR1), Ref("t", "seg2", incomingR2)]),
+        };
+
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
+            BuildOrThrow("t", localChains), LocalFileRolloutSliceReader.Instance,
+            BuildOrThrow("t", incomingChains), LocalFileRolloutSliceReader.Instance);
+
+        Assert.Equal(RevisionRelation.IncomingAhead, relation);
+    }
+
+    [Fact]
+    public void incoming이_짧고_local은_이어쓴_뒤_새_segment까지_있으면_LocalAhead()
+    {
+        // 위 테스트의 반대 방향.
+        string localR1 = WriteJsonl(_localDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"), Line(2, "C"), Line(3, "D"));
+        string localR2 = WriteJsonl(_localDir, "rollout-t_seg2.jsonl", Line(0, "E"), Line(1, "F"));
+        string incomingR1 = WriteJsonl(_incomingDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"));
+
+        var localChains = new Dictionary<string, ThreadChain>
+        {
+            ["t"] = Chain("t", [Ref("t", null, localR1), Ref("t", "seg2", localR2)]),
+        };
+        var incomingChains = new Dictionary<string, ThreadChain> { ["t"] = Chain("t", [Ref("t", null, incomingR1)]) };
+
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
+            BuildOrThrow("t", localChains), LocalFileRolloutSliceReader.Instance,
+            BuildOrThrow("t", incomingChains), LocalFileRolloutSliceReader.Instance);
+
+        Assert.Equal(RevisionRelation.LocalAhead, relation);
+    }
+
+    [Fact]
+    public void 짧은_쪽이_긴_쪽의_진짜_prefix가_아니면_새_segment가_있어도_Diverged()
+    {
+        // local의 두 번째 줄(X)이 incoming의 두 번째 줄(B)과 길이는 같지만 내용이 다르다 — 길이
+        // 비교만으로는 걸러지지 않고 실제 byte prefix 재검증에서 걸려야 한다.
+        string localR1 = WriteJsonl(_localDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "X"));
+        string incomingR1 = WriteJsonl(_incomingDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"), Line(2, "C"), Line(3, "D"));
+        string incomingR2 = WriteJsonl(_incomingDir, "rollout-t_seg2.jsonl", Line(0, "E"));
+
+        var localChains = new Dictionary<string, ThreadChain> { ["t"] = Chain("t", [Ref("t", null, localR1)]) };
+        var incomingChains = new Dictionary<string, ThreadChain>
+        {
+            ["t"] = Chain("t", [Ref("t", null, incomingR1), Ref("t", "seg2", incomingR2)]),
+        };
+
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
+            BuildOrThrow("t", localChains), LocalFileRolloutSliceReader.Instance,
+            BuildOrThrow("t", incomingChains), LocalFileRolloutSliceReader.Instance);
+
+        Assert.Equal(RevisionRelation.Diverged, relation);
+    }
+
+    [Fact]
+    public void incoming에_segment가_두_개_더_있어도_IncomingAhead다()
+    {
+        // Local = [R1-short], Incoming = [R1-long, R2, R3] — 뒤에 segment가 몇 개 더 있어도 상관없다.
+        string localR1 = WriteJsonl(_localDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"));
+        string incomingR1 = WriteJsonl(_incomingDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"), Line(2, "C"), Line(3, "D"));
+        string incomingR2 = WriteJsonl(_incomingDir, "rollout-t_seg2.jsonl", Line(0, "E"));
+        string incomingR3 = WriteJsonl(_incomingDir, "rollout-t_seg3.jsonl", Line(0, "F"));
+
+        var localChains = new Dictionary<string, ThreadChain> { ["t"] = Chain("t", [Ref("t", null, localR1)]) };
+        var incomingChains = new Dictionary<string, ThreadChain>
+        {
+            ["t"] = Chain("t", [Ref("t", null, incomingR1), Ref("t", "seg2", incomingR2), Ref("t", "seg3", incomingR3)]),
+        };
+
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
+            BuildOrThrow("t", localChains), LocalFileRolloutSliceReader.Instance,
+            BuildOrThrow("t", incomingChains), LocalFileRolloutSliceReader.Instance);
+
+        Assert.Equal(RevisionRelation.IncomingAhead, relation);
+    }
+
+    [Fact]
+    public void jsonl_zst_논리_바이트에서도_segment_transition_원칙이_동일하게_적용된다()
+    {
+        // incoming의 R1이 .jsonl.zst로 압축돼 있어도(로컬은 .jsonl) 압축 해제된 논리 바이트 기준으로
+        // 똑같이 판정돼야 한다 — 특히 "더 긴 쪽을 짧은 쪽 길이로 다시 잘라 재해시"하는 경로가 압축
+        // 스트림에서도 정상 동작해야 한다.
+        string localR1 = WriteJsonl(_localDir, "rollout-t.jsonl", Line(0, "A"), Line(1, "B"));
+        string incomingR1 = WriteZst(_incomingDir, "rollout-t.jsonl.zst", Line(0, "A"), Line(1, "B"), Line(2, "C"), Line(3, "D"));
+        string incomingR2 = WriteJsonl(_incomingDir, "rollout-t_seg2.jsonl", Line(0, "E"));
+
+        var localChains = new Dictionary<string, ThreadChain> { ["t"] = Chain("t", [Ref("t", null, localR1)]) };
+        var incomingChains = new Dictionary<string, ThreadChain>
+        {
+            ["t"] = Chain("t", [Ref("t", null, incomingR1, RolloutFileKind.ZstdCompressed), Ref("t", "seg2", incomingR2)]),
+        };
+
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
+            BuildOrThrow("t", localChains), LocalFileRolloutSliceReader.Instance,
+            BuildOrThrow("t", incomingChains), LocalFileRolloutSliceReader.Instance);
+
+        Assert.Equal(RevisionRelation.IncomingAhead, relation);
+    }
+
+    [Fact]
+    public void 조상이_있는_체인에서도_segment_transition_원칙이_동일하게_적용된다()
+    {
+        // parent는 cutoff(ordinal 2)까지 양쪽에 동일하게 포함되고(기존 원칙 그대로), leaf 자신의
+        // 파일에서만 local이 짧고 incoming이 이어쓴 뒤 새 segment가 생긴 상황을 재현한다.
+        string parentFile = WriteJsonl(_localDir, "rollout-parent.jsonl", Line(0, "p0"), Line(1, "p1"), Line(2, "cutoff-and-beyond"));
+        File.Copy(parentFile, Path.Combine(_incomingDir, "rollout-parent.jsonl"));
+        string incomingParentFile = Path.Combine(_incomingDir, "rollout-parent.jsonl");
+
+        string localChild = WriteJsonl(_localDir, "rollout-child.jsonl", Line(0, "A"), Line(1, "B"));
+        string incomingChild = WriteJsonl(_incomingDir, "rollout-child.jsonl", Line(0, "A"), Line(1, "B"), Line(2, "C"));
+        string incomingChildSeg2 = WriteJsonl(_incomingDir, "rollout-child_seg2.jsonl", Line(0, "D"));
+
+        RolloutFileReference localParentRef = Ref("parent", null, parentFile);
+        RolloutFileReference incomingParentRef = Ref("parent", null, incomingParentFile);
+
+        var localChains = new Dictionary<string, ThreadChain>
+        {
+            ["parent"] = Chain("parent", [localParentRef]),
+            ["child"] = Chain("child", [Ref("child", null, localChild)], parentThreadId: localParentRef.OwnRolloutId, parentEndOrdinalExclusive: 2),
+        };
+        var incomingChains = new Dictionary<string, ThreadChain>
+        {
+            ["parent"] = Chain("parent", [incomingParentRef]),
+            ["child"] = Chain(
+                "child", [Ref("child", null, incomingChild), Ref("child", "seg2", incomingChildSeg2)],
+                parentThreadId: incomingParentRef.OwnRolloutId, parentEndOrdinalExclusive: 2),
+        };
+
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
+            BuildOrThrow("child", localChains), LocalFileRolloutSliceReader.Instance,
+            BuildOrThrow("child", incomingChains), LocalFileRolloutSliceReader.Instance);
+
+        Assert.Equal(RevisionRelation.IncomingAhead, relation);
+    }
+
     // ── 조상(부모) 체인 + cutoff ─────────────────────────────────────────────────────
 
     [Fact]

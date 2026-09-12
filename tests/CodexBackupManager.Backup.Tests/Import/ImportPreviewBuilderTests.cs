@@ -271,6 +271,74 @@ public sealed class ImportPreviewBuilderTests : IDisposable
         Assert.NotEmpty(conversation.Warnings);
     }
 
+    // ── Phase 06_01: local metadata는 있는데 chain만 없는 경우 New로 떨어지면 안 된다 ──
+
+    [Fact]
+    public void 로컬에_metadata는_있지만_chain이_없으면_New가_아니라_Unverifiable이다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        var pcA = MakeCatalog(new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) }, [MakeEntry(t)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "metadata-no-chain.codexbackup");
+
+        // rollout 파일이 삭제/손상돼 chain을 만들 수 없지만, state DB 행(metadata)은 여전히 있는
+        // 상황을 시뮬레이션한다 — chains 딕셔너리에는 이 threadId를 아예 넣지 않는다.
+        CodexCatalog pcB = MakeCatalog(new Dictionary<string, ThreadChain>(), [MakeEntry(t)]);
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcB);
+
+        ImportConversationPreview conversation = FindConversation(preview, t);
+        Assert.Equal(RevisionRelation.Unverifiable, conversation.Relation);
+        Assert.Equal(ImportPlannedAction.Blocked, conversation.PlannedAction);
+        Assert.NotEmpty(conversation.Warnings);
+        Assert.NotEqual(RevisionRelation.New, conversation.Relation);
+    }
+
+    [Fact]
+    public void 로컬에_metadata도_chain도_전혀_없어야만_New다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        var pcA = MakeCatalog(new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) }, [MakeEntry(t)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "truly-new.codexbackup");
+
+        // EmptyCatalog()는 metadata도 chain도 전혀 없다 — 이때만 진짜 New다.
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, EmptyCatalog());
+
+        ImportConversationPreview conversation = FindConversation(preview, t);
+        Assert.Equal(RevisionRelation.New, conversation.Relation);
+        Assert.Equal(ImportPlannedAction.Import, conversation.PlannedAction);
+    }
+
+    [Fact]
+    public void dependency_only_조상도_local_metadata만_있고_chain이_없으면_Unverifiable이다()
+    {
+        // dependency-only(조상) thread에도 같은 원칙이 일관되게 적용되는지 확인한다.
+        string parentId = NewId();
+        string childId = NewId();
+        string parentFile = WriteRollout(_pcADir, parentId, null, Line(0, "parent"));
+        string childFile = WriteRollout(_pcADir, childId, null, Line(0, "child"));
+        RolloutFileReference parentRef = Ref(parentId, null, parentFile);
+        var pcA = MakeCatalog(
+            new Dictionary<string, ThreadChain>
+            {
+                [parentId] = Chain(parentId, [parentRef]),
+                [childId] = Chain(childId, [Ref(childId, null, childFile)], parentThreadId: parentRef.OwnRolloutId),
+            },
+            [MakeEntry(parentId), MakeEntry(childId)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { childId }, "dependency-metadata-no-chain.codexbackup");
+
+        // 로컬에는 parent의 state DB metadata만 있고(예: 아직 사이드바에 남아있음) rollout 파일은
+        // 이미 삭제돼 chain이 없는 상태. child는 아예 로컬에 없다(New여도 무방).
+        CodexCatalog pcB = MakeCatalog(new Dictionary<string, ThreadChain>(), [MakeEntry(parentId)]);
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcB);
+
+        ImportConversationPreview parentPreview = FindConversation(preview, parentId);
+        Assert.Equal(RevisionRelation.Unverifiable, parentPreview.Relation);
+        Assert.Equal(ImportPlannedAction.Blocked, parentPreview.PlannedAction);
+    }
+
     // ── metadata diff는 revision 관계와 독립적이다 ──────────────────────────────────
 
     [Fact]
@@ -384,6 +452,129 @@ public sealed class ImportPreviewBuilderTests : IDisposable
 
         Assert.True(preview.Success);
         Assert.Contains(preview.Projects.SelectMany(p => p.Conversations), c => c.ThreadId == t);
+    }
+
+    // ── Phase 06_01: 수동 프로젝트 경로 재지정(요구사항 3) ──────────────────────────
+
+    [Fact]
+    public void NotFound_프로젝트에_수동으로_경로를_재지정하면_ManuallyLinked가_된다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        ConversationEntry entry = MakeEntry(t, projectId: "proj-a");
+        var pcA = new CodexCatalog(
+            [new ProjectEntry("proj-a", "Project A", [@"C:\Old\Path"], [entry])],
+            [entry],
+            new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) },
+            [], DateTimeOffset.UtcNow, new CodexCatalogStats(1, 1, 1, TimeSpan.Zero, TimeSpan.Zero));
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "path-remap-notfound.codexbackup");
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, EmptyCatalog());
+        ImportProjectPreview project = Assert.Single(preview.Projects);
+        Assert.Equal(ProjectPathMappingStatus.NotFound, project.PathMapping.Status);
+
+        string newLocalDir = Path.Combine(_pcBDir, "remapped-project");
+        Directory.CreateDirectory(newLocalDir);
+
+        ImportPreview updated = ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, "proj-a", newLocalDir);
+
+        ImportProjectPreview updatedProject = Assert.Single(updated.Projects);
+        Assert.Equal(ProjectPathMappingStatus.ManuallyLinked, updatedProject.PathMapping.Status);
+        Assert.Equal(Domain.Paths.CanonicalPath.Create(newLocalDir).Display, updatedProject.PathMapping.ResolvedLocalPath);
+        // revision 판정 결과는 그대로 유지돼야 한다(경로 재매핑 때문에 다시 계산하지 않는다).
+        Assert.Equal(project.Conversations[0].Relation, updatedProject.Conversations[0].Relation);
+        Assert.Equal(project.Conversations[0].PlannedAction, updatedProject.Conversations[0].PlannedAction);
+    }
+
+    [Fact]
+    public void AutoLinked_프로젝트도_사용자가_수동으로_다른_경로로_재지정할_수_있다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        ConversationEntry entry = MakeEntry(t, projectId: "proj-a");
+        var pcA = new CodexCatalog(
+            [new ProjectEntry("proj-a", "Project A", [@"C:\Shared\Path"], [entry])],
+            [entry],
+            new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) },
+            [], DateTimeOffset.UtcNow, new CodexCatalogStats(1, 1, 1, TimeSpan.Zero, TimeSpan.Zero));
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "path-remap-autolinked.codexbackup");
+
+        // 로컬 PC에 같은 canonical path를 가진 프로젝트가 있어 자동 연결되는 상황을 만든다.
+        var localCatalog = new CodexCatalog(
+            [new ProjectEntry("local-proj", "Local Project", [@"C:\Shared\Path"], [])],
+            [], new Dictionary<string, ThreadChain>(), [], DateTimeOffset.UtcNow,
+            new CodexCatalogStats(0, 0, 1, TimeSpan.Zero, TimeSpan.Zero));
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, localCatalog);
+        ImportProjectPreview project = Assert.Single(preview.Projects);
+        Assert.Equal(ProjectPathMappingStatus.AutoLinked, project.PathMapping.Status);
+
+        string overridePath = Path.Combine(_pcBDir, "manually-chosen");
+        Directory.CreateDirectory(overridePath);
+
+        ImportPreview updated = ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, "proj-a", overridePath);
+
+        ImportProjectPreview updatedProject = Assert.Single(updated.Projects);
+        Assert.Equal(ProjectPathMappingStatus.ManuallyLinked, updatedProject.PathMapping.Status);
+        Assert.Null(updatedProject.PathMapping.LinkedLocalProjectId);
+        Assert.Equal(Domain.Paths.CanonicalPath.Create(overridePath).Display, updatedProject.PathMapping.ResolvedLocalPath);
+    }
+
+    [Fact]
+    public void 기타_대화_그룹은_수동_재지정을_거부한다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        var pcA = MakeCatalog(new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) }, [MakeEntry(t)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "path-remap-uncategorized.codexbackup");
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, EmptyCatalog());
+        ImportProjectPreview project = Assert.Single(preview.Projects);
+        Assert.Equal(ProjectPathMappingStatus.NotApplicable, project.PathMapping.Status);
+
+        string somePath = Path.Combine(_pcBDir, "irrelevant");
+        Directory.CreateDirectory(somePath);
+
+        Assert.Throws<InvalidOperationException>(() => ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, null, somePath));
+    }
+
+    [Fact]
+    public void 존재하지_않는_폴더로_재지정하면_예외를_던진다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        ConversationEntry entry = MakeEntry(t, projectId: "proj-a");
+        var pcA = new CodexCatalog(
+            [new ProjectEntry("proj-a", "Project A", [@"C:\Old\Path"], [entry])],
+            [entry],
+            new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) },
+            [], DateTimeOffset.UtcNow, new CodexCatalogStats(1, 1, 1, TimeSpan.Zero, TimeSpan.Zero));
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "path-remap-missing-dir.codexbackup");
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, EmptyCatalog());
+        string nonExistentPath = Path.Combine(_pcBDir, "does-not-exist-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Throws<DirectoryNotFoundException>(() => ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, "proj-a", nonExistentPath));
+    }
+
+    [Fact]
+    public void 존재하지_않는_projectId로_재지정하면_예외를_던진다()
+    {
+        string t = NewId();
+        string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+        ConversationEntry entry = MakeEntry(t, projectId: "proj-a");
+        var pcA = new CodexCatalog(
+            [new ProjectEntry("proj-a", "Project A", [@"C:\Old\Path"], [entry])],
+            [entry],
+            new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) },
+            [], DateTimeOffset.UtcNow, new CodexCatalogStats(1, 1, 1, TimeSpan.Zero, TimeSpan.Zero));
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { t }, "path-remap-unknown-project.codexbackup");
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, EmptyCatalog());
+        string somePath = Path.Combine(_pcBDir, "irrelevant2");
+        Directory.CreateDirectory(somePath);
+
+        Assert.Throws<ArgumentException>(() => ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, "no-such-project", somePath));
     }
 
     // ── malformed backup ──────────────────────────────────────────────────────────

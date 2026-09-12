@@ -182,6 +182,10 @@
               <TextBlock Text="백업 불러오기 미리보기" FontSize="15" FontWeight="SemiBold" />
               <TextBlock Text="{Binding CurrentImportPreview.SummaryText}" Foreground="{StaticResource Muted}"
                          FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" />
+              <!-- Phase 06_01 — Import Plan freeze 상태(Apply 준비 여부). 여기서는 보여주기만 하고
+                   아무것도 적용하지 않는다 — 실제 Apply는 Phase 7. -->
+              <TextBlock Text="{Binding ImportPlanSummaryText}" Foreground="{StaticResource Warn}"
+                         FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" />
             </StackPanel>
             <Button Grid.Column="1" Content="닫기" Command="{Binding CloseImportPreviewCommand}"
                     VerticalAlignment="Top" Padding="10,4" MinWidth="0" FontSize="11" />
@@ -193,8 +197,19 @@
                 <DataTemplate>
                   <StackPanel Margin="0,0,0,18">
                     <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="13" />
-                    <TextBlock Text="{Binding PathMappingStatusText}" Foreground="{StaticResource Warn}"
-                               FontSize="11" Margin="0,2,0,0" TextWrapping="Wrap" />
+                    <Grid Margin="0,2,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="{Binding PathMappingStatusText}" Foreground="{StaticResource Warn}"
+                                 FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center" />
+                      <!-- Phase 06_01 — 수동 경로 재지정. "기타 대화"는 CanOverridePath가 거짓이라
+                           버튼 자체가 없다(요구사항: 미분류 그룹에는 경로 선택을 요구하지 않는다). -->
+                      <Button Grid.Column="1" Content="폴더 선택" Command="{Binding OverridePathCommand}"
+                              Padding="8,3" MinWidth="0" FontSize="11" Margin="8,0,0,0"
+                              Visibility="{Binding CanOverridePath, Converter={StaticResource BoolToVisibility}}" />
+                    </Grid>
                     <TextBlock Text="{Binding SummaryText}" Foreground="{StaticResource Muted}"
                                FontSize="11" Margin="0,4,0,8" />
 
