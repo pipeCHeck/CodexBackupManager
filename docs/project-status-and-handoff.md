@@ -4,17 +4,21 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 04_05` 커밋(`0591945`)까지 완료 + `Phase 04_06`(Viewer 최종 디자인/Markdown
-정합성) 작업 완료. **`Phase 04_06`은 아직 사용자가 커밋하지 않은 상태**(작업 트리에 변경 있음) —
-새 세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것.
+마지막 갱신 기준: `Phase 04_06` 커밋(`d6e2521`)까지 완료 + `Phase 04_07`(상단 진단 영역 Compact/Expand
+레이아웃, horizontal ScrollBar 정합성) 작업 완료. **`Phase 04_07`은 아직 사용자가 커밋하지 않은
+상태**(작업 트리에 변경 있음) — 새 세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것.
+사용자는 이번 `Phase 04_07`을 **Phase 4의 마지막 UI 수정**으로 명시했다 — 이 작업이 끝나면 다음은
+Phase 5(Export)다.
 
 ---
 
 ## 1. 한 줄 요약
 
 **Phase 1~4(Codex 탐색 → Read Model → Conversation Viewer → Selection, 그리고 Phase 4 자체의
-사후 정합성/성능/크래시/Fidelity 수정 5건)까지 전부 완료했고, Phase 5(Export)는 아직 시작하지 않았다.**
-다음에 할 일이 명시적으로 주어지지 않으면 Phase 5를 추측해서 시작하지 말 것.
+사후 정합성/성능/크래시/Fidelity/레이아웃 수정 7건, 04_01~04_07)까지 전부 완료했고, Phase 5(Export)는
+아직 시작하지 않았다.** 사용자가 04_07을 "Phase 4의 마지막 UI 수정"으로 명시했으므로, 다음에 할 일이
+명시적으로 주어지지 않으면 Phase 5로 넘어갈 준비가 된 상태로 보고, Phase 5를 추측해서 미리 시작하지
+말 것(사용자의 명시적 지시를 기다린다).
 
 ---
 
@@ -31,7 +35,8 @@
 | `b3a9628` | Phase 04_03 | `FlowDocument`를 `Lazy<T>`로 지연 생성(성능) — Blocks(순수 데이터)는 즉시 파싱, `FlowDocument`는 최초 바인딩 시점에만 생성 |
 | `b4b4bca` | Phase 04_04 | **스크롤 반복 크래시 root cause 수정**: `FlowDocumentBinding`이 재사용되는 `FlowDocument`를 재활용된 `RichTextBox`에 재대입할 때 이전 소유자로부터 먼저 떼어내지 않아 `ArgumentException` 발생 → 대입 전 강제 detach로 수정. `CrashDiagnostics`(미처리 예외 로깅) 추가. 영구 회귀 테스트(`FlowDocumentBindingRecyclingStressTests`, 실제 STA+가상화 스트레스) 추가 |
 | `0591945` | Phase 04_05 | Viewer Fidelity: 빈 User 메시지 정책(공식 Codex와 동일하게 `IsNullOrWhiteSpace`면 숨김, 비텍스트 콘텐츠는 placeholder), Markdown-lite에 굵게/기울임/링크/인용문 추가, Codex 스타일 레이아웃(Assistant 평문형/User 작은 말풍선, 라벨 제거), 타이포그래피 조정 |
-| (미커밋) | Phase 04_06 | **Phase 4의 마지막 Viewer polish.** Assistant 메시지를 완전 평면에서 "은은한 카드"로 되돌림(`PanelAlt` 배경, `CornerRadius=9`, `Padding=16,14`, Border 없음), User 말풍선에 오른쪽 여백(`Margin=0,2,24,2`) 추가, `App.xaml`에 재사용 가능한 다크 `ScrollBar` 암시적 스타일 추가(화살표 숨김/얇은 Thumb/hover·pressed 밝기), Markdown-lite `_`/`__` intraword 오탐 수정(`snake_case_name` 같은 식별자가 더 이상 기울임/굵게로 오인식되지 않음, `*`/`**`는 기존 정책 유지) |
+| `d6e2521` | Phase 04_06 | Assistant 메시지를 완전 평면에서 "은은한 카드"로 되돌림(`PanelAlt` 배경, `CornerRadius=9`, `Padding=16,14`, Border 없음), User 말풍선에 오른쪽 여백(`Margin=0,2,24,2`) 추가, `App.xaml`에 재사용 가능한 다크 `ScrollBar` 암시적 스타일 추가(화살표 숨김/얇은 Thumb/hover·pressed 밝기), Markdown-lite `_`/`__` intraword 오탐 수정(`snake_case_name` 같은 식별자가 더 이상 기울임/굵게로 오인식되지 않음, `*`/`**`는 기존 정책 유지) |
+| (미커밋) | Phase 04_07 | **Phase 4의 마지막 UI 수정.** 상단 진단 영역을 Compact/Expand 구조로 재구성(기본 접힘, `MainViewModel.CompactSummaryText`로 Desktop/CLI/Sessions/Threads 한 줄 요약, "상세 정보" `ToggleButton`으로 기존 Rows/ProbeRows 펼침/접힘, `MaxHeight`+내부 `ScrollViewer`로 창 전체를 다시 잡아먹지 않게 제한), 본문 Grid의 고정 `RowDefinition Height="220"` 제거(→ `Auto`, 남는 공간은 프로젝트/Viewer 영역이 가져감), `App.xaml` 다크 `ScrollBar`의 horizontal 정합성 수정(`Track.Orientation`이 `ScrollBar.Orientation`을 실제로 따라가도록 `TemplateBinding` 추가 — 이전엔 안 따라갔다, PageUp/PageDown↔PageLeft/PageRight 커맨드 분리) |
 
 Phase 5(Export)~7(Safe Restore)은 **아직 시작 전**이다.
 
@@ -63,8 +68,16 @@ Phase 5(Export)~7(Safe Restore)은 **아직 시작 전**이다.
 - `VirtualizingPanel.ScrollUnit="Pixel"`로 스크롤이 항목 단위가 아니라 픽셀 단위로 부드럽게 움직인다 — 이걸 되돌리면 "스크롤이 딱딱하다"는 문제가 재발한다.
 - **(Phase 04_06)** `App.xaml`에 `ScrollBar`용 암시적(키 없는) 다크 스타일이 있다 — 화살표 버튼은 `Opacity=0`(클릭은 그대로 동작), Track은 투명, Thumb만 얇게(9px) 보이고 hover/드래그 시 밝아진다. 앱의 모든 `ScrollViewer`/`ScrollBar`에 자동 적용되므로 새 화면을 추가할 때 별도 스타일링이 필요 없다. 스크롤 동작(가상화/Pixel 단위/재활용) 자체는 건드리지 않는 순수 `ControlTemplate` 교체다.
 
+### 상단 진단 영역 (Phase 04_07)
+- 상단 진단 정보(State DB/Migration/Archived/탐색 후보 등, `MainViewModel.Rows`/`ProbeRows`)는 문제가 생겼을 때만 보면 되는 정보라 **기본은 접힘**이다. 대신 접힌 상태에서도 `MainViewModel.CompactSummaryText`("Desktop {버전} · CLI {버전} · Sessions {개수} · Threads {개수}")가 항상 한 줄 보인다. `MainWindow.xaml`의 `ToggleButton x:Name="DetailToggle"`(Style: `DetailToggleLink`, App.xaml)을 누르면 기존 Rows/ProbeRows 상세 패널이 펼쳐지고(`Visibility`가 `IsChecked`에 `ElementName` 바인딩), 다시 누르면 접힌다. 이건 순수 UI 표시 상태라 ViewModel에 별도 프로퍼티를 만들지 않았다(과설계 방지) — MVVM을 깨는 게 아니라 "표시 여부"는 View 전용 관심사라는 판단이다.
+- 연결 실패 안내(`DetailText`, `IsConnected=False`일 때)와 경고(`WarningText`, `HasWarning`)는 이 Compact/Expand 구조와 완전히 무관하다 — 접어도 절대 숨겨지지 않는다. 새로 뭔가를 이 영역에 추가할 때 실수로 이 두 개를 토글 안쪽에 넣지 않도록 주의할 것.
+- 본문 Grid(`Grid.Row="3"`)의 위쪽 행은 고정 `220`이 아니라 `Auto`다 — 상세 정보를 펼쳐도 `Border MaxHeight="260"`+내부 `ScrollViewer`로 막혀 있어 창 전체를 다시 잡아먹지 않는다. 창을 세로로 늘리면 남는 공간은 아래쪽 `Height="*"` 행(프로젝트 트리 + Conversation Viewer)이 가져간다. **이 Auto/MaxHeight 구조를 다시 고정 높이로 되돌리지 말 것** — 이번 Phase 04_07 자체가 "상단이 화면 절반을 차지한다"는 문제를 고치기 위한 것이었다.
+
 ### 진단
 - `CrashDiagnostics`(App/Services)가 UI 스레드 미처리 예외를 `%APPDATA%\CodexBackupManager\logs`에 기록한다(exception type/HResult/스택 프레임 타입·메서드만/ConversationMessages 개수/Body 렌더링 개수/WorkingSet/PrivateMemory). 예외를 삼키지 않고 `Handled`를 건드리지 않는다 — 이 장치는 "임시 진단용"으로 시작했지만 현재 코드베이스에 남아 있고, 제거해 달라는 요청은 없었다.
+
+### ScrollBar (Phase 04_06~04_07)
+- `App.xaml`의 암시적(`x:Key` 없는) `ScrollBar` 스타일이 앱의 모든 `ScrollViewer`/`ScrollBar`에 자동 적용된다. `Track.Orientation`은 `ScrollBar.Orientation`과 **별개의 의존 속성**이라 `TemplateBinding`으로 명시적으로 연결하지 않으면 horizontal ScrollBar에서도 Track이 계속 세로로 배치된다 — Phase 04_06에서 처음 도입했을 때 실제로 이 연결이 빠져 있었고, Phase 04_07에서 실제 RED(`DarkScrollBarOrientationTests`, `App.xaml` 원본 마크업을 오려내 검증)로 확인 후 고쳤다. Vertical은 `PageUp`/`PageDown`, Horizontal은 `PageLeft`/`PageRight` 커맨드를 쓴다(Track의 기존 `RepeatButton` 인스턴스는 그대로 두고 `Command` 속성만 트리거로 바꾼다 — `Setter.Value`로 새 엘리먼트를 만들면 여러 ScrollBar가 같은 Style을 공유할 때 엘리먼트 재사용 문제가 생길 위험이 있어 피했다).
 
 ---
 
@@ -94,9 +107,9 @@ Phase 5(Export)~7(Safe Restore)은 **아직 시작 전**이다.
 |---|---|---|
 | `CodexBackupManager.Domain.Tests` | `CanonicalPath`, `ConversationSelectionState` | WPF 비의존, 순수 |
 | `CodexBackupManager.Codex.Tests` | 탐지/카탈로그/rollout 파서/`ConversationItemParser`/`ConversationTranscriptBuilder` 등 | 합성 fixture(`tests/Fixtures/CodexHome`) 사용, 실제 사용자 데이터 커밋 안 함 |
-| `CodexBackupManager.App.Tests` | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection` 접근 |
+| `CodexBackupManager.App.Tests` | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh, `CompactSummaryText`), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다), **`DarkScrollBarOrientationTests`**(`App.xaml` 원본 마크업에서 ScrollBar 스타일+의존 리소스만 오려내 독립 `ResourceDictionary`로 파싱, STA 스레드에서 실제 `Track.Orientation`/커맨드 검증 — `Application` 인스턴스 없이 진행) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection` 접근 |
 
-마지막 전체 실행 결과(Phase 04_06 포함): `Domain 64 + Codex 166 + App 77 = 307건 전부 통과`, `dotnet build` 경고/오류 0. (Phase 04_06에서 `MarkdownLiteParserTests`에 `_`/`__` intraword RED→GREEN 테스트 6건 추가.)
+마지막 전체 실행 결과(Phase 04_07 포함): `Domain 64 + Codex 166 + App 82 = 312건 전부 통과`, `dotnet build` 경고/오류 0. (Phase 04_07에서 `MainViewModelCompactSummaryTests` 2건, `DarkScrollBarOrientationTests` 3건 추가 — 후자는 `Track.Orientation` TemplateBinding을 빼면 실제 RED가 나는 것까지 확인.)
 
 실제 `.codex` 데이터 재검증용 스크래치패드 하네스 패턴(세션마다 새로 만들어야 함, 세션 scratchpad 디렉터리에 위치):
 `CodexDetectionService` → `CodexCatalogBuilder.Build` → `ConversationTranscriptBuilder.Build` 순으로 실제 카탈로그/transcript를 만들고, 대화 원문은 출력하지 않고 개수/해시/구조 메타데이터만 출력하는 방식을 계속 써왔다.

@@ -130,12 +130,18 @@
         <Setter.Value>
           <ControlTemplate TargetType="ScrollBar">
             <Grid Background="{TemplateBinding Background}">
-              <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+              <!-- Track.Orientation은 ScrollBar.Orientation을 자동으로 따라가지 않는다(별개의
+                   의존 속성) — TemplateBinding으로 명시적으로 연결하지 않으면 horizontal
+                   ScrollBar에서도 Track이 계속 세로로 배치된다. -->
+              <Track x:Name="PART_Track" Orientation="{TemplateBinding Orientation}"
+                     IsDirectionReversed="True" Focusable="False">
                 <Track.DecreaseRepeatButton>
-                  <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" />
+                  <RepeatButton x:Name="DecreaseButton" Command="ScrollBar.PageUpCommand"
+                                Opacity="0" Focusable="False" />
                 </Track.DecreaseRepeatButton>
                 <Track.IncreaseRepeatButton>
-                  <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" />
+                  <RepeatButton x:Name="IncreaseButton" Command="ScrollBar.PageDownCommand"
+                                Opacity="0" Focusable="False" />
                 </Track.IncreaseRepeatButton>
                 <Track.Thumb>
                   <Thumb Style="{StaticResource DarkScrollBarThumb}" />
@@ -143,8 +149,15 @@
               </Track>
             </Grid>
             <ControlTemplate.Triggers>
+              <!-- Horizontal에서는 방향(IsDirectionReversed)뿐 아니라 커맨드도 Vertical의
+                   PageUp/PageDown이 아니라 PageLeft/PageRight를 써야 Track 클릭 시 올바른
+                   ScrollEventType으로 ScrollViewer에 전달된다. 기존 버튼 인스턴스는 그대로 두고
+                   Command 속성만 바꾼다(Setter.Value로 새 엘리먼트를 만들어 넣으면 여러 ScrollBar
+                   인스턴스가 같은 Style을 공유할 때 엘리먼트 재사용 문제가 생길 수 있어 피한다). -->
               <Trigger Property="Orientation" Value="Horizontal">
                 <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
+                <Setter TargetName="DecreaseButton" Property="Command" Value="ScrollBar.PageLeftCommand" />
+                <Setter TargetName="IncreaseButton" Property="Command" Value="ScrollBar.PageRightCommand" />
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -158,6 +171,38 @@
           <Setter Property="MinHeight" Value="9" />
         </Trigger>
       </Style.Triggers>
+    </Style>
+
+    <!-- ── 상단 진단 영역 "상세 정보" 토글 (Phase 04_07) ────────────────────────
+         상단 진단 정보를 Compact/Expand 구조로 바꾸면서 도입. 평소엔 텍스트 링크처럼 보이는
+         작은 ToggleButton이고, 클릭할 때마다 화살표만 뒤집힌다(▼ 접힘/▲ 펼침). MVVM 상태 없이
+         MainWindow.xaml에서 이 토글의 IsChecked를 상세 정보 Border의 Visibility에 직접 바인딩한다
+         — 이건 순수 UI 표시 상태라 ViewModel에 별도 프로퍼티를 만들 필요가 없다(과설계 방지). -->
+    <Style x:Key="DetailToggleLink" TargetType="ToggleButton">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ToggleButton">
+            <StackPanel Orientation="Horizontal" Background="{TemplateBinding Background}">
+              <TextBlock Text="상세 정보" Foreground="{TemplateBinding Foreground}"
+                         FontSize="{TemplateBinding FontSize}" VerticalAlignment="Center" />
+              <TextBlock x:Name="Arrow" Text=" ▼" Foreground="{TemplateBinding Foreground}"
+                         FontSize="{TemplateBinding FontSize}" Margin="2,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Arrow" Property="Text" Value=" ▲" />
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="{StaticResource Fg}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
 
   </Application.Resources>

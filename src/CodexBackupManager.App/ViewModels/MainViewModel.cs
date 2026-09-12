@@ -43,6 +43,7 @@ public sealed class MainViewModel : ObservableObject
 
     private bool _isCatalogLoading;
     private string? _catalogSummaryText;
+    private string? _compactSummaryText;
     private CancellationTokenSource? _catalogCancellation;
     private CodexCatalog? _lastCatalog;
 
@@ -146,6 +147,18 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _homePath;
         private set => SetProperty(ref _homePath, value);
+    }
+
+    /// <summary>
+    /// Phase 04_07 — 상단 진단 영역이 접혀 있어도 항상 보이는 한 줄 요약
+    /// (<c>"Desktop {버전} · CLI {버전} · Sessions {개수} · Threads {개수}"</c>). 연결에 실패하면
+    /// <c>null</c>이다(그 상태에선 실패 안내 문구가 대신 보인다). <see cref="Rows"/>에 이미 있는
+    /// 값들을 그대로 재사용해 만든다 — 별도 진단 로직을 새로 만들지 않는다.
+    /// </summary>
+    public string? CompactSummaryText
+    {
+        get => _compactSummaryText;
+        private set => SetProperty(ref _compactSummaryText, value);
     }
 
     /// <summary>경고 문구. 없으면 <c>null</c>.</summary>
@@ -503,6 +516,11 @@ public sealed class MainViewModel : ObservableObject
             ? "없음"
             : string.Join(", ", info.ActivitySignals)));
 
+        CompactSummaryText =
+            $"Desktop {info.CodexDesktopVersion ?? NotAvailable} · CLI {info.CodexCliVersion ?? NotAvailable} · " +
+            $"Sessions {DescribeCount(info.SessionFileCount, info.CompressedSessionFileCount)} · " +
+            $"Threads {DescribeThreads(info)}";
+
         // 로그에는 경로 원문과 개수 이외의 사용자 데이터를 남기지 않는다.
         _logger.Info(
             $"Codex 탐지 성공. source={info.Source} status={info.Validation.Status} " +
@@ -675,6 +693,7 @@ public sealed class MainViewModel : ObservableObject
         HomePath = string.Empty;
         WarningText = null;
         DetailText = detail;
+        CompactSummaryText = null;
     }
 
     private static string Combine(string? existing, string addition)
