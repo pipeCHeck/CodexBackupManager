@@ -152,7 +152,8 @@ Codex를 찾지 못하면 후보 경로별 탈락 사유를 함께 보여주고 
 
 Phase 1의 탐지 정보 아래에, 실제 Codex 대화를 **프로젝트 → 사용자 대화** 트리로 보여준다.
 `thread_source == "user"`인 대화만 그룹에 노출하고(`subagent`/`guardian_review`는 숨기되 버리지 않는다),
-아직 대화 내용을 열람하거나 선택하는 기능은 없다(오른쪽은 Phase 3 예정 placeholder).
+이 단계(Phase 2)에서는 대화 내용을 열람하는 Viewer는 아직 구현하지 않았다(Viewer는 Phase 3에서 완료 —
+아래 "Phase 3가 표시하는 것" 참고). 선택 기능은 여전히 Phase 4 예정이다.
 
 ```
 ▼ Balhwajeom_Project (17)

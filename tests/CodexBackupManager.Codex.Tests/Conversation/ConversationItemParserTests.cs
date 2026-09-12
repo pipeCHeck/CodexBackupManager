@@ -173,6 +173,26 @@ public sealed class ConversationItemParserTests : IDisposable
     }
 
     [Fact]
+    public void role이_assistant이면_마커와_모양이_같아도_숨기지_않는다()
+    {
+        // OpenAI Codex 공식 소스(codex-rs/core/src/context/) 조사 결과: 우리가 확인한 5개
+        // 주입 마커(<app-context>/<recommended_plugins>/<turn_aborted>/<multi_agent_mode>/
+        // <environment_context>)는 전부 role="user" 또는 role="developer" fragment이고,
+        // role="assistant"로 정의된 fragment(예: 멀티 에이전트 inter-agent 메시지)는 애초에
+        // 빈 마커("", "")를 쓴다 — matches_marked_text는 빈 마커와는 절대 매치하지 않는다.
+        // 즉 "확인된 마커"는 assistant가 실제로 만들어낼 수 있는 모양이 아니므로, assistant
+        // 메시지에 필터를 적용하면 모델이 그 태그를 예시/설명으로 언급한 진짜 출력만 잘못 지운다.
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLine(1, "assistant", ["<environment_context>hello</environment_context>"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        Assert.Equal("<environment_context>hello</environment_context>", Assert.Single(result.Messages).Text);
+    }
+
+    [Fact]
     public void 주입된_시스템_컨텍스트는_role이_user여도_숨긴다()
     {
         // 실제 .codex 데이터에서 확인된 사례: role="user" response_item인데 내용이
@@ -199,6 +219,25 @@ public sealed class ConversationItemParserTests : IDisposable
         RolloutFileReference file = WriteFile(
         [
             ResponseItemLine(1, "user", ["<environment_context>\n작업 디렉터리 정보\n</environment_context>"]),
+            ResponseItemLine(2, "user", ["진짜 사용자 메시지"]),
+        ]);
+
+        ConversationItemParser.ParseResult result = ConversationItemParser.ParseFile(file);
+
+        ConversationMessage message = Assert.Single(result.Messages);
+        Assert.Equal("진짜 사용자 메시지", message.Text);
+    }
+
+    [Fact]
+    public void 마커_대소문자가_달라도_공식_소스와_동일하게_대소문자_구분_없이_숨긴다()
+    {
+        // 공식 Codex 소스(codex-rs/context-fragments/src/fragment.rs::matches_marked_text)를
+        // 실제로 확인한 결과 시작/종료 마커 비교에 eq_ignore_ascii_case를 쓴다 — 즉 대소문자를
+        // "구분하지 않는다"(case-insensitive). 대소문자를 엄격히 구분하도록 바꾸면 오히려 공식
+        // 동작과 달라지므로, 대문자로 바뀐 마커도 여전히 숨겨지는 게 맞는 동작이다.
+        RolloutFileReference file = WriteFile(
+        [
+            ResponseItemLine(1, "user", ["<ENVIRONMENT_CONTEXT>\n작업 디렉터리 정보\n</ENVIRONMENT_CONTEXT>"]),
             ResponseItemLine(2, "user", ["진짜 사용자 메시지"]),
         ]);
 

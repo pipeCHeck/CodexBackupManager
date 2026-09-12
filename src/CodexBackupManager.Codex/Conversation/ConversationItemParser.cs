@@ -29,6 +29,15 @@ namespace CodexBackupManager.Codex.Conversation;
 /// <c>role:"developer"</c>를 숨기는 것에 더해 이런 주입 envelope도 숨긴다.
 /// </para>
 /// <para>
+/// <b>주입 마커 필터는 <c>role:"user"</c>에만 적용한다.</b> OpenAI Codex 공식 소스
+/// (<c>codex-rs/core/src/context/</c>)를 조사한 결과, 확인된 5개 마커는 전부
+/// <c>role:"user"</c> 또는 <c>role:"developer"</c> fragment이고, <c>role:"assistant"</c>로
+/// 정의된 fragment(멀티 에이전트 inter-agent 메시지 등)는 애초에 시작/종료 마커가 빈 문자열이라
+/// <c>matches_marked_text</c>가 절대 매치하지 않는다. 즉 확인된 마커는 assistant가 실제로
+/// 만들어낼 수 있는 모양이 아니므로, assistant 메시지에는 필터를 적용하지 않고 content를 그대로
+/// 보존한다(<c>role:"developer"</c>는 이미 role 검사만으로 항상 숨겨진다).
+/// </para>
+/// <para>
 /// <b>"소문자 태그로 시작"하는 구조 규칙은 쓰지 않는다.</b> 예전에는 새 마커를 놓치지 않으려고
 /// <c>^&lt;[a-z][a-z0-9_]*&gt;</c> 형태의 구조 규칙으로 광범위하게 걸렀는데, 이 규칙은 사용자가
 /// 실제로 <c>&lt;code&gt;</c>/<c>&lt;summary&gt;</c>/<c>&lt;xml&gt;</c> 같은 정상 HTML/코드
@@ -274,7 +283,14 @@ public static class ConversationItemParser
             return null;
         }
 
-        string text = CombineNonInjectedContentText(payload);
+        // 확인된 5개 주입 마커는 전부 role="user" 또는 role="developer" fragment다(공식 소스
+        // codex-rs/core/src/context/ 조사 확인). role="assistant"로 정의된 fragment(멀티 에이전트
+        // inter-agent 메시지 등)는 애초에 빈 마커("", "")를 써서 텍스트와 매치되지 않으므로, 이
+        // 필터를 assistant에도 적용하면 얻는 것 없이 모델이 그 태그를 언급한 진짜 출력만 위험에
+        // 노출시킨다. 그래서 필터는 role="user"에서만 적용한다(클래스 remarks 참고).
+        string text = mappedRole == ConversationRole.User
+            ? CombineNonInjectedContentText(payload)
+            : CombineContentText(payload);
         if (text.Length == 0)
         {
             return null;
@@ -323,8 +339,9 @@ public static class ConversationItemParser
 
     /// <summary>
     /// <c>CombineContentText</c>와 같지만, 확인된 주입 마커 쌍과 정확히 일치하는 원소는 제외하고
-    /// 나머지만 합친다. <c>response_item</c>(API wire 포맷) 폴백 경로에서만 쓴다 — <c>event_msg</c>는
-    /// 항상 UI가 이미 정제한 메시지이므로 이 필터가 필요 없다.
+    /// 나머지만 합친다. <c>response_item</c>(API wire 포맷) 폴백 경로의 <c>role:"user"</c>에서만
+    /// 쓴다 — <c>event_msg</c>는 항상 UI가 이미 정제한 메시지이므로 필요 없고, <c>role:"assistant"</c>는
+    /// 확인된 마커를 만들어낼 수 없는 role이라 필요 없다(클래스 remarks 참고).
     /// </summary>
     private static string CombineNonInjectedContentText(JsonElement payload)
         => CombineContentText(payload, filterInjected: true);
