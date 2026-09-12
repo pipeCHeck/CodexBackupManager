@@ -35,7 +35,18 @@ public sealed class FakeStateDatabaseBuilder
         long? updatedAtMs = null,
         string? historyMode = "paginated",
         string? cliVersion = null,
-        string? rolloutPath = null)
+        string? rolloutPath = null,
+        string? sandboxPolicy = null,
+        string? approvalMode = null,
+        long? tokensUsed = null,
+        bool? hasUserEvent = null,
+        string? agentNickname = null,
+        string? agentRole = null,
+        string? agentPath = null,
+        string? memoryMode = null,
+        string? reasoningEffort = null,
+        bool? isPinned = null,
+        long? recencyAtMs = null)
     {
         _threadRows.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
         {
@@ -59,6 +70,17 @@ public sealed class FakeStateDatabaseBuilder
             ["git_sha"] = null,
             ["git_branch"] = null,
             ["git_origin_url"] = null,
+            ["sandbox_policy"] = sandboxPolicy,
+            ["approval_mode"] = approvalMode,
+            ["tokens_used"] = tokensUsed,
+            ["has_user_event"] = hasUserEvent is { } hue ? (hue ? 1L : 0L) : null,
+            ["agent_nickname"] = agentNickname,
+            ["agent_role"] = agentRole,
+            ["agent_path"] = agentPath,
+            ["memory_mode"] = memoryMode,
+            ["reasoning_effort"] = reasoningEffort,
+            ["is_pinned"] = isPinned is { } pinned ? (pinned ? 1L : 0L) : null,
+            ["recency_at_ms"] = recencyAtMs,
         });
         return this;
     }
@@ -95,7 +117,12 @@ public sealed class FakeStateDatabaseBuilder
                     first_user_message TEXT, preview TEXT, thread_source TEXT, project_id TEXT,
                     archived INTEGER, archived_at INTEGER, created_at_ms INTEGER, updated_at_ms INTEGER,
                     history_mode TEXT, cli_version TEXT, model_provider TEXT, model TEXT,
-                    git_sha TEXT, git_branch TEXT, git_origin_url TEXT
+                    git_sha TEXT, git_branch TEXT, git_origin_url TEXT,
+                    sandbox_policy TEXT, approval_mode TEXT, tokens_used INTEGER, has_user_event INTEGER,
+                    agent_nickname TEXT, agent_role TEXT, agent_path TEXT, memory_mode TEXT,
+                    reasoning_effort TEXT, is_pinned INTEGER, thread_section_id TEXT,
+                    section_position INTEGER, section_entered_at_ms INTEGER,
+                    recency_at INTEGER, recency_at_ms INTEGER, created_at INTEGER, updated_at INTEGER
                 );
                 CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT);
                 CREATE TABLE project_roots (project_id TEXT, position INTEGER, path TEXT);

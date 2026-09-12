@@ -1,11 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CodexBackupManager.App.Services;
+using CodexBackupManager.Backup.Manifest;
+using CodexBackupManager.Backup.Planning;
+using CodexBackupManager.Backup.Writing;
 using CodexBackupManager.Codex;
 using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Codex.Conversation;
@@ -32,6 +37,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly SettingsStore _settings;
     private readonly FileLogger _logger;
     private readonly Func<string?> _folderPicker;
+    private readonly Func<string, string?> _exportFilePicker;
 
     private bool _isBusy;
     private bool _isConnected;
@@ -57,16 +63,29 @@ public sealed class MainViewModel : ObservableObject
     private string? _conversationErrorText;
     private CancellationTokenSource? _conversationCancellation;
 
+    // Phase 5 — Export. Codex Desktop/CLI 버전은 Apply()에서 저장해 두고 manifest에 그대로 쓴다
+    // (매번 다시 조사하지 않는다 — 이미 Rows를 채울 때 읽은 값이다).
+    private string? _lastCodexDesktopVersion;
+    private string? _lastCodexCliVersion;
+    private bool _isExporting;
+    private string? _exportStatusText;
+    private CancellationTokenSource? _exportCancellation;
+
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
     /// <param name="settings">설정 저장소.</param>
     /// <param name="logger">로거.</param>
     /// <param name="folderPicker">폴더 선택 대화상자. 취소 시 <c>null</c>을 반환해야 한다.</param>
+    /// <param name="exportFilePicker">
+    /// <c>.codexbackup</c> 저장 위치 선택 대화상자(입력: 기본 파일 이름, 출력: 선택한 경로 또는 취소 시
+    /// <c>null</c>). 생략하면 <see cref="BackupFilePicker.PickSaveLocation"/>을 쓴다.
+    /// </param>
     public MainViewModel(
         CodexDetectionService detection,
         SettingsStore settings,
         FileLogger logger,
-        Func<string?> folderPicker)
+        Func<string?> folderPicker,
+        Func<string, string?>? exportFilePicker = null)
     {
         ArgumentNullException.ThrowIfNull(detection);
         ArgumentNullException.ThrowIfNull(settings);
@@ -77,12 +96,14 @@ public sealed class MainViewModel : ObservableObject
         _settings = settings;
         _logger = logger;
         _folderPicker = folderPicker;
+        _exportFilePicker = exportFilePicker ?? BackupFilePicker.PickSaveLocation;
 
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
         RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy);
         ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync(), () => !IsBusy);
         SelectAllConversationsCommand = new RelayCommand(SelectAllConversations, () => TotalConversationCount > 0);
         ClearSelectionCommand = new RelayCommand(ClearAllSelections, () => HasSelection);
+        ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting);
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -100,6 +121,29 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>백업 선택을 전부 해제한다.</summary>
     public RelayCommand ClearSelectionCommand { get; }
+
+    /// <summary>선택한 대화를 <c>.codexbackup</c> 파일로 내보낸다(Phase 5).</summary>
+    public RelayCommand ExportCommand { get; }
+
+    /// <summary>Export가 진행 중인지. 재실행을 막는 데 쓴다.</summary>
+    public bool IsExporting
+    {
+        get => _isExporting;
+        private set
+        {
+            if (SetProperty(ref _isExporting, value))
+            {
+                ExportCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Export 진행/결과 문구. 대화 원문이나 개인 절대경로는 담지 않는다.</summary>
+    public string? ExportStatusText
+    {
+        get => _exportStatusText;
+        private set => SetProperty(ref _exportStatusText, value);
+    }
 
     /// <summary>탐지 결과 표. 라벨/값 쌍.</summary>
     public ObservableCollection<InfoRow> Rows { get; } = [];
@@ -521,6 +565,10 @@ public sealed class MainViewModel : ObservableObject
             $"Sessions {DescribeCount(info.SessionFileCount, info.CompressedSessionFileCount)} · " +
             $"Threads {DescribeThreads(info)}";
 
+        // Phase 5(Export) manifest에 그대로 쓴다 — 다시 조사하지 않고 여기서 읽은 값을 재사용한다.
+        _lastCodexDesktopVersion = info.CodexDesktopVersion;
+        _lastCodexCliVersion = info.CodexCliVersion;
+
         // 로그에는 경로 원문과 개수 이외의 사용자 데이터를 남기지 않는다.
         _logger.Info(
             $"Codex 탐지 성공. source={info.Source} status={info.Validation.Status} " +
@@ -635,6 +683,88 @@ public sealed class MainViewModel : ObservableObject
     public IReadOnlySet<string> GetSelectedThreadIdsSnapshot() => _selection.Snapshot();
 
     /// <summary>
+    /// 선택된 대화를 <c>.codexbackup</c>으로 내보낸다. core 파이프라인(<see cref="ExportPlanBuilder"/> →
+    /// <see cref="ManifestBuilder"/> → <see cref="BackupWriter"/>)을 그대로 호출할 뿐, UI는 결과를
+    /// 요약해서 보여주기만 한다 — 대화 원문이나 개인 절대경로는 화면/로그에 남기지 않는다.
+    /// </summary>
+    private async Task ExportAsync()
+    {
+        if (_lastCatalog is not { } catalog)
+        {
+            ExportStatusText = "카탈로그가 아직 준비되지 않았습니다.";
+            return;
+        }
+
+        IReadOnlySet<string> selectedThreadIds = GetSelectedThreadIdsSnapshot();
+        if (selectedThreadIds.Count == 0)
+        {
+            return;
+        }
+
+        // 백업 파일 이름에 대화 제목 원문을 쓰지 않는다(요구사항 15) — 시각만으로 만든다.
+        string defaultName = $"codex-backup-{DateTimeOffset.Now:yyyyMMdd-HHmmss}";
+        string? destination = _exportFilePicker(defaultName);
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _exportCancellation = cancellation;
+        IsExporting = true;
+        ExportStatusText = "내보내는 중…";
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            BackupWriter.WriteResult result = await Task.Run(
+                () =>
+                {
+                    ExportPlan plan = ExportPlanBuilder.Build(catalog, selectedThreadIds, cancellation.Token);
+                    BackupManifest manifest = ManifestBuilder.Build(
+                        plan, _lastCodexDesktopVersion, _lastCodexCliVersion, DateTimeOffset.UtcNow);
+                    return BackupWriter.Write(plan, manifest, destination, overwrite: true, cancellationToken: cancellation.Token);
+                },
+                cancellation.Token).ConfigureAwait(true);
+
+            stopwatch.Stop();
+
+            if (result.Success)
+            {
+                long sizeBytes = new FileInfo(destination).Length;
+                ExportStatusText =
+                    $"내보내기 완료 — 선택 대화 {selectedThreadIds.Count}개, {sizeBytes / 1024.0 / 1024.0:F1} MB, " +
+                    $"{stopwatch.ElapsedMilliseconds}ms" +
+                    (result.Warnings.Count > 0 ? $" (경고 {result.Warnings.Count}건)" : string.Empty);
+                _logger.Info(
+                    $"Export 완료. selected={selectedThreadIds.Count} sizeBytes={sizeBytes} " +
+                    $"elapsedMs={stopwatch.ElapsedMilliseconds} warnings={result.Warnings.Count}");
+            }
+            else
+            {
+                ExportStatusText = $"내보내기 실패: {result.FailureReason}";
+                _logger.Warning($"Export 실패. reason={result.FailureReason}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ExportStatusText = "내보내기를 취소했습니다.";
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("Export 중 오류", ex);
+            ExportStatusText = $"내보내는 중 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            if (ReferenceEquals(_exportCancellation, cancellation))
+            {
+                IsExporting = false;
+            }
+        }
+    }
+
+    /// <summary>
     /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 대량 선택/해제 시
     /// <see cref="ConversationSelectionState.Changed"/> 발생 횟수를 직접 검증하기 위해 쓴다.
     /// 공개 API 표면을 넓히지 않으면서도 핵심 selection 로직을 WPF 없이 테스트할 수 있게 한다.
@@ -683,6 +813,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectionSummaryText));
         SelectAllConversationsCommand.RaiseCanExecuteChanged();
         ClearSelectionCommand.RaiseCanExecuteChanged();
+        ExportCommand.RaiseCanExecuteChanged();
     }
 
     private void ShowFailure(string detail)

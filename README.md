@@ -3,7 +3,8 @@
 OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내보내기 · 불러오기 · 복원하는 **Windows 데스크톱 프로그램**.
 
 > **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
-> **+ Phase 4(Selection) 완료.** Phase 5 Export는 아직 예정입니다.
+> **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) 완료.** Phase 6 Import Preview는
+> 아직 예정입니다.
 
 ---
 
@@ -73,7 +74,8 @@ CodexBackupManager/
 ├─ docs/
 │  ├─ project-status-and-handoff.md              현재 상태/다음 작업 인계 문서 ★★ 세션 시작 시 가장 먼저 읽을 것
 │  ├─ phase0-codex-investigation-2026-09-11.md   조사 원본 기록
-│  └─ codex-storage-format.md                    구현 기준 문서 ★ 먼저 읽을 것
+│  ├─ codex-storage-format.md                    구현 기준 문서 ★ 먼저 읽을 것
+│  └─ codexbackup-format-v1.md                   Phase 5 Export 포맷 스펙 + Restore Sufficiency Audit
 ├─ scripts/verify-phase1.ps1
 ├─ src/
 │  ├─ CodexBackupManager.Domain/     의존성 0. 값 객체와 모델만
@@ -102,15 +104,29 @@ CodexBackupManager/
 │  │    Sqlite/ReadOnlySqlite        읽기 전용 SQLite 연결의 유일한 통로
 │  │    CodexDetectionService        탐색 + 검증 + 조사 파사드 (Phase 1)
 │  │    Catalog/CodexCatalogBuilder  "Project → User Conversation 목록" 오케스트레이터 (Phase 2)
+│  │    Threads/ThreadDependencyResolver
+│  │                                 선택 대화를 완전히 재구성하는 데 필요한 rollout 파일 집합을
+│  │                                 계산(Viewer의 ConversationTranscriptBuilder와 Export의
+│  │                                 ExportPlanBuilder가 이 하나의 코드를 공유한다)
+│  │    Attachments/LocalImageAttachmentScanner
+│  │                                 rollout content가 참조하는 local_image 첨부 경로를 찾는다
+│  ├─ CodexBackupManager.Backup/     `.codexbackup` Export/검증 (Phase 5)
+│  │    Planning/ExportPlanBuilder   선택 ThreadId → 무엇을 내보낼지 계산(dedupe/dependency closure)
+│  │    Manifest/…                  manifest.json 모델 + 직렬화
+│  │    Checksums/…                 checksums.json 모델 + 직렬화
+│  │    Writing/BackupWriter        스트리밍 ZIP 작성 + atomic publish + self-validation
+│  │    Reading/BackupReader        `.codexbackup` 읽기 전용 리더
+│  │    Validation/BackupValidator  manifest/체크섬/path traversal/JSONL 최소 parse 검증
 │  └─ CodexBackupManager.App/        WPF (MVVM). 로직 없음
 └─ tests/
    ├─ CodexBackupManager.Domain.Tests/
    ├─ CodexBackupManager.Codex.Tests/
+   ├─ CodexBackupManager.Backup.Tests/
    ├─ CodexBackupManager.App.Tests/  ViewModel 단위 테스트(Selection tri-state, Viewer 독립성 등)
    └─ Fixtures/CodexHome/            합성 가짜 Codex Home (실제 데이터 아님)
 ```
 
-의존 방향은 단방향이다: `App → Codex → Domain`.
+의존 방향은 단방향이다: `App → Backup → Codex → Domain`.
 
 ---
 
@@ -256,6 +272,30 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
+## Phase 5가 표시하는 것
+
+하단에 **[백업 내보내기]** 버튼이 생긴다. 선택한 대화 수가 0개면 비활성화되고, `SaveFileDialog`로
+저장 위치를 고르면(기본 파일 이름은 대화 제목이 아니라 시각 기반) 백그라운드에서 Export가 진행되고
+완료/실패 결과가 버튼 옆에 요약으로 뜬다(선택 대화 수/크기/소요 시간, 실패 시 안전한 오류 문구).
+
+- **core(`CodexBackupManager.Backup`)와 UI가 분리돼 있다.** `MainViewModel`은
+  `ExportPlanBuilder.Build()` → `ManifestBuilder.Build()` → `BackupWriter.Write()`를 그대로 호출할
+  뿐, ZIP/체크섬/atomic publish 로직을 직접 갖고 있지 않다.
+- **dependency closure는 Viewer와 같은 규칙을 쓴다.** 선택한 대화의 조상(분기/세그먼트) rollout
+  파일까지 자동으로 포함하되, 그 조상 자신은 "선택한 대화 수"에 세지 않는다(dependency로 별도 집계).
+- **원본 바이트를 그대로 보존한다.** rollout `.jsonl`/`.jsonl.zst`를 파싱해서 다시 쓰지 않고
+  스트리밍으로 그대로 복사한다 — 대형 rollout(288MB 실측)에서도 메모리 사용량이 파일 크기에
+  비례해서 늘지 않는다.
+- **자기 자신을 다시 검증한 뒤에만 최종 파일이 된다.** temp 파일로 먼저 쓰고, `BackupValidator`로
+  다시 열어 manifest/체크섬/path traversal 등을 전부 검사한 뒤에만 최종 `.codexbackup`으로 옮긴다.
+  검증 실패·취소·예외 시 temp만 지우고 기존 파일은 건드리지 않는다.
+- Import/Restore는 이 Phase의 범위가 아니다 — `BackupReader`/`BackupValidator`는 "읽기/검증"까지만
+  하고, Codex에 적용하는 기능(Phase 6/7)은 아직 없다.
+
+자세한 포맷 스펙과 설계 근거는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md) 참고.
+
+---
+
 ## UI/UX 개선 (Phase 4 사후)
 
 기능은 그대로 두고 가독성 · 레이아웃 · 렌더링 품질만 다듬은 작업. 새 기능(Export/Import)은 없다.
@@ -295,9 +335,13 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 | 2 | Read Model — rollout 파서, thread 체인, 프로젝트/제목 해결, 대화 목록 | **완료** |
 | 3 | Conversation Viewer — User / Assistant 메시지 | **완료** |
 | 4 | Selection — 프로젝트/대화 다중 선택 | **완료** |
-| 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | 예정 |
+| 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | **완료** |
 | 6 | Import Preview — Manifest/체크섬 검사, 충돌 검사, 경로 재매핑 | 예정 |
 | 7 | Safe Restore — Snapshot → Apply → 검증 → Rollback | 예정 |
+
+Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
+있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure
+정책, 첨부 정책, 체크섬/atomic export 정책을 담고 있다.
 
 ---
 
@@ -305,8 +349,12 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 - `.zst` 압축 rollout은 우리가 직접 압축한 fixture로만 검증했다. 실제 Codex `.zst` 실물은 아직
   확인하지 못했다(조사 시점 이 PC에 0개). `docs/codex-storage-format.md` §9 참고.
-- `ThreadChainResolver.ResolveAncestry`(분기 조상 체인 계산)는 Phase 3의 `ConversationTranscriptBuilder`가
-  실제로 호출한다 — 다만 Export(Phase 5)에서 백업 대상 파일 범위를 정할 때는 별도로 다시 검증이 필요하다.
+- `ThreadChainResolver.ResolveAncestry`(분기 조상 체인 계산)는 `ConversationTranscriptBuilder`(Viewer)와
+  `ExportPlanBuilder`(Export)가 `ThreadDependencyResolver`를 통해 **똑같이** 호출한다 — 실제
+  segmented/forked 대화로 두 경로가 일치함을 실측 확인했다.
+- Export가 `attachments\`(붙여넣기 텍스트)/`visualizations\`/`generated_images\` 폴더의 실제 파일은
+  아직 포함하지 않는다 — 구조적으로 안전하게 참조를 추적할 방법을 찾지 못했다(`docs/codexbackup-format-v1.md` §2 참고).
+  `local_image` 참조(스크린샷 등)는 포함한다.
 
 ---
 

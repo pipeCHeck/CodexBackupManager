@@ -89,6 +89,8 @@ public static class ConversationTranscriptBuilder
 
             // 다음(자식) thread가 "이 조상의 어느 rollout ID"를 분기 지점으로 가리켰는지 그대로 넘긴다.
             // 반드시 마지막 세그먼트일 필요는 없다 — ReadChainMessages가 rollout ID로 정확한 파일을 찾는다.
+            // "어느 파일까지 필요한가"는 Export(Phase 5)와 공유하는 ThreadDependencyResolver.SelectFiles가
+            // 판단한다 — 여기서는 그 결과에 메시지 cutoff(ordinal/byte offset)만 추가로 적용한다.
             string? targetRolloutId = null;
             long? cutoffOrdinal = null;
             long? cutoffByteOffset = null;
@@ -99,8 +101,9 @@ public static class ConversationTranscriptBuilder
                 cutoffByteOffset = childChain.ParentEndByteOffset;
             }
 
+            IReadOnlyList<RolloutFileReference> files = ThreadDependencyResolver.SelectFiles(chain, targetRolloutId);
             List<ConversationMessage> chainMessages = ReadChainMessages(
-                chain, targetRolloutId, cutoffOrdinal, cutoffByteOffset, warnings, cancellationToken);
+                chain, files, targetRolloutId, cutoffOrdinal, cutoffByteOffset, warnings, cancellationToken);
             messages.AddRange(chainMessages);
         }
 
@@ -109,7 +112,9 @@ public static class ConversationTranscriptBuilder
     }
 
     /// <summary>
-    /// 한 thread(조상 포함)의 체인을 읽는다. 파일마다 다음 둘 중 하나를 확인한다:
+    /// 한 thread(조상 포함)의 체인을 읽는다. <paramref name="files"/>는 이미
+    /// <see cref="ThreadDependencyResolver.SelectFiles"/>가 골라 둔 파일 목록이다(전체 또는
+    /// 분기 지점까지의 부분집합). 파일마다 다음 둘 중 하나를 확인한다:
     /// <list type="number">
     ///   <item>
     ///     <paramref name="externalTargetRolloutId"/>가 이 파일 자신의 rollout ID와 일치하면 —
@@ -124,6 +129,7 @@ public static class ConversationTranscriptBuilder
     /// </summary>
     private static List<ConversationMessage> ReadChainMessages(
         ThreadChain chain,
+        IReadOnlyList<RolloutFileReference> files,
         string? externalTargetRolloutId,
         long? externalCutoffOrdinal,
         long? externalCutoffByteOffset,
@@ -132,10 +138,10 @@ public static class ConversationTranscriptBuilder
     {
         var messages = new List<ConversationMessage>();
 
-        for (int i = 0; i < chain.Files.Count; i++)
+        for (int i = 0; i < files.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RolloutFileReference file = chain.Files[i];
+            RolloutFileReference file = files[i];
 
             bool isExternalTarget = externalTargetRolloutId is not null &&
                 string.Equals(externalTargetRolloutId, file.OwnRolloutId, StringComparison.OrdinalIgnoreCase);

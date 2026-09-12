@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CodexBackupManager.Backup</RootNamespace>
+    <AssemblyName>CodexBackupManager.Backup</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj" />
+    <ProjectReference Include="..\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodexBackupManager.Backup.Tests" />
+  </ItemGroup>
+
+</Project>

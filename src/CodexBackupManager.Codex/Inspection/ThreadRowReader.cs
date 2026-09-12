@@ -22,6 +22,10 @@ public static class ThreadRowReader
         "id", "rollout_path", "cwd", "title", "name", "first_user_message", "preview",
         "thread_source", "project_id", "archived", "archived_at", "created_at_ms", "updated_at_ms",
         "history_mode", "cli_version", "model_provider", "model", "git_sha", "git_branch", "git_origin_url",
+        // Phase 5 Restore Sufficiency Audit(docs/codexbackup-format-v1.md §1)에서 추가.
+        "created_at", "updated_at", "sandbox_policy", "approval_mode", "tokens_used", "has_user_event",
+        "agent_nickname", "agent_role", "agent_path", "memory_mode", "reasoning_effort", "is_pinned",
+        "thread_section_id", "section_position", "section_entered_at_ms", "recency_at", "recency_at_ms",
     ];
 
     /// <summary><c>threads</c> 테이블 전체를 읽는다. 테이블/<c>id</c> 컬럼이 없으면 빈 목록.</summary>
@@ -88,6 +92,23 @@ public static class ThreadRowReader
                 GitSha = GetString(byColumn, "git_sha"),
                 GitBranch = GetString(byColumn, "git_branch"),
                 GitOriginUrl = GetString(byColumn, "git_origin_url"),
+                CreatedAtSeconds = GetInt64(byColumn, "created_at"),
+                UpdatedAtSeconds = GetInt64(byColumn, "updated_at"),
+                SandboxPolicy = GetString(byColumn, "sandbox_policy"),
+                ApprovalMode = GetString(byColumn, "approval_mode"),
+                TokensUsed = GetInt64(byColumn, "tokens_used"),
+                HasUserEvent = GetBool(byColumn, "has_user_event"),
+                AgentNickname = GetString(byColumn, "agent_nickname"),
+                AgentRole = GetString(byColumn, "agent_role"),
+                AgentPath = GetString(byColumn, "agent_path"),
+                MemoryMode = GetString(byColumn, "memory_mode"),
+                ReasoningEffort = GetString(byColumn, "reasoning_effort"),
+                IsPinned = GetBool(byColumn, "is_pinned"),
+                ThreadSectionId = GetString(byColumn, "thread_section_id"),
+                SectionPosition = GetInt64(byColumn, "section_position"),
+                SectionEnteredAtMs = GetInt64(byColumn, "section_entered_at_ms"),
+                RecencyAtSeconds = GetInt64(byColumn, "recency_at"),
+                RecencyAtMs = GetInt64(byColumn, "recency_at_ms"),
             });
         }
 
@@ -111,4 +132,7 @@ public static class ThreadRowReader
             _ => null,
         };
     }
+
+    private static bool? GetBool(IReadOnlyDictionary<string, object?> row, string column)
+        => GetInt64(row, column) is { } value ? value != 0 : null;
 }

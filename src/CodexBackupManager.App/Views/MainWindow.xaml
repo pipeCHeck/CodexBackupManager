@@ -363,9 +363,14 @@
     <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,18,0,0">
       <Button Content="Codex 폴더 선택" Command="{Binding ChangeFolderCommand}" />
       <Button Content="다시 확인" Command="{Binding RefreshCommand}" />
+      <!-- Phase 5 — Export. 선택 0개면 ExportCommand.CanExecute가 false라 자동으로 비활성화된다.
+           내보내는 중에는 IsExporting이 true가 되어 재실행(재클릭)도 막는다. -->
+      <Button Content="백업 내보내기" Command="{Binding ExportCommand}" Margin="18,0,8,0" />
       <TextBlock Text="Codex 원본 데이터는 읽기 전용으로만 접근합니다."
                  Foreground="{StaticResource Muted}" FontSize="11"
                  VerticalAlignment="Center" Margin="10,0,0,0" />
+      <TextBlock Text="{Binding ExportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
+                 VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
     </StackPanel>
   </Grid>
 </Window>
