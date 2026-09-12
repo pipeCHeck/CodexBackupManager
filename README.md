@@ -71,6 +71,7 @@ dotnet publish src\CodexBackupManager.App -c Release -r win-x64 --self-contained
 CodexBackupManager/
 ├─ CLAUDE.md                         개발 지침 (최우선)
 ├─ docs/
+│  ├─ project-status-and-handoff.md              현재 상태/다음 작업 인계 문서 ★★ 세션 시작 시 가장 먼저 읽을 것
 │  ├─ phase0-codex-investigation-2026-09-11.md   조사 원본 기록
 │  └─ codex-storage-format.md                    구현 기준 문서 ★ 먼저 읽을 것
 ├─ scripts/verify-phase1.ps1
