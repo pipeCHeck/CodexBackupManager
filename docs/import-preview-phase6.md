@@ -5,15 +5,19 @@
 포맷으로 백업하는가"를 다룬다면, 이 문서는 "그 backup을 다른 PC의 현재 상태와 어떻게 비교하고
 보여주는가"를 다룬다.
 
-> **상태: FROZEN (Phase 06_01 완료 기준).** Phase 6에서 처음 확정한 스펙을 재검토로 발견된 안전성
+> **상태: FROZEN (Phase 06_02 완료 기준).** Phase 6에서 처음 확정한 스펙을 재검토로 발견된 안전성
 > 경계 케이스 문제(§4의 segment transition, §2의 New/Unverifiable 정책, §7 수동 경로 재지정, §8.1
-> `ImportPlan` freeze 경계)에 맞춰 Phase 06_01에서 수정했다. Phase 7(Safe Restore/Apply)은 이 문서를
-> 그대로 신뢰하고 시작해도 된다 — 특히 **`ImportPreview`가 아니라 `ImportPlan`을 입력으로 받을 것**
-> (§8.1). 이후 변경이 필요하면 이 문서를 먼저 갱신할 것.
+> `ImportPlan` freeze 경계, §8.2 backup identity/precondition/preflight)에 맞춰 Phase 06_01/06_02에서
+> 수정했다. **`RevisionRelation` 판정 semantics 자체는 Phase 06_01에서 이미 FROZEN이고 Phase 06_02는
+> 바꾸지 않았다** — 06_02는 그 위에 "그 판정이 여전히 유효한가"를 확인하는 계층(§8.2)만 추가했다.
+> Phase 7(Safe Restore/Apply)은 이 문서를 그대로 신뢰하고 시작해도 된다 — 특히 **`ImportPreview`가
+> 아니라 `ImportPlan`을 입력으로 받을 것**(§8.1)이며, **적용 전에 반드시
+> `ImportPlanPreflightValidator.Validate`로 `Ready`를 확인할 것**(§8.2). 이후 변경이 필요하면 이
+> 문서를 먼저 갱신할 것.
 
-> **범위**: Phase 6/06_01은 판정과 미리보기(및 그 freeze)까지만 한다. Codex 원본에는 어떤 write도
-> 하지 않는다(SQLite INSERT/UPDATE, rollout append/복사, global-state 변경, Snapshot/Rollback 전부
-> Phase 7의 역할).
+> **범위**: Phase 6/06_01/06_02는 판정과 미리보기·freeze·preflight 검증까지만 한다. Codex 원본에는
+> 어떤 write도 하지 않는다(SQLite INSERT/UPDATE, rollout append/복사, global-state 변경,
+> Snapshot/Rollback 전부 Phase 7의 역할).
 
 ---
 
@@ -410,6 +414,93 @@ Phase 7은 이 `ImportPlan`을 입력으로 받아야 한다 — `ImportPreview`
 다시 읽어 자기만의 판단을 내리지 말 것. `ImportPlanConversation.PlannedAction`이 이미 확정된
 계획이고, `TargetProjectPath`에 자동 연결/수동 재지정 결과가 이미 반영돼 있다.
 
+### 8.2 Stale Plan 방지 — backup identity / local revision precondition / preflight(Phase 06_02)
+
+Preview와 실제 Apply(Phase 7) 사이에는 임의의 시간이 지날 수 있다 — 그 사이 같은 경로의 backup
+파일이 다른 것으로 바뀌거나, 로컬 Codex가 계속 작업으로 바뀌거나, 재지정한 프로젝트 폴더가
+삭제될 수 있다. Phase 06_01까지의 `ImportPlan`은 "무엇을 할지"만 얼렸을 뿐 "그 판단이 지금도
+유효한지" 확인할 근거가 없었다. Phase 06_02는 이 근거를 `ImportPlan`에 채워 넣고, 그것을
+검증하는 read-only validator를 추가했다 — **RevisionRelation 판정 로직 자체는 건드리지 않았다.**
+
+#### 8.2.1 Backup identity 강화
+
+```
+ImportBackupIdentity
+  BackupFilePath
+  BackupFileLength     // (신설) 파일 전체 바이트 길이
+  BackupFileSha256     // (신설) 파일 전체의 streaming SHA-256 — 유일한 source of truth
+  BackupFormatVersion  // (신설)
+  CreatedAtUtc, AppVersion, TotalConversationCount   // 참고용(informational) — 이 값들이 전부
+                                                      // 우연히 같아도 hash가 다르면 다른 파일이다
+```
+
+`ImportPlanBuilder.Build`가 backup 파일을 다시 열어 `StreamingHashCopy.HashOnly`로 스트리밍
+계산한다(`File.ReadAllBytes` 금지 — 대형 backup도 bounded memory). Phase 7의 preflight는
+`BackupValidator.Validate` + 이 hash 재계산 + `ImportBackupIdentity`와의 비교로 "지금 열려는
+파일이 Preview 때 본 그 파일과 정확히 같은지"를 확인한다. 불일치 시 정확한 문구로 거부한다:
+"백업 파일이 미리보기 이후 변경되었습니다. 다시 불러와 주세요."
+
+#### 8.2.2 로컬/incoming revision precondition — relation을 다시 판정하지 않는다
+
+`ImportPreviewBuilder.DetermineRelation`이 판정에 실제로 사용한 `ConversationRevision`(로컬/
+incoming 양쪽, 계산 가능했던 경우)을 `ImportConversationPreview.LocalRevision`/`IncomingRevision`에
+보존하도록 확장했다. `ImportPlanBuilder`가 이 값을 그대로 freeze한다:
+
+```
+ExpectedLocalPresence { MustNotExist, MustExist }   // New→MustNotExist, 그 외 전부→MustExist
+
+ImportConversationPrecondition
+  ExpectedPresence
+  ExpectedLocalRevision      // Preview 시점 로컬 fingerprint(계산 가능했으면)
+  ExpectedIncomingRevision   // Preview 시점 backup 쪽 fingerprint(계산 가능했으면)
+```
+
+Phase 7의 preflight는 **relation을 처음부터 다시 계산하지 않는다** — 대신:
+
+- `MustNotExist`(New)면: 로컬 metadata·chain이 지금도 둘 다 없는지만 확인한다. 하나라도 생겼으면
+  `LocalStateChanged`.
+- `MustExist`(그 외)면: 지금 로컬 rollout으로 다시 만든 `ConversationRevision`이
+  `ExpectedLocalRevision`과 `RolloutId`/`Boundary`/`LogicalByteLength`/`Sha256Hex` 시퀀스 기준으로
+  완전히 같은지 비교한다(**`RolloutSlice.File`은 의도적으로 무시** — 물리적 파일 위치가 아니라
+  논리적 내용만 같으면 된다). 다르면 `LocalStateChanged`.
+- `ExpectedIncomingRevision`이 있으면(backup identity가 이미 hash로 일치했으므로 이론상 항상
+  같아야 하지만) 방어적으로 재확인한다 — 불일치 시 `BackupChanged`로 보고한다.
+
+이 원칙 덕분에 Phase 7은 fast-forward에 필요한 "정확히 어느 slice부터 몇 바이트가 새로운지"
+정보를 Preview 때 그대로 물려받는다 — 처음부터 다시 diff를 계산할 필요가 없다.
+
+#### 8.2.3 Target path precondition
+
+`ImportPlanConversation.TargetProjectPath`(§8.1, Phase 06_01에서 확정된 최종 경로)가 Apply
+시점에도 실제로 존재하는지 확인한다 — `Directory.Exists` + `CanonicalPath` 재검증. `TargetProjectPath`가
+`null`인 대화(dependency-only, projectless)는 경로 확인을 건너뛴다.
+
+**실측 발견**: `ProjectPathMapper.Resolve`(§7)는 canonical path 문자열 비교만 하고
+`Directory.Exists`는 확인하지 않는다 — 그래서 Preview/Phase 6은 자동 연결된 프로젝트의 폴더가
+실제로 존재하는지 몰랐다. 실제 `.codex` 데이터(17개 프로젝트)로 이 preflight를 돌려 보니, 그중
+하나(`AutoLinked`)의 `.codex-global-state.json`에 기록된 경로가 지금 이 PC에는 존재하지 않는
+폴더였다 — 이미 있던 실제 환경 조건을 `ImportPlanPreflightValidator`가 최초로 잡아낸 것이지,
+이번 Phase가 만든 회귀가 아니다(§9.2 참고).
+
+#### 8.2.4 `ImportPlanPreflightValidator` — 판정 우선순위
+
+```
+ImportPlanPreflightValidator.Validate(plan, currentLocalCatalog, ct) → Result(Status, Issues)
+
+ImportPlanPreflightStatus
+  Ready                 // 전부 통과 — Phase 7이 Apply를 시작해도 되는 유일한 상태
+  BackupChanged          // backup 파일 자체가 Preview 이후 바뀜(또는 파일 검증 실패)
+  LocalStateChanged      // 로컬 Codex가 Preview 이후 바뀜(precondition 불일치)
+  TargetPathUnavailable  // 재지정된 프로젝트 폴더가 지금 존재하지 않음
+  Blocked                // ImportPlan.HasBlockingIssues(Unverifiable 존재)
+  UnresolvedDivergence   // ImportPlan.HasUnresolvedDivergence(Diverged 존재, 아직 사용자 결정 없음)
+```
+
+판정 순서: **backup identity(§8.2.1) → `HasBlockingIssues` → `HasUnresolvedDivergence` → 대화별
+precondition(§8.2.2) → 프로젝트별 target path(§8.2.3) → `Ready`.** 이 순서대로 첫 번째로 실패하는
+검사의 상태를 보고한다. 전부 read-only다 — Codex에 아무것도 쓰지 않는다(Snapshot/Rollback/실제
+Apply는 여전히 Phase 7의 몫).
+
 ---
 
 ## 9. 실제 데이터 검증 결과 요약
@@ -448,3 +539,21 @@ Phase 7은 이 `ImportPlan`을 입력으로 받아야 한다 — `ImportPreview`
 **남은 한계**: 실제 데이터에는 진짜로 두 PC를 오간 `Diverged`/`LocalAhead` 사례가 없어 위 검증은
 실제 파일을 복사·수정한 합성 스냅샷 기반이다. `.jsonl.zst` 비교도 합성 fixture로만 확인했다(이
 PC에 실물 `.zst`가 0개, 기존 알려진 한계와 동일). 3단계 이상 분기(조상의 조상)도 실제 사례가 없다.
+
+### 9.2 Phase 06_02 재검증
+
+- 위 40개 선택 검증을 그대로 재사용해 `ImportPlan`을 만들고(§8.1), 같은 실제 로컬 카탈로그를
+  대상으로 `ImportPlanPreflightValidator.Validate`를 실행했다 — **결과: `TargetPathUnavailable`**
+  (`Ready`가 아니었다). 원인 조사 결과 버그가 아니라 실제 17개 프로젝트 중 하나의 `AutoLinked`
+  경로가 지금 이 PC에는 존재하지 않는 폴더였기 때문이었다(§8.2.3). 진단 로그로 어느 프로젝트인지
+  표시 이름만 확인했다(실제 경로는 출력하지 않음). 이 발견은 **preflight가 설계대로 동작해 이미
+  존재하던 실제 환경 문제를 최초로 잡아낸 것**이지 회귀가 아니다 — Preview/Phase 6/06_01은 애초에
+  `Directory.Exists`를 확인한 적이 없었다.
+- 같은 backup 파일의 복사본을 1바이트 변조 → `BackupChanged`가 정확히 재현됐다.
+- 실제 로컬 카탈로그를 복제해 대화 1건의 rollout 파일만 임시 복사본으로 교체(이어쓰기 흉내) →
+  `LocalStateChanged`가 정확히 재현됐다.
+- 작업 전후 source-of-truth 파일 확인: `state_5.sqlite`/`session_index.jsonl`/
+  `.codex-global-state.json`/`config.toml`은 SHA-256·수정 시각 전부 동일. `state_5.sqlite-shm`만
+  수정 시각이 바뀌었는데, 이는 SQLite가 WAL 모드 DB를 열 때(읽기 전용 연결이라도) 항상 재생성하는
+  비영속 공유 메모리 인덱스 파일이라 논리적 데이터 변경이 아니다 — 이 세션의 모든 read-only 카탈로그
+  조회가 이미 이런 특성을 갖고 있었다(Phase 06_02가 새로 만든 특성이 아니다).

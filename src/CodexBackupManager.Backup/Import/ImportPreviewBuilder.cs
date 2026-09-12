@@ -123,24 +123,43 @@ public static class ImportPreviewBuilder
         var warnings = new List<string>();
         localByThreadId.TryGetValue(conversation.ThreadId, out ConversationEntry? localEntry);
 
-        RevisionRelation relation = DetermineRelation(
+        RelationComputation computation = DetermineRelation(
             conversation.ThreadId, localCatalog.Chains, localByThreadId.ContainsKey(conversation.ThreadId), localSliceReader,
             backupCatalog.Chains, backupSliceReader, warnings, cancellationToken);
 
         MetadataDifferences metadataDiff = MetadataDifferenceAnalyzer.Compare(localEntry, conversation);
-        ImportPlannedAction plannedAction = ImportConflictAnalyzer.Decide(relation);
+        ImportPlannedAction plannedAction = ImportConflictAnalyzer.Decide(computation.Relation);
 
         return new ImportConversationPreview(
             conversation.ThreadId,
             conversation.IsSelected,
             conversation.ResolvedTitle,
-            relation,
+            computation.Relation,
             plannedAction,
             metadataDiff,
-            warnings);
+            warnings,
+            computation.LocalRevision,
+            computation.IncomingRevision);
     }
 
-    private static RevisionRelation DetermineRelation(
+    /// <summary>
+    /// <see cref="DetermineRelation"/>의 결과. 관계 enum뿐 아니라 실제로 계산에 쓰인
+    /// <see cref="ConversationRevision"/> 두 개도 함께 돌려준다 — Phase 06_02의
+    /// <see cref="ImportPlanBuilder"/>가 이 값을 그대로 freeze해서 Phase 7이 다시 계산하지 않고도
+    /// "그때의 revision"을 정확히 재현/비교할 수 있게 하기 위함이다(재계산 금지 원칙, 요구사항 8).
+    /// </summary>
+    private sealed record RelationComputation(
+        RevisionRelation Relation, ConversationRevision? LocalRevision, ConversationRevision? IncomingRevision);
+
+    /// <summary>
+    /// Phase 06_01 정정: "New"는 현재 Codex에 이 ThreadId가 정말로 전혀 없을 때만이다 — chain이
+    /// 없다는 사실 하나만으로 New로 단정하지 않는다. state DB/카탈로그(dependency-only/internal
+    /// thread를 포함해 CodexCatalog.AllConversations 전체)에 같은 ThreadId metadata가 있는데
+    /// rollout 파일 삭제/경로 손상/파싱 실패 등으로 chain만 없는 상태라면, 이건 "새 대화"가 아니라
+    /// "로컬 상태가 손상돼 안전하게 판정할 수 없는" 경우다 — New로 잘못 분류하면 Phase 7이 이미
+    /// 존재하는 대화를 "새 Import"로 취급해 위험한 동작을 할 수 있다.
+    /// </summary>
+    private static RelationComputation DetermineRelation(
         string threadId,
         IReadOnlyDictionary<string, ThreadChain> localChains,
         bool existsInLocalCatalog,
@@ -152,27 +171,15 @@ public static class ImportPreviewBuilder
     {
         bool hasLocalChain = localChains.ContainsKey(threadId);
 
-        // Phase 06_01 정정: "New"는 현재 Codex에 이 ThreadId가 정말로 전혀 없을 때만이다 — chain이
-        // 없다는 사실 하나만으로 New로 단정하지 않는다. state DB/카탈로그(dependency-only/internal
-        // thread를 포함해 CodexCatalog.AllConversations 전체)에 같은 ThreadId metadata가 있는데
-        // rollout 파일 삭제/경로 손상/파싱 실패 등으로 chain만 없는 상태라면, 이건 "새 대화"가 아니라
-        // "로컬 상태가 손상돼 안전하게 판정할 수 없는" 경우다 — New로 잘못 분류하면 Phase 7이 이미
-        // 존재하는 대화를 "새 Import"로 취급해 위험한 동작을 할 수 있다.
-        // Phase 06_01 정정: "New"는 현재 Codex에 이 ThreadId가 정말로 전혀 없을 때만이다 — chain이
-        // 없다는 사실 하나만으로 New로 단정하지 않는다. state DB/카탈로그(dependency-only/internal
-        // thread를 포함해 CodexCatalog.AllConversations 전체)에 같은 ThreadId metadata가 있는데
-        // rollout 파일 삭제/경로 손상/파싱 실패 등으로 chain만 없는 상태라면, 이건 "새 대화"가 아니라
-        // "로컬 상태가 손상돼 안전하게 판정할 수 없는" 경우다 — New로 잘못 분류하면 Phase 7이 이미
-        // 존재하는 대화를 "새 Import"로 취급해 위험한 동작을 할 수 있다.
         if (!hasLocalChain && !existsInLocalCatalog)
         {
-            return RevisionRelation.New;
+            return new RelationComputation(RevisionRelation.New, null, null);
         }
 
         if (!hasLocalChain)
         {
             warnings.Add("로컬에 이 대화의 metadata는 있지만 rollout 파일 체인을 찾을 수 없습니다.");
-            return RevisionRelation.Unverifiable;
+            return new RelationComputation(RevisionRelation.Unverifiable, null, null);
         }
 
         ConversationRevisionBuildResult localResult =
@@ -180,7 +187,7 @@ public static class ImportPreviewBuilder
         if (localResult.Revision is null)
         {
             warnings.Add(localResult.UnverifiableReason ?? "로컬 대화의 revision을 계산할 수 없습니다.");
-            return RevisionRelation.Unverifiable;
+            return new RelationComputation(RevisionRelation.Unverifiable, null, null);
         }
 
         ConversationRevisionBuildResult incomingResult =
@@ -188,11 +195,13 @@ public static class ImportPreviewBuilder
         if (incomingResult.Revision is null)
         {
             warnings.Add(incomingResult.UnverifiableReason ?? "backup 대화의 revision을 계산할 수 없습니다.");
-            return RevisionRelation.Unverifiable;
+            return new RelationComputation(RevisionRelation.Unverifiable, localResult.Revision, null);
         }
 
-        return ConversationRevisionComparer.Compare(
+        RevisionRelation relation = ConversationRevisionComparer.Compare(
             localResult.Revision, localSliceReader, incomingResult.Revision, backupSliceReader, cancellationToken);
+
+        return new RelationComputation(relation, localResult.Revision, incomingResult.Revision);
     }
 
     /// <summary>

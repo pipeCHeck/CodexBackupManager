@@ -1,22 +1,75 @@
 using System;
 using System.Collections.Generic;
+using CodexBackupManager.Domain.Codex.Import;
 
 namespace CodexBackupManager.Backup.Import;
 
 /// <summary>
-/// 어떤 <c>.codexbackup</c>에서 만들어진 <see cref="ImportPreview"/>를 식별하기 위한 최소 정보.
-/// Phase 7이 "이 Plan이 어떤 backup에서 나왔는지" 확인할 수 있는 정도로만 담는다 — manifest 전체를
-/// 다시 들고 다니지 않는다.
+/// 어떤 <c>.codexbackup</c>에서 만들어진 <see cref="ImportPreview"/>를 식별하기 위한 정보(Phase 06_02
+/// 강화). Phase 7이 실제 write를 시작하기 전에 "지금 이 파일이 정말 Preview했던 그 파일인지"를
+/// 증명할 수 있어야 한다 — 파일 경로만으로는 그 사이 다른 파일로 교체됐는지 구분할 수 없다.
 /// </summary>
+/// <remarks>
+/// <b>source of truth는 <see cref="BackupFileSha256"/>(+ <see cref="BackupFileLength"/>) 하나다.</b>
+/// <see cref="CreatedAtUtc"/>/<see cref="AppVersion"/>/<see cref="TotalConversationCount"/>는 참고용
+/// 진단 정보일 뿐이고(우연히 전부 같아도 hash가 다르면 다른 파일이다 — RED→GREEN 테스트로 확인),
+/// <see cref="BackupFormatVersion"/>은 preflight가 재검증할 때 쓰는 <see cref="Validation.BackupValidator"/>가
+/// 이미 다시 확인하므로 identity 비교에는 직접 쓰지 않는다(정보용으로만 보존).
+/// </remarks>
 /// <param name="BackupFilePath">Plan을 만들 때 사용한 <c>.codexbackup</c> 경로.</param>
-/// <param name="CreatedAtUtc">backup manifest의 Export 시각.</param>
-/// <param name="AppVersion">backup을 만든 앱 버전.</param>
-/// <param name="TotalConversationCount">manifest의 선택된 대화 수(<c>ConversationCount</c>).</param>
+/// <param name="BackupFileLength">Export 파일 전체의 바이트 길이(빠른 1차 비교용).</param>
+/// <param name="BackupFileSha256">
+/// Export 파일 전체(ZIP 컨테이너 자체)의 SHA-256(소문자 hex). 스트리밍으로 계산했다 — 파일 전체를
+/// 메모리에 올리지 않는다(<see cref="Container.StreamingHashCopy.HashOnly"/>).
+/// </param>
+/// <param name="BackupFormatVersion">manifest의 <c>backupFormatVersion</c>(정보용).</param>
+/// <param name="CreatedAtUtc">backup manifest의 Export 시각(정보용).</param>
+/// <param name="AppVersion">backup을 만든 앱 버전(정보용).</param>
+/// <param name="TotalConversationCount">manifest의 선택된 대화 수(정보용, <c>ConversationCount</c>).</param>
 public sealed record ImportBackupIdentity(
     string BackupFilePath,
+    long BackupFileLength,
+    string BackupFileSha256,
+    int BackupFormatVersion,
     DateTimeOffset CreatedAtUtc,
     string AppVersion,
     int TotalConversationCount);
+
+/// <summary>
+/// Preview 시점에 이 대화가 로컬에 어떤 상태였어야 하는지에 대한 기대값(Phase 06_02). Phase 7은
+/// relation을 다시 판정하지 않고, <b>지금의 로컬 상태가 이 기대값과 정확히 같은지만 확인</b>한다.
+/// </summary>
+/// <param name="ExpectedPresence">
+/// <see cref="ExpectedLocalPresence.MustNotExist"/>(New)면 지금도 로컬에 이 ThreadId가 전혀 없어야
+/// 한다. <see cref="ExpectedLocalPresence.MustExist"/>면 <see cref="ExpectedLocalRevision"/>과
+/// 정확히 같은 로컬 revision을 다시 계산할 수 있어야 한다.
+/// </param>
+/// <param name="ExpectedLocalRevision">
+/// Preview 당시 실제로 비교에 쓰인 로컬 <see cref="ConversationRevision"/>. 계산할 수 없었으면
+/// (New/Unverifiable) <c>null</c>. Phase 7은 이 값을 다시 판정 근거로 쓰지 않고, 지금 다시 만든
+/// 로컬 revision과 <b>완전히 같은지</b>(RolloutId/Boundary/길이/해시 시퀀스) 비교만 한다.
+/// </param>
+/// <param name="ExpectedIncomingRevision">
+/// Preview 당시 실제로 비교에 쓰인 backup 쪽 <see cref="ConversationRevision"/>(요구사항 4 — 특히
+/// IncomingAhead의 fast-forward에 필요). 계산할 수 없었으면 <c>null</c>.
+/// </param>
+public sealed record ImportConversationPrecondition(
+    ExpectedLocalPresence ExpectedPresence,
+    ConversationRevision? ExpectedLocalRevision,
+    ConversationRevision? ExpectedIncomingRevision);
+
+/// <summary>Preview 시점에 로컬에 이 ThreadId가 존재했어야 하는지.</summary>
+public enum ExpectedLocalPresence
+{
+    /// <summary>New — Preview 당시 로컬에 이 ThreadId가 전혀(metadata도 chain도) 없었다.</summary>
+    MustNotExist = 0,
+
+    /// <summary>
+    /// New가 아닌 모든 관계 — Preview 당시 로컬에 이 ThreadId가 어떤 형태로든 존재했다(chain 유무와
+    /// 무관하게, Unverifiable도 포함 — "존재는 하는데 안전하게 확인할 수 없었다"는 뜻이었으므로).
+    /// </summary>
+    MustExist = 1,
+}
 
 /// <summary>Import Plan에 고정된 대화(thread) 하나 — Phase 7이 이 값을 그대로 받아 적용한다.</summary>
 /// <param name="ThreadId">thread ID.</param>
@@ -27,12 +80,16 @@ public sealed record ImportBackupIdentity(
 /// 이 대화가 속한 프로젝트의 현재 PC 기준 목표 경로(자동 연결 또는 수동 재지정 결과). 프로젝트가
 /// 없거나(dependency-only/미분류) 아직 경로를 알 수 없으면 <c>null</c>.
 /// </param>
+/// <param name="Precondition">
+/// Preview 당시 로컬 상태의 frozen 기대값(Phase 06_02) — Phase 7의 stale-plan 방지 근거.
+/// </param>
 public sealed record ImportPlanConversation(
     string ThreadId,
     bool IsSelected,
-    Domain.Codex.Import.RevisionRelation Relation,
+    RevisionRelation Relation,
     ImportPlannedAction PlannedAction,
-    string? TargetProjectPath);
+    string? TargetProjectPath,
+    ImportConversationPrecondition Precondition);
 
 /// <summary>Import Plan에 고정된 프로젝트 하나.</summary>
 /// <param name="ProjectId">backup 쪽 원본 프로젝트 ID. 미분류면 <c>null</c>.</param>
@@ -42,7 +99,7 @@ public sealed record ImportPlanConversation(
 public sealed record ImportPlanProject(
     string? ProjectId,
     string DisplayName,
-    Domain.Codex.Import.ProjectPathMappingStatus PathStatus,
+    ProjectPathMappingStatus PathStatus,
     string? TargetProjectPath);
 
 /// <summary>

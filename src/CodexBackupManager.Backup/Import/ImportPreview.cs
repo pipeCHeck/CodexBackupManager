@@ -41,6 +41,16 @@ public enum ImportPlannedAction
 /// <param name="PlannedAction">Phase 7이 참고할 기본 계획(Preview일 뿐, 아직 적용하지 않는다).</param>
 /// <param name="Metadata">metadata 차이(내용 관계와 별개).</param>
 /// <param name="Warnings">이 대화를 판정하며 발견한 개별 문제(Unverifiable 사유 등). 원문 없음.</param>
+/// <param name="LocalRevision">
+/// (Phase 06_02) 이 판정에 실제로 쓰인 로컬 <see cref="ConversationRevision"/>. 로컬 chain이 없거나
+/// (New) revision을 만들 수 없었으면(Unverifiable) <c>null</c>. <see cref="ImportPlanBuilder"/>가
+/// 이 값을 그대로 <see cref="ImportConversationPrecondition"/>으로 freeze한다 — Phase 7이 나중에
+/// "로컬이 그때와 같은지"를 다시 판정 없이 그대로 비교할 수 있게 하기 위함이다(재계산 금지 원칙).
+/// </param>
+/// <param name="IncomingRevision">
+/// (Phase 06_02) 이 판정에 실제로 쓰인 backup 쪽 <see cref="ConversationRevision"/>. 계산하지
+/// 못했으면(New/Unverifiable) <c>null</c>.
+/// </param>
 public sealed record ImportConversationPreview(
     string ThreadId,
     bool IsSelected,
@@ -48,7 +58,9 @@ public sealed record ImportConversationPreview(
     RevisionRelation Relation,
     ImportPlannedAction PlannedAction,
     MetadataDifferences Metadata,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    ConversationRevision? LocalRevision,
+    ConversationRevision? IncomingRevision);
 
 /// <summary>프로젝트 하나의 Import Preview 결과.</summary>
 /// <param name="ProjectId">backup 쪽 원본 프로젝트 ID. 미분류면 <c>null</c>.</param>
