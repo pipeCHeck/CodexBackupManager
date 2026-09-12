@@ -46,12 +46,14 @@ public sealed class FakeStateDatabaseBuilder
         string? memoryMode = null,
         string? reasoningEffort = null,
         bool? isPinned = null,
-        long? recencyAtMs = null)
+        long? recencyAtMs = null,
+        string? source = "vscode")
     {
         _threadRows.Add(new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["id"] = id,
             ["rollout_path"] = rolloutPath,
+            ["source"] = source,
             ["cwd"] = cwd,
             ["title"] = title,
             ["name"] = name,
@@ -113,7 +115,7 @@ public sealed class FakeStateDatabaseBuilder
         {
             create.CommandText = """
                 CREATE TABLE threads (
-                    id TEXT PRIMARY KEY, rollout_path TEXT, cwd TEXT, title TEXT, name TEXT,
+                    id TEXT PRIMARY KEY, rollout_path TEXT, source TEXT, cwd TEXT, title TEXT, name TEXT,
                     first_user_message TEXT, preview TEXT, thread_source TEXT, project_id TEXT,
                     archived INTEGER, archived_at INTEGER, created_at_ms INTEGER, updated_at_ms INTEGER,
                     history_mode TEXT, cli_version TEXT, model_provider TEXT, model TEXT,

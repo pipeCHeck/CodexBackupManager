@@ -62,6 +62,21 @@ public sealed class ExportPlanBuilderTests : IDisposable
         IReadOnlyList<HistoryBaseReference?>? fileHistoryBases = null)
         => new(threadId, files, fileHistoryBases ?? new HistoryBaseReference?[files.Count], parentThreadId, parentEndOrdinalExclusive, null, []);
 
+    /// <summary>
+    /// 선택 가능한 최소 metadata를 가진 <see cref="ConversationEntry"/>를 만든다. 실제 UI 흐름에서는
+    /// 선택 목록 자체가 <c>catalog.Projects</c>(=state DB 행이 있는 thread만)에서만 채워지므로,
+    /// "선택했지만 metadata가 없는" 상황은 이론상 발생하지 않는다 — 그래도 방어적으로
+    /// <see cref="ExportPlanBuilder"/>가 이를 fatal로 처리하므로, 이 헬퍼 없이 만든 테스트는
+    /// 일부러 그 fatal 경로를 확인하는 테스트뿐이어야 한다.
+    /// </summary>
+    private static ConversationEntry MakeEntry(string threadId) => new()
+    {
+        ThreadId = threadId,
+        Row = new ThreadRow { Id = threadId },
+        Title = new Domain.Codex.Titles.ThreadTitle(threadId, Domain.Codex.Titles.ThreadTitleSource.StateTitle),
+        Project = new Domain.Codex.Projects.ProjectAssignment(null, Domain.Codex.Projects.ProjectAssignmentSource.Unassigned),
+    };
+
     private static CodexCatalog MakeCatalog(
         IReadOnlyDictionary<string, ThreadChain> chains,
         IReadOnlyList<ConversationEntry>? allConversations = null,
@@ -81,7 +96,7 @@ public sealed class ExportPlanBuilderTests : IDisposable
         RolloutFileReference file = RolloutRef("solo", null, DateTimeOffset.UnixEpoch, path);
         var chains = new Dictionary<string, ThreadChain> { ["solo"] = MakeChain("solo", [file]) };
 
-        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains), new HashSet<string> { "solo" });
+        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains, [MakeEntry("solo")]), new HashSet<string> { "solo" });
 
         Assert.Equal(1, plan.SelectedConversationCount);
         Assert.Equal(0, plan.DependencyConversationCount);
@@ -109,8 +124,9 @@ public sealed class ExportPlanBuilderTests : IDisposable
             ["child"] = MakeChain("child", [childFile], parentThreadId: parentSeg1.OwnRolloutId, parentEndOrdinalExclusive: 5),
         };
 
-        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains), new HashSet<string> { "child" });
+        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains, [MakeEntry("child")]), new HashSet<string> { "child" });
 
+        Assert.Empty(plan.FatalErrors);
         Assert.Equal(1, plan.SelectedConversationCount);
         Assert.Equal(1, plan.DependencyConversationCount);
 
@@ -141,8 +157,11 @@ public sealed class ExportPlanBuilderTests : IDisposable
             ["child2"] = MakeChain("child2", [child2File], parentThreadId: parentFile.OwnRolloutId),
         };
 
-        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains), new HashSet<string> { "child1", "child2" });
+        ExportPlan plan = ExportPlanBuilder.Build(
+            MakeCatalog(chains, [MakeEntry("child1"), MakeEntry("child2")]),
+            new HashSet<string> { "child1", "child2" });
 
+        Assert.Empty(plan.FatalErrors);
         Assert.Equal(2, plan.SelectedConversationCount);
         Assert.Equal(1, plan.DependencyConversationCount); // parent는 한 번만 dependency로 집계된다.
         Assert.Equal(3, plan.RolloutFiles.Count); // parent + child1 + child2, 중복 없음.
@@ -164,8 +183,9 @@ public sealed class ExportPlanBuilderTests : IDisposable
             ["other"] = MakeChain("other", [otherFile]), // 조상 관계 없음, snapshot에도 없음.
         };
 
-        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains), new HashSet<string> { "selected" });
+        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains, [MakeEntry("selected")]), new HashSet<string> { "selected" });
 
+        Assert.Empty(plan.FatalErrors);
         Assert.Single(plan.Conversations);
         Assert.DoesNotContain(plan.Conversations, c => c.ThreadId == "other");
         Assert.DoesNotContain(plan.RolloutFiles, f => f.SourceFullPath == otherPath);
@@ -191,8 +211,11 @@ public sealed class ExportPlanBuilderTests : IDisposable
             ["t2"] = MakeChain("t2", [file2]),
         };
 
-        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains), new HashSet<string> { "t1", "t2" });
+        ExportPlan plan = ExportPlanBuilder.Build(
+            MakeCatalog(chains, [MakeEntry("t1"), MakeEntry("t2")]),
+            new HashSet<string> { "t1", "t2" });
 
+        Assert.Empty(plan.FatalErrors);
         Assert.Single(plan.Attachments); // shared.png 하나만(두 thread가 같은 파일을 공유 — dedupe).
         Assert.Equal(sharedImagePath, plan.Attachments[0].SourceFullPath);
         Assert.Contains(plan.Warnings, w => w.Contains('1') && w.Contains("찾을 수 없"));
@@ -241,5 +264,73 @@ public sealed class ExportPlanBuilderTests : IDisposable
         PlannedProject onlyProject = Assert.Single(plan.Projects);
         Assert.Equal("proj-a", onlyProject.ProjectId);
         Assert.Equal(["selected"], onlyProject.SelectedThreadIds);
+    }
+
+    // ── Phase 05_01 hardening: 선택 대화를 완전하게 백업할 수 없으면 FAIL(warning으로 넘어가지 않는다) ──
+
+    [Fact]
+    public void 선택한_대화_중_하나의_체인이_없으면_FatalError를_남긴다()
+    {
+        string okPath = WriteRolloutFile("ok.jsonl", [EventMsgLine(0, "UserMessage", "u1", "ok")]);
+        RolloutFileReference okFile = RolloutRef("ok", null, DateTimeOffset.UnixEpoch, okPath);
+        var chains = new Dictionary<string, ThreadChain> { ["ok"] = MakeChain("ok", [okFile]) };
+
+        ExportPlan plan = ExportPlanBuilder.Build(
+            MakeCatalog(chains, [MakeEntry("ok")]),
+            new HashSet<string> { "ok", "missing-chain" }); // "missing-chain"은 chains에 아예 없다.
+
+        Assert.NotEmpty(plan.FatalErrors);
+        Assert.Contains(plan.FatalErrors, e => e.Contains("rollout 파일 체인을 찾을 수 없"));
+    }
+
+    [Fact]
+    public void 선택한_대화의_metadata가_없으면_FatalError를_남긴다()
+    {
+        string path = WriteRolloutFile("orphan.jsonl", [EventMsgLine(0, "UserMessage", "u1", "orphan")]);
+        RolloutFileReference file = RolloutRef("orphan", null, DateTimeOffset.UnixEpoch, path);
+        var chains = new Dictionary<string, ThreadChain> { ["orphan"] = MakeChain("orphan", [file]) };
+
+        // 일부러 MakeEntry를 넘기지 않는다 — chain은 있지만 state DB 행(metadata)이 없는 고아 thread.
+        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains), new HashSet<string> { "orphan" });
+
+        Assert.NotEmpty(plan.FatalErrors);
+        Assert.Contains(plan.FatalErrors, e => e.Contains("metadata를 찾을 수 없"));
+    }
+
+    [Fact]
+    public void 조상_rollout_파일을_찾을_수_없으면_FatalError를_남긴다()
+    {
+        string childPath = WriteRolloutFile("child.jsonl", [EventMsgLine(0, "UserMessage", "u1", "child")]);
+        RolloutFileReference childFile = RolloutRef("child", null, DateTimeOffset.UnixEpoch, childPath);
+
+        // "child"가 "missing-parent-rollout-id"를 조상으로 가리키지만, 그 rollout ID를 가진 파일이
+        // 어느 체인에도 없다 — 완전한 dependency closure를 만들 수 없는 상황.
+        var chains = new Dictionary<string, ThreadChain>
+        {
+            ["child"] = MakeChain("child", [childFile], parentThreadId: "missing-parent-rollout-id"),
+        };
+
+        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains, [MakeEntry("child")]), new HashSet<string> { "child" });
+
+        Assert.NotEmpty(plan.FatalErrors);
+        Assert.Contains(plan.FatalErrors, e => e.Contains("조상 rollout 파일"));
+    }
+
+    [Fact]
+    public void 순환_참조가_있으면_FatalError를_남긴다()
+    {
+        RolloutFileReference fileA = RolloutRef("a", null, DateTimeOffset.UnixEpoch, WriteRolloutFile("a.jsonl", [EventMsgLine(0, "UserMessage", "u1", "a")]));
+        RolloutFileReference fileB = RolloutRef("b", null, DateTimeOffset.UnixEpoch, WriteRolloutFile("b.jsonl", [EventMsgLine(0, "UserMessage", "u2", "b")]));
+
+        var chains = new Dictionary<string, ThreadChain>
+        {
+            ["a"] = MakeChain("a", [fileA], parentThreadId: "b"),
+            ["b"] = MakeChain("b", [fileB], parentThreadId: "a"),
+        };
+
+        ExportPlan plan = ExportPlanBuilder.Build(MakeCatalog(chains, [MakeEntry("a")]), new HashSet<string> { "a" });
+
+        Assert.NotEmpty(plan.FatalErrors);
+        Assert.Contains(plan.FatalErrors, e => e.Contains("순환 참조"));
     }
 }

@@ -10,13 +10,23 @@ namespace CodexBackupManager.Backup.Planning;
 /// <param name="RolloutFiles">복사해야 할 rollout 파일 전체(여러 대화가 공유해도 한 번만).</param>
 /// <param name="Attachments">복사해야 할 첨부(local_image) 파일 전체.</param>
 /// <param name="Projects">선택된 대화가 속한 프로젝트 그룹.</param>
-/// <param name="Warnings">계획 단계에서 발견한 문제(누락된 attachment 등). 사용자 원문 없음.</param>
+/// <param name="Warnings">
+/// 계획 단계에서 발견한 <b>선택적(optional)</b> 문제 — 누락된 attachment 파일 등. 이런 문제가
+/// 있어도 Export는 성공 처리한다(요구사항: "optional attachment 누락은 warning으로 허용 가능").
+/// 사용자 원문 없음.
+/// </param>
+/// <param name="FatalErrors">
+/// 선택한 대화를 <b>완전하게</b> 백업할 수 없게 만드는 문제(체인 없음/조상 rollout 없음/순환 참조
+/// 등). 하나라도 있으면 <see cref="Writing.BackupWriter"/>는 아예 temp 파일도 만들지 않고 즉시
+/// 실패 처리한다 — "부분 성공"을 성공으로 위장하지 않는다(Phase 05_01).
+/// </param>
 public sealed record ExportPlan(
     IReadOnlyList<PlannedConversation> Conversations,
     IReadOnlyList<PlannedPayloadFile> RolloutFiles,
     IReadOnlyList<PlannedAttachment> Attachments,
     IReadOnlyList<PlannedProject> Projects,
-    IReadOnlyList<string> Warnings)
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> FatalErrors)
 {
     /// <summary>사용자가 실제로 선택한 대화 수.</summary>
     public int SelectedConversationCount => Count(true);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using CodexBackupManager.Backup.Checksums;
@@ -69,6 +70,17 @@ public static class BackupWriter
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(manifestWithoutChecksums);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+
+        // 선택한 대화 중 하나라도 완전하게 백업할 수 없으면(§ExportPlan.FatalErrors) 아예 temp 파일도
+        // 만들지 않고 즉시 실패시킨다 — "부분 성공"을 성공으로 보여주지 않는다(Phase 05_01).
+        if (plan.FatalErrors.Count > 0)
+        {
+            return new WriteResult(
+                false,
+                $"선택한 대화 중 일부를 완전하게 백업할 수 없어 Export를 중단했습니다 ({plan.FatalErrors.Count}건).",
+                plan.Warnings,
+                null);
+        }
 
         if (!overwrite && File.Exists(destinationPath))
         {
@@ -141,9 +153,18 @@ public static class BackupWriter
                 checksumEntries.Add(CopyPayload(archive, attachment.SourceFullPath, attachment.EntryPath, cancellationToken));
             }
 
+            // Phase 05_01: manifest.json도 accidental corruption을 탐지할 수 있게 체크섬을 남긴다.
+            // 순환은 생기지 않는다 — manifest.json의 바이트는 이 시점에 이미 확정돼 있고(payload
+            // entry 경로는 계획 단계에서 정해졌다) checksums.json 쪽만 manifest의 해시를 담을 뿐,
+            // manifest.json 자신은 checksums.json 내용을 전혀 참조하지 않는다(단방향).
+            // checksums.json 자기 자신은 여전히 해시하지 않는다(그건 진짜 순환이라 불가능하다).
+            byte[] manifestBytes = Encoding.UTF8.GetBytes(ManifestJson.Serialize(manifestWithoutChecksums));
+            string manifestSha256 = Convert.ToHexStringLower(SHA256.HashData(manifestBytes));
+            checksumEntries.Add(new ChecksumEntry("manifest.json", manifestBytes.LongLength, manifestSha256));
+
             var checksumManifest = new ChecksumManifest { Entries = checksumEntries };
             WriteTextEntry(archive, "checksums.json", ChecksumJson.Serialize(checksumManifest));
-            WriteTextEntry(archive, "manifest.json", ManifestJson.Serialize(manifestWithoutChecksums));
+            WriteBytesEntry(archive, "manifest.json", manifestBytes);
         }
 
         return checksumEntries;
@@ -188,10 +209,12 @@ public static class BackupWriter
     }
 
     private static void WriteTextEntry(ZipArchive archive, string entryPath, string content)
+        => WriteBytesEntry(archive, entryPath, Encoding.UTF8.GetBytes(content));
+
+    private static void WriteBytesEntry(ZipArchive archive, string entryPath, byte[] bytes)
     {
         ZipArchiveEntry entry = archive.CreateEntry(entryPath, CompressionLevel.Optimal);
         using Stream destination = entry.Open();
-        byte[] bytes = Encoding.UTF8.GetBytes(content);
         destination.Write(bytes, 0, bytes.Length);
     }
 

@@ -17,7 +17,11 @@ public static class ThreadRowReader
     /// <summary>대화 메타데이터 테이블 이름.</summary>
     public const string ThreadsTable = "threads";
 
-    private static readonly string[] KnownColumns =
+    /// <summary>
+    /// 이 클래스가 읽는 컬럼 이름 전체(존재하지 않는 버전에서는 생략된다). 실제 스키마와의 대조
+    /// 테스트(<c>ThreadRowSchemaCoverageTests</c>)가 <c>InternalsVisibleTo</c>로 직접 확인한다.
+    /// </summary>
+    internal static readonly string[] KnownColumns =
     [
         "id", "rollout_path", "cwd", "title", "name", "first_user_message", "preview",
         "thread_source", "project_id", "archived", "archived_at", "created_at_ms", "updated_at_ms",
@@ -26,6 +30,9 @@ public static class ThreadRowReader
         "created_at", "updated_at", "sandbox_policy", "approval_mode", "tokens_used", "has_user_event",
         "agent_nickname", "agent_role", "agent_path", "memory_mode", "reasoning_effort", "is_pinned",
         "thread_section_id", "section_position", "section_entered_at_ms", "recency_at", "recency_at_ms",
+        // Phase 05_01 hardening — 실제 38컬럼과 KnownColumns를 기계적으로 대조해 "source" 누락을
+        // 발견했다(tests/…/ThreadRowSchemaCoverageTests.cs). NOT NULL 컬럼인데도 빠져 있었다.
+        "source",
     ];
 
     /// <summary><c>threads</c> 테이블 전체를 읽는다. 테이블/<c>id</c> 컬럼이 없으면 빈 목록.</summary>
@@ -74,6 +81,7 @@ public static class ThreadRowReader
             {
                 Id = id,
                 RolloutPath = GetString(byColumn, "rollout_path"),
+                Source = GetString(byColumn, "source"),
                 Cwd = GetString(byColumn, "cwd"),
                 Title = GetString(byColumn, "title"),
                 Name = GetString(byColumn, "name"),

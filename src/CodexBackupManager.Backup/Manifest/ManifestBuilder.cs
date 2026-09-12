@@ -30,6 +30,13 @@ public static class ManifestBuilder
         Dictionary<string, string> attachmentEntryByPath = plan.Attachments
             .ToDictionary(a => a.SourceFullPath, a => a.EntryPath, StringComparer.OrdinalIgnoreCase);
 
+        // Phase 05_01: 원본 절대경로 ↔ entry 경로의 명시적 역매핑을 top-level에 별도로 남긴다 —
+        // conversation의 PayloadAttachmentEntries만으로는 이 관계를 되짚을 수 없다(같은 basename이
+        // 다른 디렉터리에 있었을 수 있다).
+        List<BackupAttachmentMetadata> attachments = plan.Attachments
+            .Select(a => new BackupAttachmentMetadata { EntryPath = a.EntryPath, OriginalAbsolutePath = a.SourceFullPath })
+            .ToList();
+
         var conversations = new List<BackupConversationMetadata>(plan.Conversations.Count);
         foreach (PlannedConversation c in plan.Conversations)
         {
@@ -48,11 +55,25 @@ public static class ManifestBuilder
                 IsSelected = c.IsSelected,
                 ResolvedTitle = c.Entry?.Title.Text,
                 TitleSource = c.Entry?.Title.Source.ToString(),
-                ProjectId = c.Entry?.Project.ProjectId,
+                ProjectId = row?.ProjectId,
+                ResolvedProjectId = c.Entry?.Project.ProjectId,
                 OriginalCwd = row?.Cwd,
+                OriginalRolloutPath = row?.RolloutPath,
+                Source = row?.Source,
+                Title = row?.Title,
+                Name = row?.Name,
+                FirstUserMessage = row?.FirstUserMessage,
+                Preview = row?.Preview,
+                CreatedAtSeconds = row?.CreatedAtSeconds,
+                CreatedAtMs = row?.CreatedAtMs,
                 CreatedAtUtc = c.Entry?.CreatedAtUtc,
+                UpdatedAtSeconds = row?.UpdatedAtSeconds,
+                UpdatedAtMs = row?.UpdatedAtMs,
                 UpdatedAtUtc = c.Entry?.UpdatedAtUtc,
+                RecencyAtSeconds = row?.RecencyAtSeconds,
+                RecencyAtMs = row?.RecencyAtMs,
                 Archived = row?.Archived ?? false,
+                ArchivedAtSeconds = row?.ArchivedAtSeconds,
                 ArchivedAtUtc = row?.ArchivedAtSeconds is { } archivedAt
                     ? DateTimeOffset.FromUnixTimeSeconds(archivedAt)
                     : null,
@@ -76,6 +97,7 @@ public static class ManifestBuilder
                 IsPinned = row?.IsPinned,
                 ThreadSectionId = row?.ThreadSectionId,
                 SectionPosition = row?.SectionPosition,
+                SectionEnteredAtMs = row?.SectionEnteredAtMs,
                 PayloadRolloutEntries = rolloutEntries,
                 PayloadAttachmentEntries = attachmentEntries,
             });
@@ -105,6 +127,7 @@ public static class ManifestBuilder
             PayloadCount = plan.RolloutFiles.Count + plan.Attachments.Count,
             Projects = projects,
             Conversations = conversations,
+            Attachments = attachments,
             Warnings = plan.Warnings,
         };
     }

@@ -104,6 +104,7 @@ public sealed class MainViewModel : ObservableObject
         SelectAllConversationsCommand = new RelayCommand(SelectAllConversations, () => TotalConversationCount > 0);
         ClearSelectionCommand = new RelayCommand(ClearAllSelections, () => HasSelection);
         ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting);
+        CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -125,7 +126,10 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>선택한 대화를 <c>.codexbackup</c> 파일로 내보낸다(Phase 5).</summary>
     public RelayCommand ExportCommand { get; }
 
-    /// <summary>Export가 진행 중인지. 재실행을 막는 데 쓴다.</summary>
+    /// <summary>진행 중인 Export를 취소한다(Phase 05_01). Export 중일 때만 활성화된다.</summary>
+    public RelayCommand CancelExportCommand { get; }
+
+    /// <summary>Export가 진행 중인지. 재실행을 막고 취소 버튼 표시 여부를 결정하는 데 쓴다.</summary>
     public bool IsExporting
     {
         get => _isExporting;
@@ -134,6 +138,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _isExporting, value))
             {
                 ExportCommand.RaiseCanExecuteChanged();
+                CancelExportCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -760,9 +765,17 @@ public sealed class MainViewModel : ObservableObject
             if (ReferenceEquals(_exportCancellation, cancellation))
             {
                 IsExporting = false;
+                _exportCancellation = null;
             }
         }
     }
+
+    /// <summary>
+    /// 진행 중인 Export를 취소한다. 실제 취소 처리(temp 삭제 등)는 core
+    /// (<see cref="BackupWriter.Write"/>)가 <see cref="CancellationToken"/>을 보고 직접 한다 —
+    /// 여기서는 신호만 보낸다.
+    /// </summary>
+    private void CancelExport() => _exportCancellation?.Cancel();
 
     /// <summary>
     /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 대량 선택/해제 시

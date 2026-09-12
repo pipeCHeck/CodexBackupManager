@@ -269,6 +269,13 @@ Balhwajeom_Project
 
 # 11. 백업 파일 구조
 
+> **§11~13은 Phase 5 구현 전 초안이며, 실측 기반으로 확정된 정식 스펙이 아니다.**
+> Backup Format V1의 정식 스펙은 `docs/codexbackup-format-v1.md`이다(Phase 05_01 완료 기준
+> **FROZEN**) — Restore Sufficiency Audit, manifest/checksum/dependency-closure/attachment 정책이
+> 전부 실측·공식 소스 대조로 확정되어 있다. 아래 §11~13의 예시(파일 배치, manifest 필드 이름 등)는
+> 실제 구현과 다르다. Phase 6/7 작업 시에는 아래 초안이 아니라 `docs/codexbackup-format-v1.md`를
+> 따를 것.
+
 백업 파일은 단순히 Codex 폴더를 통째로 ZIP 하는 방식으로 만들지 않는다.
 
 우리 프로그램의 독립적인 백업 포맷을 정의한다.

@@ -8,6 +8,7 @@ using CodexBackupManager.Codex.Threads;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Threads;
+using CodexBackupManager.Domain.Diagnostics;
 
 namespace CodexBackupManager.Backup.Planning;
 
@@ -44,6 +45,7 @@ public static class ExportPlanBuilder
         ArgumentNullException.ThrowIfNull(selectedThreadIds);
 
         var warnings = new List<string>();
+        var fatalErrors = new List<string>();
         Dictionary<string, ConversationEntry> entryByThreadId = catalog.AllConversations
             .ToDictionary(e => e.ThreadId, StringComparer.OrdinalIgnoreCase);
 
@@ -55,18 +57,37 @@ public static class ExportPlanBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
             selected.Add(threadId);
+            string threadHash = Redact.ShortHash(threadId);
 
+            // 선택한 대화 하나라도 완전하게 백업할 수 없으면(체인 없음/조상 없음/순환 참조/metadata
+            // 없음) 이 Export 전체를 FAIL시킨다 — "부분 성공"을 성공으로 위장하지 않는다
+            // (Phase 05_01). optional한 것(첨부 누락 등)만 warnings로 허용한다.
             if (!catalog.Chains.ContainsKey(threadId))
             {
-                warnings.Add("선택한 대화의 rollout 파일 체인을 찾을 수 없어 건너뛰었습니다.");
+                fatalErrors.Add($"선택한 대화(thread={threadHash})의 rollout 파일 체인을 찾을 수 없습니다.");
                 continue;
             }
 
+            if (!entryByThreadId.ContainsKey(threadId))
+            {
+                fatalErrors.Add($"선택한 대화(thread={threadHash})의 state DB metadata를 찾을 수 없어 복원에 필요한 정보가 부족합니다.");
+                continue;
+            }
+
+            var chainWarnings = new List<string>();
             IReadOnlyList<ThreadDependencyResolver.ChainLink> links =
-                ThreadDependencyResolver.ResolveChainLinks(threadId, catalog.Chains, warnings, out bool hasCycle);
+                ThreadDependencyResolver.ResolveChainLinks(threadId, catalog.Chains, chainWarnings, out bool hasCycle);
+
             if (hasCycle)
             {
-                warnings.Add("분기 조상 체인에서 순환 참조가 발견되어 일부만 포함되었습니다.");
+                fatalErrors.Add($"선택한 대화(thread={threadHash})의 조상 체인에서 순환 참조가 발견되어 완전한 복원을 보장할 수 없습니다.");
+                continue;
+            }
+
+            if (chainWarnings.Count > 0)
+            {
+                fatalErrors.Add($"선택한 대화(thread={threadHash})의 조상 rollout 파일 일부를 찾을 수 없어 완전한 dependency closure를 만들 수 없습니다.");
+                continue;
             }
 
             foreach (ThreadDependencyResolver.ChainLink link in links)
@@ -182,6 +203,6 @@ public static class ExportPlanBuilder
             projects.Add(new PlannedProject(project.ProjectId, project.DisplayName, project.RootPaths, selectedIds));
         }
 
-        return new ExportPlan(conversations, rolloutByPath.Values.ToList(), attachmentByAbsolutePath.Values.ToList(), projects, warnings);
+        return new ExportPlan(conversations, rolloutByPath.Values.ToList(), attachmentByAbsolutePath.Values.ToList(), projects, warnings, fatalErrors);
     }
 }

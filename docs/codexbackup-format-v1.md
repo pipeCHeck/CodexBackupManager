@@ -5,6 +5,10 @@
 함께 기록한다. `docs/codex-storage-format.md`가 "Codex가 무엇을 어떻게 저장하는가"를 다룬다면, 이
 문서는 "우리가 그중 무엇을, 어떤 형태로 백업하는가"를 다룬다.
 
+> **상태: FROZEN (Phase 05_01 완료 기준).** Phase 5에서 처음 확정한 스펙을 GitHub 코드 리뷰로 발견된
+> 정합성 문제(§5)에 맞춰 Phase 05_01에서 수정했다. Phase 6(Import Preview)은 이 문서를 그대로
+> 신뢰하고 구현을 시작해도 된다 — 이후 변경이 필요하면 이 문서를 먼저 갱신하고 버전을 다시 정의한다.
+
 ---
 
 ## 1. Restore Sufficiency Audit
@@ -94,6 +98,16 @@ PC의 Codex Desktop 빌드와 정확히 같은 버전/브랜치가 아니거나,
 동일하게 확장), 모르는/opaque 값(`sandbox_policy`, `approval_mode` 등)은 문자열 그대로 담는다.
 컬럼이 없는 Codex 버전에서는 전부 `null`로 남긴다(추측하지 않는다, 기존 `ThreadRow` 설계 원칙 그대로).
 
+> **Phase 05_01 정정**: Phase 5 최초 구현은 "38개 전부 보존"이라고 문서에 적었지만 실제로는
+> `source` 컬럼(NOT NULL)이 `ThreadRowReader.KnownColumns`와 `ThreadRow`에서 누락돼 있었다 —
+> GitHub 코드 리뷰로 발견됐다. `ThreadRow`/`ThreadRowReader`/`BackupConversationMetadata` 세
+> 곳을 실제 38컬럼과 기계적으로 대조하는 테스트(`ThreadRowSchemaCoverageTests`,
+> `BackupConversationMetadataCoverageTests`)를 추가해 같은 종류의 누락이 다시 생기면 빌드가
+> 아니라 테스트가 확실히 실패하게 만들었다. 또한 Manifest의 `resolvedTitle`(가공값, 제목 우선순위
+> 결과)이 원본 `title`/`name`/`firstUserMessage`/`preview` 컬럼의 대체물로 쓰이고 있었다 — 이제는
+> 원본 4개 필드를 전부 별도로 그대로 보존하고, `resolvedTitle`은 "표시용 편의 필드"로만 남긴다
+> (§3.2 참고).
+
 ---
 
 ## 2. 첨부/비-텍스트 콘텐츠 조사
@@ -127,6 +141,19 @@ PC의 Codex Desktop 빌드와 정확히 같은 버전/브랜치가 아니거나,
   근거로 제외했다 — 임의로 대상을 넓히거나 좁히지 않았다.
 - **경고 정책**: `local_image.path`가 가리키는 파일이 없으면(스크린샷 임시파일 등, 흔함) manifest의
   `Warnings`에 개수만 기록하고 원본 경로는 로그에 남기지 않는다.
+- **원본 경로 ↔ entry 경로 역매핑(Phase 05_01)**: `manifest.attachments[]`(`BackupAttachmentMetadata`)에
+  `{entryPath, originalAbsolutePath}` 쌍을 전부 기록한다. 이전에는 conversation의
+  `payloadAttachmentEntries`가 entry 경로만 나열해서, 같은 basename이 서로 다른 디렉터리에 있었던
+  경우 "이 entry가 원래 어떤 로컬 파일이었는지" 역으로 알 수 없었다 — GitHub 코드 리뷰로 발견됐다.
+- **Scanner의 authoritative-source 정책(Phase 05_01)**: `LocalImageAttachmentScanner`는 이제
+  `ConversationItemParser`와 **완전히 같은 파일 단위 정책**을 쓴다 — 한 rollout 파일에
+  `event_msg/item_completed`가 하나라도 있으면 그 파일의 `local_image` 참조만 신뢰하고,
+  하나도 없는 파일(fallback-only)에서만 `response_item`을 본다. 실측(2026-09-12, 371개 파일):
+  fallback-only 파일 51개는 전부 non-text content가 0건이었지만, 이 형식 자체가 그런 콘텐츠를
+  담을 수 없다는 보장은 아니므로 방어적으로 정책을 통일했다. `response_item`의 non-text content는
+  실측 결과 `input_image.image_url`(403건, **전부 `data:` URI** — 이미 rollout 바이트 안에
+  내용이 있어 별도 파일 참조가 아니다)뿐이었다. Scanner는 `image_url`이 `data:`/원격 URL이 아닐
+  때만(=로컬 파일 경로로 보일 때만) 외부 참조로 취급한다.
 
 ---
 
@@ -170,19 +197,35 @@ ZIP entry 이름에는 **사용자 PC의 절대경로를 넣지 않는다**. rol
     {
       "threadId": "…",
       "isSelected": true,        // false = dependency-only(조상)
+
+      // 표시용 편의 필드(가공값) — 아래 원본 컬럼들을 대체하지 않는다(Phase 05_01 정정, §1.5).
       "resolvedTitle": "…", "titleSource": "StateName|SessionIndex|Title|FirstUserMessage|Preview",
-      "projectId": "…", "originalCwd": "…",
-      "createdAtUtc": "…", "updatedAtUtc": "…",
-      "archived": false, "archivedAtUtc": null,
+      "resolvedProjectId": "…",   // CodexProjectResolver의 3중 경로 해결 결과. Projects 그룹핑과 같은 값
+
+      // 원본 threads 컬럼(38컬럼) 그대로 — Phase 05_01에서 title/name/firstUserMessage/preview/
+      // source/rollout_path/created_at(_ms)/updated_at(_ms)/recency_at(_ms)/archived_at/
+      // sectionEnteredAtMs를 추가로 보존하게 됐다. Restore가 그대로 재사용할 값이 아니라(특히
+      // originalRolloutPath), 원본 metadata를 잃지 않기 위한 보존이다.
+      "projectId": null, "originalCwd": "…", "originalRolloutPath": "…", "source": "vscode",
+      "title": "…", "name": "…", "firstUserMessage": "…", "preview": "…",
+      "createdAtSeconds": 0, "createdAtMs": 0, "createdAtUtc": "…",
+      "updatedAtSeconds": 0, "updatedAtMs": 0, "updatedAtUtc": "…",
+      "recencyAtSeconds": 0, "recencyAtMs": 0,
+      "archived": false, "archivedAtSeconds": null, "archivedAtUtc": null,
       "historyMode": "paginated", "threadSource": "user",
       "cliVersion": "…", "modelProvider": "…", "model": "…", "reasoningEffort": "…",
       "memoryMode": "…", "sandboxPolicyRaw": "{…opaque…}", "approvalMode": "…",
       "tokensUsed": 0, "hasUserEvent": true,
       "gitSha": null, "gitBranch": null, "gitOriginUrl": null,
       "agentNickname": null, "agentRole": null, "agentPath": null,
-      "isPinned": false, "threadSectionId": null, "sectionPosition": null,
-      "payloadRolloutEntries": ["payload/rollouts/rollout-….jsonl", "…"] // 이 thread 체인 재구성에 필요한 파일들(순서 보존)
+      "isPinned": false, "threadSectionId": null, "sectionPosition": null, "sectionEnteredAtMs": null,
+
+      "payloadRolloutEntries": ["payload/rollouts/rollout-….jsonl", "…"], // 이 thread 체인 재구성에 필요한 파일들(순서 보존)
+      "payloadAttachmentEntries": ["payload/attachments/0/shot.png"]      // 아래 top-level attachments[]로 원본 경로를 역매핑
     }
+  ],
+  "attachments": [
+    { "entryPath": "payload/attachments/0/shot.png", "originalAbsolutePath": "C:\\Users\\…\\shot.png" }
   ],
   "warnings": ["…"]   // 누락된 attachment 개수 등. 사용자 원문/개인 경로 없음
 }
@@ -190,7 +233,12 @@ ZIP entry 이름에는 **사용자 PC의 절대경로를 넣지 않는다**. rol
 
 **`selected` vs `dependency` 구분**: `conversations[].isSelected=false`인 항목은
 `GetSelectedThreadIdsSnapshot()`엔 없었지만 어떤 선택 대화의 조상 체인이라 파일이 필요해 포함된
-thread다. `projectCount`/`conversationCount`는 `isSelected=true`만 센다.
+thread다. `projectCount`/`conversationCount`는 `isSelected=true`만 센다(Validator가 이 일치를
+직접 검사한다, §3.7).
+
+**`attachments[]`(Phase 05_01 신설)**: `payloadAttachmentEntries`의 entry 경로만으로는 "원래 어떤
+로컬 파일이었는지" 역으로 알 수 없다(같은 basename이 다른 디렉터리에 있었을 수 있고, entry 이름은
+dedupe를 위해 인덱스 폴더로 분리돼 있다) — 이 배열이 유일한 신뢰 가능한 역매핑이다.
 
 ### 3.3 checksums.json — 체크섬 정책(순환 참조 회피)
 
@@ -198,11 +246,22 @@ thread다. `projectCount`/`conversationCount`는 `isSelected=true`만 센다.
 { "entries": [ { "path": "payload/rollouts/…", "byteLength": 12345, "sha256": "…" }, … ] }
 ```
 
-- **모든 payload 파일**(rollout + attachment)에 대해 하나씩 존재한다.
-- **`manifest.json` 자신과 `checksums.json` 자신은 이 목록에 포함하지 않는다** — 파일 내용이
-  최종 확정되기 전에는 자기 자신의 해시를 계산할 수 없어 순환이 생기기 때문이다. 대신
-  `manifest.json`의 무결성은 "정상적으로 JSON 파싱되고 `backupFormatVersion`이 있다"는 구조적
-  검사로 대체한다.
+- **모든 payload 파일**(rollout + attachment) + **`manifest.json` 자신**에 대해 하나씩 존재한다.
+- **Phase 05_01 정정**: 최초 설계는 "manifest.json도 자기 자신을 해시하면 순환이 생긴다"고 판단해
+  체크섬 목록에서 아예 뺐다. 다시 검토한 결과 이는 틀린 판단이었다 — **`checksums.json`이
+  `manifest.json`의 해시를 기록**하고 `manifest.json`은 `checksums.json`의 내용을 전혀 참조하지
+  않으므로 방향이 하나뿐이라 순환이 아니다(진짜 순환은 "A가 B를, B가 A를 참조"할 때만 생긴다).
+  그래서 이제 `manifest.json`도 accidental corruption을 체크섬으로 탐지할 수 있다(manifest 1바이트가
+  바뀌어도 여전히 유효한 JSON으로 파싱될 수 있는 경우까지 잡아낸다).
+- **여전히 체크섬에 없는 것은 `checksums.json` 자기 자신뿐이다** — 이건 진짜 순환(자기 자신의
+  최종 바이트를 알아야 자기 자신의 해시를 계산할 수 있음)이라 불가능하다. `checksums.json`의
+  무결성은 "정상적으로 JSON 파싱된다"는 구조적 검사와, 그 안에 담긴 각 항목이 실제 ZIP entry와
+  길이/해시가 일치하는지로 간접 검증한다.
+- **SHA-256은 accidental corruption(전송 오류, 디스크 오류, 수동 편집 실수 등) 탐지용
+  integrity 체크섬이지 전자서명이 아니다.** 서명 키가 없으므로 "이 백업이 정말 이 앱이 만든 것"이라는
+  authenticity(신원 보증)는 보장하지 않는다 — 악의적으로 조작한 사람이 payload와 체크섬을 똑같이
+  다시 계산해 넣으면 이 검증은 통과한다. V1의 목표는 "실수로 손상된 백업을 조용히 성공 처리하지
+  않는 것"이지 "위조 방지"가 아니다.
 - Import(Phase 6)/Validator는 `checksums.json`을 **유일한 체크섬 출처**로 신뢰한다.
 
 ### 3.4 Dependency Closure(체인 재구성) 정책
@@ -222,9 +281,29 @@ thread다. `projectCount`/`conversationCount`는 `isSelected=true`만 센다.
 - 여러 선택 대화가 같은 조상 rollout을 공유하면 payload는 **한 번만** 포함한다(파일 절대경로
   기준 dedupe).
 - 순환 참조/누락된 부모는 `ThreadChainResolver.ResolveAncestry`가 이미 무한루프 없이 처리한다
-  (그 결과에 경고만 덧붙인다) — Export는 이 경우 **실패시키지 않고 있는 데까지 포함 + warning**
-  정책을 따른다(파일 자체가 없다면 어차피 복사할 것도 없으므로 "부분적일 수 있음"을 경고로 알리는
-  것이 "조용히 성공 처리"보다 안전하다).
+  (그 결과를 계속 돌려준다) — **단, Phase 05_01부터는 이걸 warning으로 넘기지 않는다.** 선택한
+  대화의 조상 rollout을 일부라도 찾을 수 없거나 순환 참조가 있으면 그 Export 전체를 FAIL시킨다
+  (아래 "부분 성공 금지" 정책 참고). "파일이 없으면 어차피 복사할 것도 없다"는 최초 판단은
+  틀렸다 — 선택한 대화 하나를 **불완전하게** 백업해 놓고 성공으로 보여주는 것 자체가 백업 도구로서
+  받아들일 수 없는 결과이기 때문이다.
+
+### 3.4.1 부분 성공 금지 정책(Phase 05_01)
+
+다음 중 하나라도 선택한 대화에서 발생하면 `ExportPlan.FatalErrors`에 기록되고,
+`BackupWriter.Write`는 **temp 파일조차 만들지 않고** 즉시 실패를 돌려준다(기존 목적지 파일이
+있었다면 그대로 보존된다):
+
+- 선택한 대화의 rollout 파일 체인 자체를 찾을 수 없음
+- 선택한 대화의 state DB metadata(`ThreadRow`)를 찾을 수 없음
+- 선택한 대화의 조상 체인에서 순환 참조 발견
+- 선택한 대화의 조상 rollout 파일 일부를 찾을 수 없어 완전한 dependency closure를 만들 수 없음
+
+반대로 다음은 여전히 **optional**로 취급해 `Warnings`에만 기록하고 Export는 성공 처리한다:
+
+- 참조된 `local_image` 첨부 파일이 Export 시점에 이미 삭제되어 없음
+
+이 구분의 기준은 "이게 없으면 대화 내용 자체를 신뢰할 수 없는가"다 — rollout/metadata/closure는
+대화의 본체이고, 첨부 이미지 하나는 부가 정보다.
 
 ### 3.5 원본 바이트 보존
 
@@ -242,20 +321,44 @@ thread다. `projectCount`/`conversationCount`는 `isSelected=true`만 센다.
 
 ### 3.7 Atomic Publish + Self Validation
 
+0. `ExportPlan.FatalErrors`가 하나라도 있으면(§3.4.1) 여기서부터 시작하지 않는다 — temp 파일도
+   만들지 않고 즉시 실패를 돌려준다.
 1. 최종 파일과 같은 디렉터리에 `.{name}.tmp-{16자리 랜덤}.codexbackup`을 만든다(같은 볼륨 →
    최종 이동이 원자적).
-2. 스트리밍으로 payload를 전부 쓰고 SHA-256을 계산하며, 마지막에 `manifest.json`/`checksums.json`을
-   쓴다.
-3. temp 파일을 닫은 뒤 **`BackupReader`/`BackupValidator`로 다시 열어** manifest·버전·필수
-   entry·중복 entry·path traversal·checksum·byte length·conversation→rollout 참조·attachment
-   참조·최소 JSONL parse 가능 여부를 전부 검사한다.
+2. 스트리밍으로 payload를 전부 쓰고 SHA-256을 계산하며, `manifest.json`의 바이트를 확정해 그
+   해시를 `checksums.json`에 추가한 뒤, 마지막에 `checksums.json`/`manifest.json`을 쓴다.
+3. temp 파일을 닫은 뒤 **`BackupReader`/`BackupValidator`로 다시 열어** 검사한다(Phase 05_01
+   hardening 이후 목록):
+   - manifest.json 존재·파싱·`backupFormatVersion`
+   - checksums.json 존재·파싱, 그 안의 경로 **중복 없음** + **안전한 상대경로**
+   - ZIP entry 이름 **ordinal 중복 없음** + **Windows 기준(대소문자 무시) 충돌 없음** + path
+     traversal 없음 + **허용된 위치(`manifest.json`/`checksums.json`/`payload/` 하위)만 존재**
+   - manifest 안 **threadId 중복 없음**
+   - **`conversationCount`/`dependencyConversationCount`/`projectCount`/`payloadCount`가 실제
+     배열/entry 개수와 정확히 일치**
+   - **project의 `conversationThreadIds`가 실제로 선택된(`isSelected=true`) thread만 참조**
+   - conversation → payload(rollout/attachment) 참조가 checksums.json/ZIP 양쪽에 다 있음
+   - **모든 `payload/` ZIP entry가 checksums.json에도 있음**(반대 방향 누락 확인)
+   - 모든 checksum entry의 byte length/SHA-256이 실제 압축 해제 결과와 일치(변조 탐지)
+   - rollout payload 최소 JSONL parse 가능 여부(`.jsonl.zst`는 압축 해제 후)
+   - **어떤 이유로도 예외를 던지지 않는다** — malformed 입력은 전부 `BackupValidationResult.Fail`로
+     돌아온다(Phase 6부터 `.codexbackup`이 외부 입력이 되므로 필수).
 4. 전부 PASS일 때만 `File.Move(temp, destination, overwrite)`로 최종 파일이 된다. 실패/취소/예외
    시 temp를 삭제하고 **기존에 있던 정상 backup 파일은 절대 건드리지 않는다**(먼저 지우지 않고
    move 시점에만 교체하므로, 검증 실패 시 기존 파일이 그대로 남는다).
 5. `overwrite` 여부는 API 파라미터로 명시적으로 받는다(기본값 false — 목적지가 이미 있으면
    시작 전에 즉시 실패).
 
-### 3.8 이번에 포함하지 않는 것(§9 CLAUDE.md와 동일 원칙)
+### 3.8 Export UI Cancellation(Phase 05_01)
+
+`MainViewModel`에 `CancelExportCommand`를 추가했다 — Export 중에만 버튼이 보이고
+(`IsExporting`으로 `Visibility` 바인딩), 누르면 `BackupWriter.Write`에 넘긴
+`CancellationToken`을 취소한다. 실제 취소 처리(temp 삭제, 목적지 미생성)는 core
+(`BackupWriter`)가 스트리밍 복사 도중에도 반응하도록 이미 구현되어 있었다 — 300MB급 payload
+복사 도중 취소해도 temp가 즉시 삭제되고 목적지 파일이 생기지 않음을 실제 파일로 확인했다
+(`BackupWriterTests.대형_payload_복사_도중_취소해도…`).
+
+### 3.9 이번에 포함하지 않는 것(§9 CLAUDE.md와 동일 원칙)
 
 `state_*.sqlite`/`thread_history_*.sqlite`/`logs_*.sqlite`/`goals_*.sqlite`/`memories_*.sqlite`/
 `queue_*.sqlite`/`-shm`/`-wal`/기타 projection 캐시는 Backup에 절대 포함하지 않는다. 필요한
@@ -274,3 +377,31 @@ metadata만 §3.2의 독립 JSON으로 추출한다.
    아직 검증되지 못했다(합성 fixture로만 검증, `docs/codex-storage-format.md` §9와 동일한 기존 한계).
 4. 다단계 분기(조상의 조상)의 실제 사례는 여전히 이 PC 데이터에 없어 실측 검증하지 못했다(기존
    한계, `docs/codex-storage-format.md` §9-8과 동일).
+5. SHA-256은 accidental corruption 탐지용이며 전자서명(authenticity 보장)이 아니다(§3.3).
+6. 첨부 dedupe는 원본 절대경로 문자열 비교(`StringComparer.OrdinalIgnoreCase`) 기준이다 —
+   심볼릭 링크나 대소문자만 다른 두 경로가 실제로 같은 파일을 가리키는 경우까지는 동일 파일로
+   인식하지 못할 수 있다(실제 데이터에서 그런 사례는 발견되지 않았다).
+
+---
+
+## 5. Phase 05_01 — Backup V1 Freeze / Restore Sufficiency Hardening
+
+GitHub 코드 리뷰에서 발견된 Phase 5 최초 구현의 정합성 문제를 수정하고 스펙을 FROZEN 상태로
+확정한 작업. 변경 요약(각 항목의 근거/세부 내용은 위 해당 절에 있다):
+
+| # | 문제 | 수정 |
+|---|---|---|
+| 1 | `threads.source`(NOT NULL 컬럼)가 `ThreadRow`/`ThreadRowReader`에서 누락 | 추가 + 38컬럼 전체를 실제 스키마와 기계적으로 대조하는 회귀 테스트 추가(§1.5) |
+| 2 | `resolvedTitle`(가공값)이 원본 `title`/`name`/`firstUserMessage`/`preview`/`rollout_path` 등을 대체 | 원본 컬럼을 전부 별도 필드로 그대로 보존(§3.2) |
+| 3 | 선택한 대화의 chain/metadata/ancestor가 없어도 warning만 남기고 "성공" 처리 | `ExportPlan.FatalErrors` 도입 — 하나라도 있으면 temp도 만들지 않고 즉시 실패(§3.4.1) |
+| 4 | 첨부 원본 경로 ↔ entry 경로 역매핑이 없음 | `manifest.attachments[]`(`BackupAttachmentMetadata`) 신설(§3.2) |
+| 5 | Scanner가 `response_item`-only(fallback) 파일의 이미지 참조를 놓칠 수 있음 | `ConversationItemParser`와 같은 file-level authoritative 정책으로 통일(§2.3) |
+| 6 | Validator가 malformed 입력(중복 checksum 경로 등)에서 예외를 던질 수 있음 | 중복/불안전 경로를 먼저 검사해 항상 `Fail`로 반환, 최상위 `try/catch`로 이중 방어(§3.7) |
+| 7 | Windows 대소문자 무시 entry 충돌 미검출 | `OrdinalIgnoreCase` 그룹핑 추가 검사(§3.7) |
+| 8 | manifest 내부 개수 필드(`conversationCount` 등)가 실제 배열과 다를 수 있어도 미검출 | 4개 카운트 필드 + project 참조 무결성 검사 추가(§3.7) |
+| 9 | `manifest.json`을 "순환 참조"로 오판해 체크섬 보호 대상에서 제외 | `checksums.json`이 `manifest.json`의 해시를 기록(단방향, 순환 아님)(§3.3) |
+| 10 | Export 취소 UI가 없음(core엔 있었으나 버튼이 없었음) | `CancelExportCommand` + 조건부 표시 버튼 추가, 300MB급 실제 취소 확인(§3.8) |
+
+이 표의 모든 항목은 실제 RED(수정 전 재현) → GREEN(수정 후 통과) 테스트로 확인했다. 실제
+`.codex` 데이터로 짧은/segmented/attachment/288MB 대화 4종을 다시 Export해 전부 재검증 PASS를
+확인했고, source-of-truth 해시는 작업 전후 동일했다.

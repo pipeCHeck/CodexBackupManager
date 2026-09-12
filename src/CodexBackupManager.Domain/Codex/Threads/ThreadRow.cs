@@ -33,6 +33,15 @@ public sealed record ThreadRow
     /// <summary><c>"user"</c> | <c>"subagent"</c> | <c>"guardian_review"</c> 등.</summary>
     public string? ThreadSource { get; init; }
 
+    /// <summary>
+    /// <c>threads.source</c>. 실측 결과 <c>"vscode"</c> 같은 단순 문자열이거나 subagent 정보를 담은
+    /// JSON 문자열(<c>{"subagent":{"thread_spawn":{...}}}</c>)이다 — 파싱하지 않고 그대로 보존한다.
+    /// <see cref="ThreadSource"/>(<c>thread_source</c> 컬럼, "user"/"subagent"/"guardian_review")와는
+    /// 이름이 비슷하지만 다른 컬럼이다 — 혼동하지 말 것(Phase 05_01 Restore Sufficiency Audit에서
+    /// 처음 누락이 발견됨).
+    /// </summary>
+    public string? Source { get; init; }
+
     /// <summary>신규(마이그레이션 완료 후) 프로젝트 연결. 마이그레이션 중이면 전부 <c>null</c>일 수 있다.</summary>
     public string? ProjectId { get; init; }
 
