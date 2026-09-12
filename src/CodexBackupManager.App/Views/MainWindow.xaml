@@ -153,6 +153,9 @@
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        Visibility="{Binding IsCatalogLoading, Converter={StaticResource BoolToVisibility}}" />
 
+            <!-- Focusable="False": 체크박스가 키보드 포커스를 받으면 TreeViewItem이 그걸 "선택"으로
+                 취급해 오른쪽 Viewer가 바뀐다(WPF의 "포커스가 선택을 따라간다" 동작). 체크(백업 선택)와
+                 Viewer 포커스를 완전히 분리하기 위해 체크박스는 포커스를 받지 않게 한다. -->
             <TreeView x:Name="ConversationTree" Grid.Row="1" Margin="0,8,0,0" BorderThickness="0" Background="Transparent"
                       ItemsSource="{Binding ProjectNodes}"
                       SelectedItemChanged="ConversationTree_SelectedItemChanged">
@@ -163,15 +166,33 @@
               </TreeView.ItemContainerStyle>
               <TreeView.ItemTemplate>
                 <HierarchicalDataTemplate ItemsSource="{Binding Conversations}">
-                  <TextBlock Text="{Binding HeaderText}" FontWeight="SemiBold" />
+                  <StackPanel Orientation="Horizontal">
+                    <CheckBox IsThreeState="True" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                              Focusable="False" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    <TextBlock Text="{Binding HeaderText}" FontWeight="SemiBold" />
+                  </StackPanel>
                   <HierarchicalDataTemplate.ItemTemplate>
                     <DataTemplate>
-                      <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                      <StackPanel Orientation="Horizontal">
+                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                  Focusable="False" VerticalAlignment="Center" Margin="0,0,6,0" />
+                        <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
                     </DataTemplate>
                   </HierarchicalDataTemplate.ItemTemplate>
                 </HierarchicalDataTemplate>
               </TreeView.ItemTemplate>
             </TreeView>
+
+            <!-- 선택 요약 + 전체 선택/해제(Phase 4) -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+              <TextBlock Text="{Binding SelectionSummaryText}" Foreground="{StaticResource Muted}"
+                         FontSize="11" VerticalAlignment="Center" />
+              <Button Content="전체 선택" Command="{Binding SelectAllConversationsCommand}"
+                      Margin="10,0,0,0" Padding="8,3" MinWidth="0" FontSize="11" />
+              <Button Content="선택 해제" Command="{Binding ClearSelectionCommand}"
+                      Margin="6,0,0,0" Padding="8,3" MinWidth="0" FontSize="11" />
+            </StackPanel>
           </Grid>
         </Border>
 

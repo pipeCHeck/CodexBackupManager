@@ -2,8 +2,8 @@
 
 OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내보내기 · 불러오기 · 복원하는 **Windows 데스크톱 프로그램**.
 
-> **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer) 완료.**
-> 선택 / Export / Import / Restore는 아직 없습니다.
+> **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
+> **+ Phase 4(Selection) 완료.** Phase 5 Export는 아직 예정입니다.
 
 ---
 
@@ -82,6 +82,9 @@ CodexBackupManager/
 │  │                                 Phase 2 Read Model 도메인(rollout 파일 참조,
 │  │                                 세션 메타데이터, thread 체인, 제목/프로젝트 해결, 카탈로그)
 │  │    Diagnostics/Redact           로그용 민감정보 마스킹
+│  │    Codex/Selection/ConversationSelectionState
+│  │                                 Phase 4 백업 선택의 단일 source of truth(ThreadId 기준,
+│  │                                 WPF 의존성 없음 — Viewer 포커스와 완전히 분리된 상태)
 │  ├─ CodexBackupManager.Codex/      Codex 데이터 접근 (Read-Only)
 │  │    Locating/CodexLocator        CODEX_HOME → %USERPROFILE%\.codex → 저장된 경로 → 사용자 선택
 │  │    Locating/CodexHomeValidator  Valid / Probable / Invalid + 사유
@@ -102,6 +105,7 @@ CodexBackupManager/
 └─ tests/
    ├─ CodexBackupManager.Domain.Tests/
    ├─ CodexBackupManager.Codex.Tests/
+   ├─ CodexBackupManager.App.Tests/  ViewModel 단위 테스트(Selection tri-state, Viewer 독립성 등)
    └─ Fixtures/CodexHome/            합성 가짜 Codex Home (실제 데이터 아님)
 ```
 
@@ -223,6 +227,34 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
+## Phase 4가 표시하는 것
+
+프로젝트/대화 앞에 체크박스가 생겨, 백업 대상(프로젝트 전체 또는 개별 대화, 여러 개 동시)을 미리
+선택해 둘 수 있다. 아직 Export 자체는 만들지 않는다 — 이 Phase는 "무엇을 백업할지 고르는" 상태만
+다룬다.
+
+- **선택과 Viewer 포커스는 완전히 별개다.** 왼쪽 트리에서 대화 제목을 클릭하면(기존과 동일하게)
+  오른쪽에 그 대화가 열리지만 체크 상태는 바뀌지 않고, 체크박스를 누르면 백업 대상만 바뀔 뿐
+  오른쪽 Viewer는 그대로다. 두 상태는 서로 다른 질문("지금 보고 있는 대화" vs "백업할 대화")이라
+  구조적으로 분리했다(`ConversationNodeViewModel.IsSelected` ↔ `MainViewModel.SelectConversation`).
+- **선택의 단일 source of truth**: `ConversationSelectionState`(Domain 계층, WPF 의존성 없음)가
+  ThreadId 기준 `HashSet`으로 선택 여부를 관리한다. Project/Conversation ViewModel은 각자 상태를
+  따로 저장하지 않고 전부 이 하나의 저장소를 그대로 읽고 쓰는 얇은 뷰다.
+- **프로젝트 체크박스는 3상태**(`IsThreeState`): 전체 선택 / 전체 미선택 / 일부 선택(indeterminate)을
+  자식들의 실제 선택 상태로부터 매번 다시 계산한다. 클릭하면 "이미 전체 선택 상태가 아니면 전체
+  선택, 이미 전체 선택 상태면 전체 해제"로 동작한다 — WPF tri-state 체크박스가 클릭 시 전달하는
+  원시값은 무시하고 클릭 직전 상태만으로 판단한다. "기타 대화" 그룹도 일반 프로젝트와 동일하다.
+- **대량 선택도 안전하게**: 프로젝트 전체 선택/해제, 전체 선택/선택 해제 버튼은 중앙 저장소를 한
+  번만 호출하고 자식마다 딱 한 번씩만 화면 갱신을 알린다 — 항목이 수천 개로 늘어도 재계산이
+  연쇄되거나 반복되지 않는다.
+- **카탈로그 refresh 시 선택 보존**: 같은 Codex Home을 "다시 확인"해서 카탈로그를 재구축하면,
+  더 이상 존재하지 않는 대화만 선택에서 빠지고 나머지는 유지된다. 반대로 다른 Codex Home으로
+  바꾸면 이전 선택은 전부 초기화된다(서로 다른 Home의 선택이 섞이지 않는다).
+- **Phase 5 연동 API**: `MainViewModel.GetSelectedThreadIdsSnapshot()`이 현재 선택의 불변 스냅샷을
+  돌려준다 — Export(Phase 5)가 UI ViewModel을 직접 해석할 필요가 없다.
+
+---
+
 ## 로드맵
 
 | Phase | 내용 | 상태 |
@@ -230,7 +262,7 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 | 1 | Codex Home 탐색 · 검증 · 설치 정보 조회 | **완료** |
 | 2 | Read Model — rollout 파서, thread 체인, 프로젝트/제목 해결, 대화 목록 | **완료** |
 | 3 | Conversation Viewer — User / Assistant 메시지 | **완료** |
-| 4 | Selection — 프로젝트/대화 다중 선택 | 예정 |
+| 4 | Selection — 프로젝트/대화 다중 선택 | **완료** |
 | 5 | Export — `.codexbackup` (ZIP + Manifest + SHA-256) | 예정 |
 | 6 | Import Preview — Manifest/체크섬 검사, 충돌 검사, 경로 재매핑 | 예정 |
 | 7 | Safe Restore — Snapshot → Apply → 검증 → Rollback | 예정 |

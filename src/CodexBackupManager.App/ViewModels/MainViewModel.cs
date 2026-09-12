@@ -12,7 +12,9 @@ using CodexBackupManager.Codex.Conversation;
 using CodexBackupManager.Domain.Codex;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Conversation;
+using CodexBackupManager.Domain.Codex.Selection;
 using CodexBackupManager.Domain.Diagnostics;
+using CodexBackupManager.Domain.Paths;
 
 namespace CodexBackupManager.App.ViewModels;
 
@@ -44,6 +46,11 @@ public sealed class MainViewModel : ObservableObject
     private CancellationTokenSource? _catalogCancellation;
     private CodexCatalog? _lastCatalog;
 
+    // Phase 4 — 백업 대상 선택의 단일 source of truth(ThreadId 기준). Viewer 포커스와는 완전히 분리된
+    // 상태다(클래스 remarks 없음, ConversationSelectionState의 remarks 참고).
+    private readonly ConversationSelectionState _selection = new();
+    private CanonicalPath? _lastHome;
+
     private string? _selectedConversationTitle;
     private bool _isConversationLoading;
     private string? _conversationErrorText;
@@ -73,6 +80,12 @@ public sealed class MainViewModel : ObservableObject
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
         RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy);
         ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync(), () => !IsBusy);
+        SelectAllConversationsCommand = new RelayCommand(SelectAllConversations, () => TotalConversationCount > 0);
+        ClearSelectionCommand = new RelayCommand(ClearAllSelections, () => HasSelection);
+
+        // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
+        // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
+        _selection.Changed += OnSelectionChanged;
     }
 
     /// <summary>다시 탐지.</summary>
@@ -80,6 +93,12 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>Codex 폴더 직접 선택.</summary>
     public RelayCommand ChangeFolderCommand { get; }
+
+    /// <summary>현재 카탈로그의 모든 대화를 백업 대상으로 선택한다.</summary>
+    public RelayCommand SelectAllConversationsCommand { get; }
+
+    /// <summary>백업 선택을 전부 해제한다.</summary>
+    public RelayCommand ClearSelectionCommand { get; }
 
     /// <summary>탐지 결과 표. 라벨/값 쌍.</summary>
     public ObservableCollection<InfoRow> Rows { get; } = [];
@@ -168,6 +187,18 @@ public sealed class MainViewModel : ObservableObject
         get => _catalogSummaryText;
         private set => SetProperty(ref _catalogSummaryText, value);
     }
+
+    /// <summary>Phase 4 — 현재 백업 대상으로 선택된 대화 개수.</summary>
+    public int SelectedConversationCount => _selection.Count;
+
+    /// <summary>현재 카탈로그에 있는 사용자 대화 총 개수(선택 요약의 분모).</summary>
+    public int TotalConversationCount => ProjectNodes.Sum(p => p.Conversations.Count);
+
+    /// <summary>하나 이상 선택되어 있는지. Phase 5의 Export 버튼 활성화 조건으로 그대로 쓸 수 있다.</summary>
+    public bool HasSelection => SelectedConversationCount > 0;
+
+    /// <summary>"선택한 대화 N / M" 요약 문구.</summary>
+    public string SelectionSummaryText => $"선택한 대화 {SelectedConversationCount} / {TotalConversationCount}";
 
     /// <summary>Phase 3 — 오른쪽 Conversation Viewer에 표시할 메시지 목록.</summary>
     public ObservableCollection<ConversationMessageViewModel> ConversationMessages { get; } = [];
@@ -413,6 +444,11 @@ public sealed class MainViewModel : ObservableObject
 
         CodexInstallationInfo info = result.Installation;
 
+        // Phase 4: 다른 Codex Home으로 바뀌었으면 이전 선택을 섞지 않는다. 같은 Home을 "다시 확인"한
+        // 것이면 여기서는 아무것도 하지 않고, 아래 ApplyCatalog에서 사라진 ThreadId만 정리한다.
+        _selection.ClearIfDifferentHome(_lastHome, info.Home);
+        _lastHome = info.Home;
+
         IsConnected = true;
         StatusGlyph = "●";
         StatusText = info.Validation.Status == CodexHomeStatus.Valid
@@ -518,15 +554,17 @@ public sealed class MainViewModel : ObservableObject
         ProjectNodes.Clear();
         foreach (ProjectEntry project in catalog.Projects)
         {
-            ProjectNodes.Add(new ProjectNodeViewModel
-            {
-                DisplayName = project.DisplayName,
-                IsUncategorized = project.IsUncategorized,
-                Conversations = project.Conversations
-                    .Select(c => new ConversationNodeViewModel { Title = c.Title.Text, ThreadId = c.ThreadId })
-                    .ToList(),
-            });
+            IReadOnlyList<ConversationNodeViewModel> conversations = project.Conversations
+                .Select(c => new ConversationNodeViewModel(c.Title.Text, c.ThreadId, _selection))
+                .ToList();
+
+            ProjectNodes.Add(new ProjectNodeViewModel(project.DisplayName, project.IsUncategorized, conversations, _selection));
         }
+
+        // Phase 4: 같은 Codex Home을 "다시 확인"해서 카탈로그를 재구축한 경우, 더 이상 존재하지 않게 된
+        // ThreadId만 선택에서 제거하고 나머지는 그대로 둔다(다른 Home으로 바뀌었을 때의 전체 초기화는
+        // 위 Apply()의 ClearIfDifferentHome이 이미 처리했다).
+        _selection.RetainOnly(ProjectNodes.SelectMany(p => p.Conversations).Select(c => c.ThreadId));
 
         CatalogSummaryText =
             $"프로젝트 {catalog.Projects.Count}개 · 사용자 대화 {catalog.UserConversationCount}개 · " +
@@ -540,6 +578,8 @@ public sealed class MainViewModel : ObservableObject
             $"allThreads={catalog.AllConversations.Count} rolloutFiles={catalog.Stats.RolloutFileCount} " +
             $"scanMs={catalog.Stats.JsonlScanDuration.TotalMilliseconds:F0} " +
             $"totalMs={catalog.Stats.TotalBuildDuration.TotalMilliseconds:F0} warnings={catalog.Warnings.Count}");
+
+        OnSelectionChanged(); // TotalConversationCount가 바뀌었을 수 있으므로 요약/커맨드 상태를 갱신한다.
     }
 
     private void ClearCatalog()
@@ -551,6 +591,43 @@ public sealed class MainViewModel : ObservableObject
         ProjectNodes.Clear();
         IsCatalogLoading = false;
         CatalogSummaryText = null;
+
+        // Phase 4: 탐지 자체가 실패한 상태다. 유효한 카탈로그가 없으므로 선택도 비워 둔다. 다음 성공적인
+        // 탐지는(설령 같은 Home이라도) ClearIfDifferentHome이 "이전 Home 없음"으로 보고 다시 초기화한다.
+        _lastHome = null;
+        _selection.Clear();
+        OnSelectionChanged();
+    }
+
+    /// <summary>
+    /// Phase 5(Export)가 UI ViewModel을 직접 해석하지 않고도 쓸 수 있는, 현재 선택의 불변 스냅샷.
+    /// </summary>
+    public IReadOnlySet<string> GetSelectedThreadIdsSnapshot() => _selection.Snapshot();
+
+    private void SelectAllConversations()
+    {
+        foreach (ProjectNodeViewModel project in ProjectNodes)
+        {
+            project.SetAllSelected(true);
+        }
+    }
+
+    private void ClearAllSelections()
+    {
+        foreach (ProjectNodeViewModel project in ProjectNodes)
+        {
+            project.SetAllSelected(false);
+        }
+    }
+
+    private void OnSelectionChanged()
+    {
+        OnPropertyChanged(nameof(SelectedConversationCount));
+        OnPropertyChanged(nameof(TotalConversationCount));
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(SelectionSummaryText));
+        SelectAllConversationsCommand.RaiseCanExecuteChanged();
+        ClearSelectionCommand.RaiseCanExecuteChanged();
     }
 
     private void ShowFailure(string detail)
