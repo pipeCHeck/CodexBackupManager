@@ -92,5 +92,73 @@
       <Setter Property="Cursor" Value="Hand" />
     </Style>
 
+    <!-- ── 다크 테마 ScrollBar ────────────────────────────────────────────
+         WPF 기본 ScrollBar(밝은 회색 화살표/트랙)가 다크 테마와 어울리지 않는다는 지적을
+         반영. 위/아래 화살표 버튼은 Opacity=0으로 안 보이게 하되(클릭 시 페이지 단위 스크롤은
+         그대로 동작), Track은 투명, Thumb만 얇게 보여준다. TargetType 전용(x:Key 없는) 암시적
+         스타일이라 이 대화 Viewer의 ListBox뿐 아니라 앱의 다른 모든 ScrollViewer/ScrollBar에도
+         자동 재사용된다 — ScrollUnit=Pixel, VirtualizationMode=Recycling 등 스크롤 동작 자체는
+         전혀 건드리지 않는다(순수 ControlTemplate 교체). -->
+    <SolidColorBrush x:Key="ScrollThumb" Color="#FF5A5D63" />
+    <SolidColorBrush x:Key="ScrollThumbHover" Color="#FF6E7178" />
+    <SolidColorBrush x:Key="ScrollThumbPressed" Color="#FF84878E" />
+
+    <Style x:Key="DarkScrollBarThumb" TargetType="Thumb">
+      <Setter Property="Background" Value="{StaticResource ScrollThumb}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border Background="{TemplateBinding Background}" CornerRadius="4" Margin="2,1" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="{StaticResource ScrollThumbHover}" />
+        </Trigger>
+        <Trigger Property="IsDragging" Value="True">
+          <Setter Property="Background" Value="{StaticResource ScrollThumbPressed}" />
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style TargetType="ScrollBar">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Width" Value="9" />
+      <Setter Property="MinWidth" Value="9" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="{TemplateBinding Background}">
+              <Track x:Name="PART_Track" IsDirectionReversed="True" Focusable="False">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False" />
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False" />
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Style="{StaticResource DarkScrollBarThumb}" />
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="Orientation" Value="Horizontal">
+                <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto" />
+          <Setter Property="Height" Value="9" />
+          <Setter Property="MinWidth" Value="0" />
+          <Setter Property="MinHeight" Value="9" />
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
   </Application.Resources>
 </Application>

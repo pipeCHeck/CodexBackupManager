@@ -256,4 +256,39 @@ public sealed class MarkdownLiteParserTests
         Assert.IsType<BlockquoteBlock>(blocks[0]);
         Assert.IsType<ParagraphBlock>(blocks[1]);
     }
+
+    // ── Phase 04_06: 밑줄(_) intraword 오탐 수정 ──────────────────────────────────
+    // CommonMark도 같은 이유로 "_"는 단어 경계에서만 emphasis로 인정한다(밑줄 앞/뒤가
+    // 영문/숫자/밑줄이면 delimiter로 취급하지 않는다) — "*"는 원래부터 이 제약이 없다.
+
+    [Theory]
+    [InlineData("snake_case_name")]
+    [InlineData("foo__bar__baz")]
+    [InlineData("SOME_CONSTANT_NAME")]
+    [InlineData("a_b_c")]
+    [InlineData("player_move_speed")]
+    public void 식별자_내부의_밑줄은_기울임_굵게로_해석되지_않는다(string identifier)
+    {
+        var blocks = MarkdownLiteParser.Parse(identifier);
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        InlineSpan span = Assert.Single(paragraph.Spans);
+        Assert.Equal(identifier, span.Text);
+        Assert.False(span.IsItalic);
+        Assert.False(span.IsBold);
+    }
+
+    [Fact]
+    public void 문장_안에서도_공백으로_둘러싸인_밑줄_기울임_굵게는_정상_인식된다()
+    {
+        var blocks = MarkdownLiteParser.Parse("문장 안의 _italic_ 표현과 문장 안의 __bold__ 표현");
+
+        var paragraph = Assert.IsType<ParagraphBlock>(Assert.Single(blocks));
+        var italic = Assert.Single(paragraph.Spans, s => s.Text == "italic");
+        var bold = Assert.Single(paragraph.Spans, s => s.Text == "bold");
+        Assert.True(italic.IsItalic);
+        Assert.False(italic.IsBold);
+        Assert.True(bold.IsBold);
+        Assert.False(bold.IsItalic);
+    }
 }

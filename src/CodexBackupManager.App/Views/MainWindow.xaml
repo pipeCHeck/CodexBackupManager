@@ -277,9 +277,11 @@
                     </Setter>
                   </Style>
                 </ListBox.ItemContainerStyle>
-                <!-- Codex 실제 UI에 가깝게: Assistant는 카드/말풍선을 없애고 평평한 문서형으로,
-                     본문 폭을 넉넉히 준다. User만 오른쪽 정렬의 작은 말풍선(내용 크기만큼만)으로
-                     남긴다. Role/Phase 라벨(User/Assistant/commentary/final)은 개발자 도구처럼
+                <!-- Codex 실제 UI에 가깝게: Assistant는 완전 평면도, 무거운 채팅 말풍선도 아닌
+                     "은은한 문서 카드"로 표시한다(PanelAlt 배경, 약한 CornerRadius, Border 없음) —
+                     본문 폭은 넉넉히 유지해 문서형 읽기 느낌을 지킨다. User는 오른쪽 정렬의 작은
+                     말풍선(내용 크기만큼만)으로 남기되, 창 오른쪽 벽에 완전히 붙지 않도록 오른쪽
+                     여백을 둔다. Role/Phase 라벨(User/Assistant/commentary/final)은 개발자 도구처럼
                      보인다는 지적을 반영해 전부 제거했다 — 정렬/배경색만으로 구분한다. Phase 값 자체는
                      Domain에 그대로 보존되고(향후 Export 등에서 쓸 수 있다), UI에만 안 보여준다. -->
                 <ListBox.ItemTemplate>
@@ -288,9 +290,10 @@
                       <Border.Style>
                         <Style TargetType="Border">
                           <Setter Property="HorizontalAlignment" Value="Left" />
-                          <Setter Property="Background" Value="Transparent" />
-                          <Setter Property="CornerRadius" Value="0" />
-                          <Setter Property="Padding" Value="0" />
+                          <Setter Property="Background" Value="{StaticResource PanelAlt}" />
+                          <Setter Property="CornerRadius" Value="9" />
+                          <Setter Property="Padding" Value="16,14" />
+                          <Setter Property="Margin" Value="0" />
                           <Setter Property="MaxWidth" Value="760" />
                           <Style.Triggers>
                             <DataTrigger Binding="{Binding IsUser}" Value="True">
@@ -298,6 +301,7 @@
                               <Setter Property="Background" Value="{StaticResource UserBubbleBg}" />
                               <Setter Property="CornerRadius" Value="14" />
                               <Setter Property="Padding" Value="14,9" />
+                              <Setter Property="Margin" Value="0,2,24,2" />
                               <Setter Property="MaxWidth" Value="520" />
                             </DataTrigger>
                           </Style.Triggers>

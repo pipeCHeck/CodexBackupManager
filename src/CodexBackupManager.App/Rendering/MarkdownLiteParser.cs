@@ -20,9 +20,11 @@ namespace CodexBackupManager.App.Rendering;
 /// </para>
 /// <para>
 /// <b>단일 <c>*</c>/<c>_</c> 기울임의 한계.</b> Codex는 코딩 어시스턴트라 실제 대화에 코드/수식이
-/// 자주 섞인다(<c>snake_case_name</c>, <c>a*b</c> 등). CommonMark 자체도 이런 표현을 완벽히
-/// 구분하지 못하는 잘 알려진 한계라, 여기서도 "여는/닫는 기호 바로 안쪽이 공백이 아니어야 한다"는
-/// 최소한의 안전장치만 두고 그 이상의 intraword-emphasis 억제 규칙은 구현하지 않는다(과설계 방지).
+/// 자주 섞인다(<c>snake_case_name</c>, <c>a*b</c> 등). <c>_</c>/<c>__</c>는 CommonMark와 같은 방식
+/// (delimiter 바로 바깥쪽이 영문/숫자/밑줄이면 emphasis로 인정하지 않음)으로 intraword 오탐을
+/// 막는다. <c>*</c>/<c>**</c>는 "여는/닫는 기호 바로 안쪽이 공백이 아니어야 한다"는 최소한의
+/// 안전장치만 두고 그 이상은 구현하지 않는다(과설계 방지) — 코드에서 <c>*</c>가 식별자 안에 그대로
+/// 붙어 쓰이는 경우는 드물다.
 /// </para>
 /// <para>
 /// WPF 타입을 전혀 참조하지 않는다(입력은 <c>string</c>, 출력은 이 프로젝트의 <c>MarkdownBlock</c>
@@ -42,13 +44,19 @@ public static class MarkdownLiteParser
     // link/code를 가장 먼저(가장 구체적), 그다음 굵게(**/__, 2글자 구분자)를 기울임(*/_, 1글자
     // 구분자)보다 먼저 둬야 "**굵게**"가 기울임으로 잘못 쪼개지지 않는다. 여는/닫는 기호 바로
     // 안쪽에 공백이 오는 경우는 제외해 "a * b" 같은 흔한 수식 표기의 오탐을 줄인다.
+    //
+    // "_"/"__" delimiter는 추가로 intraword 오탐 방지가 필요하다: 코딩 대화에는
+    // snake_case_name, SOME_CONSTANT_NAME 같은 식별자가 자주 등장하는데, 이 안의 "_"는
+    // emphasis delimiter가 아니다. CommonMark도 같은 이유로 "_"는 단어 경계에서만 emphasis로
+    // 인정한다(밑줄 앞/뒤가 영문·숫자·밑줄이면 delimiter로 취급하지 않는다) — "*"는 코드에서
+    // 그런 식으로 붙어 쓰이는 경우가 드물어 기존 정책(안쪽 공백만 배제)을 그대로 둔다.
     private static readonly Regex InlinePattern = new(
         @"\[(?<linktext>[^\]]+)\]\((?<linkurl>[^)\s]+)\)" +
         "|`(?<code>[^`]+)`" +
         @"|\*\*(?<boldstar>\S(?:[^*]*\S)?)\*\*" +
-        @"|__(?<boldunder>\S(?:[^_]*\S)?)__" +
+        @"|(?<![A-Za-z0-9_])__(?<boldunder>\S(?:[^_]*\S)?)__(?![A-Za-z0-9_])" +
         @"|\*(?<italicstar>\S(?:[^*]*\S)?)\*" +
-        @"|_(?<italicunder>\S(?:[^_]*\S)?)_",
+        @"|(?<![A-Za-z0-9_])_(?<italicunder>\S(?:[^_]*\S)?)_(?![A-Za-z0-9_])",
         RegexOptions.Compiled);
 
     /// <summary>본문 전체를 블록 목록으로 파싱한다. 빈 문자열이면 빈 목록을 돌려준다.</summary>

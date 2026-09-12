@@ -4,7 +4,9 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 04_05` 커밋(`0591945`)까지 완료, 작업 트리 clean.
+마지막 갱신 기준: `Phase 04_05` 커밋(`0591945`)까지 완료 + `Phase 04_06`(Viewer 최종 디자인/Markdown
+정합성) 작업 완료. **`Phase 04_06`은 아직 사용자가 커밋하지 않은 상태**(작업 트리에 변경 있음) —
+새 세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것.
 
 ---
 
@@ -29,6 +31,7 @@
 | `b3a9628` | Phase 04_03 | `FlowDocument`를 `Lazy<T>`로 지연 생성(성능) — Blocks(순수 데이터)는 즉시 파싱, `FlowDocument`는 최초 바인딩 시점에만 생성 |
 | `b4b4bca` | Phase 04_04 | **스크롤 반복 크래시 root cause 수정**: `FlowDocumentBinding`이 재사용되는 `FlowDocument`를 재활용된 `RichTextBox`에 재대입할 때 이전 소유자로부터 먼저 떼어내지 않아 `ArgumentException` 발생 → 대입 전 강제 detach로 수정. `CrashDiagnostics`(미처리 예외 로깅) 추가. 영구 회귀 테스트(`FlowDocumentBindingRecyclingStressTests`, 실제 STA+가상화 스트레스) 추가 |
 | `0591945` | Phase 04_05 | Viewer Fidelity: 빈 User 메시지 정책(공식 Codex와 동일하게 `IsNullOrWhiteSpace`면 숨김, 비텍스트 콘텐츠는 placeholder), Markdown-lite에 굵게/기울임/링크/인용문 추가, Codex 스타일 레이아웃(Assistant 평문형/User 작은 말풍선, 라벨 제거), 타이포그래피 조정 |
+| (미커밋) | Phase 04_06 | **Phase 4의 마지막 Viewer polish.** Assistant 메시지를 완전 평면에서 "은은한 카드"로 되돌림(`PanelAlt` 배경, `CornerRadius=9`, `Padding=16,14`, Border 없음), User 말풍선에 오른쪽 여백(`Margin=0,2,24,2`) 추가, `App.xaml`에 재사용 가능한 다크 `ScrollBar` 암시적 스타일 추가(화살표 숨김/얇은 Thumb/hover·pressed 밝기), Markdown-lite `_`/`__` intraword 오탐 수정(`snake_case_name` 같은 식별자가 더 이상 기울임/굵게로 오인식되지 않음, `*`/`**`는 기존 정책 유지) |
 
 Phase 5(Export)~7(Safe Restore)은 **아직 시작 전**이다.
 
@@ -55,8 +58,10 @@ Phase 5(Export)~7(Safe Restore)은 **아직 시작 전**이다.
 - `ConversationMessageViewModel.Body`(`FlowDocument`)는 **`Lazy<T>`로 지연 생성**한다 — 생성자에서 만들지 않는다. `Blocks`(Markdown-lite 파싱 결과, 순수 데이터)는 즉시 만들어도 된다(WPF 비의존이라 background thread에서 만들어도 안전). **`FlowDocument` 같은 WPF 객체는 절대 worker thread에서 만들지 말 것** — 항상 UI 스레드에서 바인딩 시점에 지연 생성돼야 한다.
 - `FlowDocumentBinding`(`RichTextBox.Document` 첨부 속성)은 대입 전에 그 문서가 **다른 살아있는 RichTextBox의 자식이면 먼저 강제로 떼어낸다**. 이 로직을 제거하거나 단순화하면 스크롤 시 재현되는 `ArgumentException` 크래시가 되돌아온다 — `FlowDocumentBindingRecyclingStressTests`가 이걸 지킨다.
 - Markdown-lite(`CodexBackupManager.App.Rendering`)는 **subset 파서**다: 문단/줄바꿈/제목(`#`~`######`)/번호·불릿 목록/인용문(`>`)/펜스 코드블록/인라인 코드/굵게(`**`/`__`)/기울임(`*`/`_`)/링크(`[text](url)`, 실제 네비게이션은 안 함 — 색+밑줄+ToolTip만). 외부 markdown 라이브러리(Markdig 등)는 검토 후 도입하지 않기로 결정했다(NuGet 최소화 원칙 + 어차피 FlowDocument 변환 계층은 직접 짜야 함). 완전한 CommonMark로 확장하려 하지 말 것 — "subset" 범위를 유지하는 게 명시적 지시다.
-- Codex 스타일 레이아웃: Assistant는 평문형(카드/테두리 없음, 왼쪽 정렬, 최대 폭 760), User는 작은 말풍선(오른쪽 정렬, 최대 폭 520, 내용 크기만큼만). `User`/`Assistant`/`commentary`/`final` 라벨은 UI에서 제거했다(Domain에는 Phase 값 그대로 보존).
+  - **(Phase 04_06)** `_`/`__` delimiter는 CommonMark와 같은 방식으로 intraword 오탐을 막는다 — delimiter 바로 바깥쪽이 영문/숫자/밑줄(`[A-Za-z0-9_]`)이면 emphasis로 인정하지 않는다(`(?<![A-Za-z0-9_])`/`(?![A-Za-z0-9_])` lookaround). 이 덕분에 `snake_case_name`, `SOME_CONSTANT_NAME`, `foo__bar__baz` 같은 코드 식별자가 더 이상 기울임/굵게로 오인식되지 않는다. `*`/`**`는 이 제약이 없다(기존처럼 "여는/닫는 기호 바로 안쪽이 공백이면 제외" 정책만 유지) — 코드에서 `*`가 식별자에 그대로 붙어 쓰이는 경우가 드물기 때문이다.
+- Codex 스타일 레이아웃: Assistant는 **완전 평면도, 무거운 채팅 말풍선도 아닌 "은은한 문서 카드"**(`PanelAlt` 배경, `CornerRadius=9`, `Padding=16,14`, Border 없음, 왼쪽 정렬, 최대 폭 760). User는 작은 말풍선(오른쪽 정렬, 최대 폭 520, 내용 크기만큼만, 오른쪽 여백 `Margin=0,2,24,2`로 창 벽에 붙지 않게 함). `User`/`Assistant`/`commentary`/`final` 라벨은 UI에서 제거했다(Domain에는 Phase 값 그대로 보존). **Assistant를 다시 큰 말풍선으로 되돌리거나, 카드를 완전 평면으로 되돌리는 변경은 이미 두 번 되돌린 결정이니 재요청 없이 임의로 바꾸지 말 것.**
 - `VirtualizingPanel.ScrollUnit="Pixel"`로 스크롤이 항목 단위가 아니라 픽셀 단위로 부드럽게 움직인다 — 이걸 되돌리면 "스크롤이 딱딱하다"는 문제가 재발한다.
+- **(Phase 04_06)** `App.xaml`에 `ScrollBar`용 암시적(키 없는) 다크 스타일이 있다 — 화살표 버튼은 `Opacity=0`(클릭은 그대로 동작), Track은 투명, Thumb만 얇게(9px) 보이고 hover/드래그 시 밝아진다. 앱의 모든 `ScrollViewer`/`ScrollBar`에 자동 적용되므로 새 화면을 추가할 때 별도 스타일링이 필요 없다. 스크롤 동작(가상화/Pixel 단위/재활용) 자체는 건드리지 않는 순수 `ControlTemplate` 교체다.
 
 ### 진단
 - `CrashDiagnostics`(App/Services)가 UI 스레드 미처리 예외를 `%APPDATA%\CodexBackupManager\logs`에 기록한다(exception type/HResult/스택 프레임 타입·메서드만/ConversationMessages 개수/Body 렌더링 개수/WorkingSet/PrivateMemory). 예외를 삼키지 않고 `Handled`를 건드리지 않는다 — 이 장치는 "임시 진단용"으로 시작했지만 현재 코드베이스에 남아 있고, 제거해 달라는 요청은 없었다.
@@ -91,7 +96,7 @@ Phase 5(Export)~7(Safe Restore)은 **아직 시작 전**이다.
 | `CodexBackupManager.Codex.Tests` | 탐지/카탈로그/rollout 파서/`ConversationItemParser`/`ConversationTranscriptBuilder` 등 | 합성 fixture(`tests/Fixtures/CodexHome`) 사용, 실제 사용자 데이터 커밋 안 함 |
 | `CodexBackupManager.App.Tests` | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection` 접근 |
 
-마지막 전체 실행 결과: `Domain 64 + Codex 166 + App 71 = 301건 전부 통과`, `dotnet build` 경고/오류 0.
+마지막 전체 실행 결과(Phase 04_06 포함): `Domain 64 + Codex 166 + App 77 = 307건 전부 통과`, `dotnet build` 경고/오류 0. (Phase 04_06에서 `MarkdownLiteParserTests`에 `_`/`__` intraword RED→GREEN 테스트 6건 추가.)
 
 실제 `.codex` 데이터 재검증용 스크래치패드 하네스 패턴(세션마다 새로 만들어야 함, 세션 scratchpad 디렉터리에 위치):
 `CodexDetectionService` → `CodexCatalogBuilder.Build` → `ConversationTranscriptBuilder.Build` 순으로 실제 카탈로그/transcript를 만들고, 대화 원문은 출력하지 않고 개수/해시/구조 메타데이터만 출력하는 방식을 계속 써왔다.
