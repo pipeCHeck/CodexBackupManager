@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using CodexBackupManager.App.Services;
 using CodexBackupManager.App.ViewModels;
 
 namespace CodexBackupManager.App.Views;
@@ -8,7 +9,12 @@ namespace CodexBackupManager.App.Views;
 public partial class MainWindow : Window
 {
     /// <summary>생성자.</summary>
-    public MainWindow() => InitializeComponent();
+    public MainWindow()
+    {
+        InitializeComponent();
+        // Phase 8 — 창 제목에 배포 버전을 표시한다(XAML에 버전 문자열을 따로 하드코딩하지 않는다).
+        Title = AppVersionInfo.DisplayName;
+    }
 
     /// <summary>
     /// TreeView는 <c>SelectedItem</c>을 바인딩할 수 없어(읽기 전용) 코드 비하인드에서 이어준다.

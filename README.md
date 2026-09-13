@@ -6,13 +6,16 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 > **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
 > **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
 > **Phase 07_01(Restore Hardening + Apply UI) + Phase 07_02(Release Safety Gate) +**
-> **Phase 07_03(Final Restore Edge-Case Hardening) 완료.**
+> **Phase 07_03(Final Restore Edge-Case Hardening) + Phase 8(Release / Self-contained EXE) 완료.**
 > Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, 07_01/07_02/07_03을 거치며 실제 원본
 > `.codex` clone으로 재현한 crash/동시성 edge case를 포함해 Restore 안전성을 반복적으로
 > 검증·강화했습니다 — New Import와 안전이 증명된 IncomingAhead fast-forward만 지원하고,
-> Diverged 자동 merge 등 고위험 기능은 여전히 지원하지 않습니다. Restore Core는 이제 기능 변경
-> 없이 Phase 8(Release/Packaging)로 넘어갑니다. 자세한 내용은 `docs/safe-restore-phase7.md` §10~11
-> 참고.
+> Diverged 자동 merge 등 고위험 기능은 여전히 지원하지 않습니다. **Phase 8에서 Restore
+> 기능/알고리즘은 전혀 바꾸지 않고** v0.1.0 self-contained/single-file `CodexBackupManager.exe`
+> 배포물을 만들었습니다 — `scripts/publish-release.ps1`로 재현 가능하고, Windows CI
+> (`.github/workflows/windows-ci.yml`)가 push/PR마다 빌드+테스트를 확인합니다. 배포 사용자용
+> 안내는 `docs/dist-readme.txt`(배포 ZIP에 동봉)와 `docs/release-notes-v0.1.0.md` 참고. 개발
+> 내용 상세는 `docs/safe-restore-phase7.md` §10~12 참고.
 
 ---
 
@@ -70,11 +73,28 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-phase1.ps1 -SkipRun
 > Codex가 켜져 있으면 Codex 자신이 파일을 갱신하므로 우리 프로그램의 쓰기와 구분할 수 없습니다.
 
 위 `dotnet build`/`dotnet run`은 개발용 framework-dependent 빌드다(대상 PC에 .NET 10 Desktop 런타임 필요).
-CLAUDE.md §38이 정한 최종 배포 형태(런타임 설치 불필요)는 배포할 때 다음처럼 self-contained로 publish한다.
+CLAUDE.md §38이 정한 최종 배포 형태(런타임 설치 불필요)는 배포할 때 다음처럼 self-contained/single-file로 publish한다.
 
 ```powershell
-dotnet publish src\CodexBackupManager.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet publish src\CodexBackupManager.App\CodexBackupManager.App.csproj -c Release -r win-x64 `
+  -p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+  -p:CbmReleasePublish=true
 ```
+
+`CbmReleasePublish=true`는 이 프로젝트만의 커스텀 속성이다 — `Directory.Build.props`가 Release
+구성에서 이 값일 때만 참조 프로젝트(Domain/Codex/Backup/Restore)까지 포함해 PDB 생성을 억제한다
+(평범한 `dotnet build -c Release`/`dotnet test -c Release`는 그대로 심볼을 유지한다).
+
+restore → build → **전체 테스트** → publish → 결과물 감사 → ZIP → SHA-256까지 한 번에 재현하려면:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1
+```
+
+결과물은 `artifacts\release\CodexBackupManager-v0.1.0-win-x64.zip` + `SHA256SUMS.txt`로 나온다
+(ZIP에는 `CodexBackupManager.exe`와 `docs\dist-readme.txt`(`README.txt`로 이름 변경)만 들어간다 —
+PDB/테스트 바이너리/소스는 포함하지 않는다). 배포용 릴리스 노트는
+[`docs/release-notes-v0.1.0.md`](./docs/release-notes-v0.1.0.md) 참고.
 
 ---
 
@@ -433,6 +453,7 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 07_01 | Restore Hardening + Apply UI — 안전성/정합성 하드닝, Apply 버튼, 실제 `.codex` clone E2E | **완료** |
 | 07_02 | Release Safety Gate — atomic append, crash recovery journal, WAL/SHM-safe rollback, cwd remap, 실제 rollout IncomingAhead clone E2E | **완료** |
 | 07_03 | Final Restore Edge-Case Hardening — New rollout atomic/durability, Home별 incomplete-apply scope, Recover consistency gate, 프로세스 간 Restore lock | **완료** |
+| 8 | Release — self-contained/single-file EXE, Windows CI, release script, release-blocker(A~D) 4건 | **완료** |
 | 8 | Release / self-contained EXE / final QA | 예정 |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
@@ -467,6 +488,14 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
 - **(Phase 07_03)** `RestoreProcessLock`은 named Mutex 기반이라 같은 Windows 로그인 세션 안에서만
   유효하다 — 서로 다른 사용자 세션/원격 세션 간 잠금은 범위 밖이다(단일 사용자 데스크톱 앱
   전제, `docs/safe-restore-phase7.md` §12.4).
+- **(Phase 8)** self-contained/single-file EXE를 실제로 발행해 직접 실행(실제 `.codex` Read-Only
+  탐지 포함)까지 확인했지만, **.NET Desktop Runtime이 전혀 설치되지 않은 clean Windows
+  환경(Windows Sandbox/별도 VM)에서의 실기 검증은 수행하지 못했다** — 개발 머신에는 이미 .NET
+  SDK가 있어서다. 배포 EXE는 code-signing되지 않았다 — 첫 실행 시 Windows SmartScreen 경고가 뜰
+  수 있다(`docs/dist-readme.txt` 참고).
+- **(Phase 8)** Snapshot(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`)은 v0.1.0에서 자동 삭제
+  정책을 넣지 않았다 — 완료된 Snapshot도 계속 쌓인다(사용자가 직접 정리해야 한다). 자동 cleanup은
+  v1.1 이후 후보로 남겨 뒀다.
 
 ---
 

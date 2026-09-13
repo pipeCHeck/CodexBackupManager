@@ -1632,4 +1632,79 @@ public sealed class RestoreExecutorTests : IDisposable
         IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot);
         Assert.Contains(incomplete, i => i.SnapshotDirectory == snapshotDir && i.Reason == IncompleteApplyReason.JournalUnreadable);
     }
+
+    // ── Phase 8 release-blocker B — Recover가 lock 획득 직후/Rollback 시작 직전 ProcessGuard를
+    //    한 번 더 확인 ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Recover는_첫_확인_이후_Rollback_직전에_Codex가_다시_켜졌으면_write_0건으로_중단한다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+
+        // 첫 ProcessGuard 확인은 "꺼짐"으로 통과시키고, 이후(=Rollback 직전 두 번째 확인) 호출부터는
+        // "켜짐"으로 응답하는 processLister — "확인과 실제 Rollback 사이에 Codex가 다시 켜졌다"를
+        // 재현한다.
+        int callCount = 0;
+        IReadOnlyList<RunningProcessInfo> FlakyLister()
+        {
+            callCount++;
+            return callCount == 1 ? [] : [new RunningProcessInfo("Codex", null)];
+        }
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, FlakyLister);
+
+        Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
+        Assert.Contains("Codex가 현재 실행 중입니다", result.Message);
+        Assert.True(callCount >= 2, "ProcessGuard가 두 번째로 호출되지 않았습니다 — 재확인 자체가 빠졌을 수 있습니다.");
+
+        // write 0건 — Rollback이 시작되지 않았으므로 mutate된 상태(threadId 존재)가 그대로다.
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        RestoreTransactionJournal? journal = RestoreTransactionJournalStore.TryRead(snapshotDir);
+        Assert.Equal(RestoreTransactionState.Applying, journal!.State);
+    }
+
+    // ── Phase 8 release-blocker(#4) — journal 구조적 validation ──────────────────
+
+    [Fact]
+    public void 파싱은_되지만_구조가_비어있는_journal은_Corrupt로_취급한다()
+    {
+        string snapshotDir = Path.Combine(_snapshotRoot, "empty-object-journal");
+        Directory.CreateDirectory(snapshotDir);
+        File.WriteAllText(Path.Combine(snapshotDir, "restore-transaction.json"), "{}");
+
+        RestoreTransactionJournalReadResult result = RestoreTransactionJournalStore.TryReadDetailed(snapshotDir);
+
+        Assert.Equal(RestoreTransactionJournalReadStatus.Corrupt, result.Status);
+        Assert.Null(result.Journal);
+    }
+
+    [Theory]
+    [InlineData("{\"SnapshotId\":\"\",\"CodexHomePath\":\"C:\\\\Home\",\"State\":1,\"UpdatedAtUtc\":\"2026-01-01T00:00:00Z\"}")]
+    [InlineData("{\"SnapshotId\":\"s1\",\"CodexHomePath\":\"\",\"State\":1,\"UpdatedAtUtc\":\"2026-01-01T00:00:00Z\"}")]
+    [InlineData("{\"SnapshotId\":\"s1\",\"CodexHomePath\":\"C:\\\\Home\",\"State\":99,\"UpdatedAtUtc\":\"2026-01-01T00:00:00Z\"}")]
+    [InlineData("{\"SnapshotId\":\"s1\",\"CodexHomePath\":\"C:\\\\Home\",\"State\":1,\"UpdatedAtUtc\":\"0001-01-01T00:00:00Z\"}")]
+    public void 필드가_하나라도_비정상인_journal은_Corrupt로_취급한다(string malformedJson)
+    {
+        string snapshotDir = Path.Combine(_snapshotRoot, $"malformed-journal-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(snapshotDir);
+        File.WriteAllText(Path.Combine(snapshotDir, "restore-transaction.json"), malformedJson);
+
+        RestoreTransactionJournalReadResult result = RestoreTransactionJournalStore.TryReadDetailed(snapshotDir);
+
+        Assert.Equal(RestoreTransactionJournalReadStatus.Corrupt, result.Status);
+    }
+
+    [Fact]
+    public void 정상적으로_기록한_journal은_여전히_Valid다()
+    {
+        string snapshotDir = Path.Combine(_snapshotRoot, "well-formed-journal");
+        Directory.CreateDirectory(snapshotDir);
+        RestoreTransactionJournalStore.Write(
+            snapshotDir, new RestoreTransactionJournal("s1", _pcBHome, RestoreTransactionState.Prepared, DateTimeOffset.UtcNow));
+
+        RestoreTransactionJournalReadResult result = RestoreTransactionJournalStore.TryReadDetailed(snapshotDir);
+
+        Assert.Equal(RestoreTransactionJournalReadStatus.Valid, result.Status);
+        Assert.Equal("s1", result.Journal!.SnapshotId);
+    }
 }

@@ -19,9 +19,19 @@
     <SelfContained>false</SelfContained>
     <PlatformTarget>x64</PlatformTarget>
 
+    <!--
+      Phase 8 — v0.1.0 배포 형태 확정(WPF이므로 trimming은 절대 켜지 않는다).
+      실제 self-contained/single-file publish는 여전히 publish 시점에만
+      `-p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
+      로 켠다(scripts/publish-release.ps1 참고) — 위 개발용 SelfContained=false는 그대로 유지해
+      dotnet build/run의 내부 루프 속도를 지킨다.
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+
     <!-- WPF XAML 코드 생성 때문에 XML 문서 경고를 프로젝트 단위로 완화한다. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
+
 
   <ItemGroup>
     <ProjectReference Include="..\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj" />

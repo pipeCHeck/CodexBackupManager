@@ -42,6 +42,13 @@ public static class RollbackService
             return new Result(false, $"Rollback 파일 복원 중 오류: {ex.GetType().Name}");
         }
 
+        // Phase 8 release-blocker A — rollout write(New/append) 도중 죽으면
+        // "<target>.cbm-restore-tmp"가 남을 수 있다(대화 데이터 복사본이라 그냥 두면 안 된다).
+        // 임의 glob 삭제는 하지 않는다 — 이 Snapshot의 manifest가 실제로 알고 있는 rollout target
+        // 에서만 정확히 파생되는 temp 경로만 지운다(최선 노력, 실패해도 Rollback 자체는 실패시키지
+        // 않는다 — 이미 target 상태는 정확히 복구/검증됐다).
+        CleanupStaleRolloutTemps(manifest);
+
         // 복구 후 재검증 — snapshot manifest와 정확히 일치해야 "복구 완료"다.
         foreach (SnapshotFileEntry entry in manifest.Files)
         {
@@ -230,5 +237,42 @@ public static class RollbackService
         using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         StreamingHashCopy.Result result = StreamingHashCopy.HashOnly(stream);
         return (result.ByteLength, result.Sha256Hex);
+    }
+
+    /// <summary>
+    /// <see cref="RolloutRestoreService.CreateNewFile"/>/<see cref="RolloutRestoreService.AppendToFile"/>가
+    /// 쓰는 <c>&lt;target&gt;.cbm-restore-tmp</c> 잔재를, 이 Snapshot의 manifest가 실제로 알고 있는
+    /// rollout target(<c>new-rollout-*</c>/<c>appended-rollout-*</c> 라벨)에서만 정확히 파생해
+    /// 지운다 — 임의 glob(<c>*.cbm-restore-tmp</c>) 삭제는 절대 하지 않는다. 실패해도(파일이
+    /// 잠겨 있는 등) 예외를 던지지 않는다 — 이미 target 자체는 정확히 복구/검증됐으므로 이 정리
+    /// 실패가 Rollback 전체를 실패로 만들 이유는 없다(최선 노력, 순수 hygiene).
+    /// </summary>
+    private static void CleanupStaleRolloutTemps(SnapshotManifest manifest)
+    {
+        foreach (SnapshotFileEntry entry in manifest.Files)
+        {
+            if (!entry.RelativeLabel.StartsWith("new-rollout-", StringComparison.Ordinal) &&
+                !entry.RelativeLabel.StartsWith("appended-rollout-", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string tempPath = entry.OriginalAbsolutePath + ".cbm-restore-tmp";
+            if (!File.Exists(tempPath))
+            {
+                continue;
+            }
+
+            try
+            {
+                File.Delete(tempPath);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 }

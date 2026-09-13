@@ -70,6 +70,10 @@ public static class SnapshotService
                 using (FileStream dest = new(snapshotFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
                     copied = StreamingHashCopy.CopyWithHash(source, dest);
+                    // Phase 8 release-blocker C — mutation 전에 존재하는 유일한 복구 수단이므로
+                    // rollout append/journal과 같은 durability 수준(디스크에 실제로 내려감)을 갖게
+                    // 한다. dest를 닫기 전에 명시적으로 flushToDisk한다.
+                    dest.Flush(flushToDisk: true);
                 }
 
                 // 복사 직후 재해시로 검증한다 — 쓰기 도중 손상되지 않았는지 확인한다.
@@ -93,7 +97,19 @@ public static class SnapshotService
             string manifestJson = JsonSerializer.Serialize(manifest, ManifestJsonOptions);
             string manifestPath = Path.Combine(snapshotDir, ManifestFileName);
             string tempManifestPath = manifestPath + ".tmp";
-            File.WriteAllText(tempManifestPath, manifestJson);
+
+            // Phase 8 release-blocker C — RestoreTransactionJournalStore.Write와 같은 패턴(temp
+            // FileStream + flushToDisk + atomic move)으로 바꿔, 이 manifest도 rollout/journal과
+            // 같은 durability 수준을 갖게 한다. manifest가 실제로 diskomit 되기 전까지는 아직
+            // "publish"된 것으로 보지 않는다 — 요구사항 7의 원래 의도(manifest.json 존재 = 이
+            // Snapshot이 완성됐다는 표시)와 일치한다.
+            using (FileStream manifestStream = new(tempManifestPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                byte[] manifestBytes = System.Text.Encoding.UTF8.GetBytes(manifestJson);
+                manifestStream.Write(manifestBytes, 0, manifestBytes.Length);
+                manifestStream.Flush(flushToDisk: true);
+            }
+
             File.Move(tempManifestPath, manifestPath, overwrite: false);
 
             return new SnapshotCreateResult(true, snapshotDir, manifest, null);

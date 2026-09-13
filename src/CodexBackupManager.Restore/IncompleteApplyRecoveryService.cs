@@ -196,6 +196,19 @@ public static class IncompleteApplyRecoveryService
 
         try
         {
+            // Phase 8 release-blocker B — 첫 ProcessGuard 확인과 실제 Rollback 시작 사이에는
+            // journal/manifest 읽기 + lock 획득까지의 시간차가 있다. 그 사이 사용자가 Codex를 다시
+            // 켰을 수 있으므로, lock을 잡은 직후·Rollback을 시작하기 바로 전에 한 번 더 확인한다.
+            // 여기서 Codex가 실행 중이면 강제 종료하지 않고 write 0건으로 조용히 중단한다 — 이미
+            // 아무것도 쓰지 않았으므로 안전하게 그만둘 수 있다.
+            if (CodexProcessGuard.Check(processLister).IsRunning)
+            {
+                return new RestoreResult(
+                    RestoreOutcome.NotReady,
+                    "Codex가 현재 실행 중입니다. 안전한 복구를 위해 Codex를 종료한 뒤 다시 시도해 주세요.",
+                    null, manifest.SnapshotId);
+            }
+
             RollbackService.Result rollback = RollbackService.Rollback(manifest, snapshotDirectory);
             if (!rollback.Success)
             {

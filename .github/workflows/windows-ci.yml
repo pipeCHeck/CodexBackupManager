@@ -1,0 +1,67 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+
+# 최소 권한 — 이 workflow는 checkout/build/test/publish-artifact만 하고, 저장소 내용을 쓰거나
+# GitHub Release/Tag를 만들지 않는다.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & Test (Release)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: dotnet restore
+        run: dotnet restore CodexBackupManager.sln
+
+      - name: dotnet build (Release)
+        run: dotnet build CodexBackupManager.sln -c Release --no-restore
+
+      # Domain/Codex/Backup/Restore.Tests(CrashSim 자식 프로세스 강제 종료 포함)/App.Tests(WPF)까지
+      # 전부 이 한 번의 호출로 실행된다 — CodexBackupManager.sln에 포함된 모든 테스트 프로젝트.
+      - name: dotnet test (Release)
+        run: dotnet test CodexBackupManager.sln -c Release --no-build --logger "console;verbosity=normal"
+
+  # Phase 8 — 실제 배포 형태(self-contained/single-file)가 CI에서도 문제없이 만들어지는지 확인하는
+  # 별도 job. 이 job은 GitHub Release/Tag를 만들지 않는다 — 결과물을 워크플로 아티팩트로만 남긴다.
+  publish-artifact:
+    name: Publish self-contained single-file (win-x64)
+    needs: build-and-test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: dotnet publish (self-contained, single-file)
+        run: >-
+          dotnet publish src/CodexBackupManager.App/CodexBackupManager.App.csproj
+          -c Release -r win-x64
+          -p:SelfContained=true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:CbmReleasePublish=true
+          -o artifacts/ci-publish
+
+      - name: Upload published EXE as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexBackupManager-win-x64
+          path: artifacts/ci-publish/CodexBackupManager.exe
+          retention-days: 14
+          if-no-files-found: error

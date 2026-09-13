@@ -350,6 +350,66 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
     }
 
     [Fact]
+    public void 크래시_시뮬레이션_New_rollout_temp_작성_중_강제_종료되면_복구가_stale_temp를_지운다()
+    {
+        // Phase 8 release-blocker A — temp 작성 중(DuringNewRolloutTempWrite, atomic move보다도
+        // 이전) 크래시가 나면 "<target>.cbm-restore-tmp"가 남는다. 재시도(FileMode.Create)는 이
+        // 잔재가 있어도 성공하지만, 사용자가 [이전 상태로 복구]만 하고 다시 Apply하지 않으면 대화
+        // 데이터 복사본(temp)이 그냥 남는다 — Recovery 자체가 이 잔재를 정리해야 한다.
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, Ref(threadId, aFile, ts));
+        string backupPath = ExportToBackup(pcA, threadId, "crashsim-new-rollout-temp-write.codexbackup");
+
+        // 운영 코드와 동일한 계산으로 실제 target(=temp가 파생될 기준) 경로를 미리 알아낸다.
+        var detectionBefore = new CodexDetectionService().DetectFromUserSelection(_pcBHome);
+        Assert.NotNull(detectionBefore.Installation);
+        CodexCatalog pcBBefore = CodexCatalogBuilder.Build(detectionBefore.Installation!);
+        ImportPreview previewBefore = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        Assert.True(previewBefore.Success, string.Join(";", previewBefore.ValidationErrors));
+        ImportPlan? planBefore = ImportPlanBuilder.Build(previewBefore, backupPath);
+        Assert.NotNull(planBefore);
+
+        using PinnedBackupSource pinned = PinnedBackupSource.Open(backupPath);
+        RestoreOperationPlanResult planResult = RestoreOperationPlanner.Build(planBefore!, pcBBefore, _pcBHome, pinned, CancellationToken.None);
+        Assert.True(planResult.Success, string.Join(";", planResult.RejectionReasons));
+        string targetPath = planResult.Plan!.NewRolloutFiles.Single().TargetAbsolutePath;
+        string derivedTemp = targetPath + ".cbm-restore-tmp";
+
+        RunAndKillAtCrashPoint(_pcBHome, backupPath, RestoreFaultInjectionPoint.DuringNewRolloutTempWrite, _snapshotRoot);
+
+        // 크래시 직후: temp는 남아 있고(정확히 여기서 죽였다), target/thread는 아직 없다.
+        Assert.True(File.Exists(derivedTemp), "크래시 지점상 temp가 남아 있어야 합니다.");
+        Assert.False(File.Exists(targetPath));
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+
+        IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot);
+        Assert.Single(incomplete);
+
+        RestoreResult recovery = IncompleteApplyRecoveryService.Recover(incomplete[0].SnapshotDirectory, () => []);
+
+        Assert.Equal(RestoreOutcome.RolledBack, recovery.Outcome);
+        Assert.False(File.Exists(derivedTemp), "복구 이후에도 stale temp가 남아 있습니다 — 대화 데이터 복사본이 정리되지 않았습니다.");
+        Assert.False(File.Exists(targetPath));
+
+        // 같은 backup으로 다시 Apply해도 정상적으로 성공해야 한다(재시도 자체는 원래도 됐지만, 이번엔
+        // Recovery가 temp까지 지운 뒤의 "깨끗한" 상태에서 재시도되는지 확인한다).
+        var detectionAfter = new CodexDetectionService().DetectFromUserSelection(_pcBHome);
+        Assert.NotNull(detectionAfter.Installation);
+        CodexCatalog pcBAfter = CodexCatalogBuilder.Build(detectionAfter.Installation!);
+        ImportPreview previewAfter = ImportPreviewBuilder.Build(backupPath, pcBAfter);
+        Assert.True(previewAfter.Success, string.Join(";", previewAfter.ValidationErrors));
+        ImportPlan? planAfter = ImportPlanBuilder.Build(previewAfter, backupPath);
+        Assert.NotNull(planAfter);
+
+        RestoreResult retryResult = RestoreExecutor.Apply(planAfter!, _pcBHome, snapshotRoot: _snapshotRoot);
+
+        Assert.True(retryResult.Outcome == RestoreOutcome.Succeeded, $"{retryResult.Outcome}: {retryResult.Message}");
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
     public void 같은_Codex_Home에서_동시에_Apply를_시도하면_한쪽만_lock을_획득하고_다른_Home은_막히지_않는다()
     {
         // Phase 07_03 요구사항 4/5 — 진짜 두 프로세스로 RestoreProcessLock을 검증한다.

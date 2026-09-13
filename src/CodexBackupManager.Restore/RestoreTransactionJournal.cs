@@ -106,7 +106,7 @@ public static class RestoreTransactionJournalStore
         {
             string json = File.ReadAllText(path);
             RestoreTransactionJournal? journal = JsonSerializer.Deserialize<RestoreTransactionJournal>(json, JsonOptions);
-            return journal is null
+            return journal is null || !IsStructurallyValid(journal)
                 ? new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Corrupt, null)
                 : new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Valid, journal);
         }
@@ -115,4 +115,16 @@ public static class RestoreTransactionJournalStore
             return new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Corrupt, null);
         }
     }
+
+    /// <summary>
+    /// Phase 8 release-blocker(#4) — JSON 파싱만 성공했다고 "정상 journal"로 보지 않는다. 예를 들어
+    /// <c>{}</c>는 <c>System.Text.Json</c>이 각 필드를 기본값(<c>null</c>/빈 문자열/enum 0/
+    /// <c>default(DateTimeOffset)</c>)으로 채워 파싱 자체는 성공하지만, 이걸 <see cref="RestoreTransactionState.Prepared"/>
+    /// 상태의 정상 journal로 오판하면 안 된다 — 최소한의 구조적 정합성을 확인한다.
+    /// </summary>
+    private static bool IsStructurallyValid(RestoreTransactionJournal journal)
+        => !string.IsNullOrWhiteSpace(journal.SnapshotId)
+        && !string.IsNullOrWhiteSpace(journal.CodexHomePath)
+        && Enum.IsDefined(journal.State)
+        && journal.UpdatedAtUtc != default;
 }

@@ -4,9 +4,9 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 07_02` 커밋(`b298140`)까지 사용자가 커밋했고, 그 위에 **Phase 07_03
-(Final Restore Edge-Case Hardening)** 작업을 완료했다(작업 트리에 변경 있음 — 아직 커밋 전, 새
-세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것). Import Preview/`RevisionRelation`/
+마지막 갱신 기준: `Phase 07_03` 커밋(`eca313f`)까지 사용자가 커밋했고, 그 위에 **Phase 8
+(Release / Self-contained EXE / Final QA)** 작업을 완료했다(작업 트리에 변경 있음 — 아직 커밋
+전, 새 세션은 `git log`/`git status`로 실제 커밋 여부를 다시 확인할 것). Import Preview/`RevisionRelation`/
 `ImportPlan`/Preflight contract는 Phase 6/06_01/06_02/06_03 전부를 기준으로 **FINAL FROZEN**이다
 (`docs/import-preview-phase6.md` 상단 배너 참고). Backup Format V1은 `Phase 05_01`(`be2f616`)을
 기준으로 **FROZEN**이다(`docs/codexbackup-format-v1.md` 상단 배너 참고). 그 위에 **Phase 7(Safe
@@ -39,6 +39,31 @@ append와 같은 수준의 temp+atomic move+durability를 갖추도록 고쳤고
 named-Mutex lock을 추가했다(진짜 두 프로세스로 검증). **Restore Core는 이제 기능을 더 바꾸지
 않고 Phase 8(Release/Packaging)로 넘어간다.** 상세 스펙과 공식 `codex-rs` 소스 조사 결과는
 `docs/safe-restore-phase7.md` 참고.
+
+그 위에 **Phase 8(Release / Self-contained EXE / Final QA)**을 진행했다. 목표는 기능 추가가
+아니라 "다른 사람에게 전달 가능한 v0.1.0 Windows 배포물"을 만드는 것이었다 — Restore
+알고리즘/Backup V1/`ImportPlan` semantics는 전혀 바꾸지 않았고, 공개 배포 전 발견된
+release-blocker 4개만 고쳤다(각각 RED→GREEN 확인): (A) New rollout이 남길 수 있는
+`.cbm-restore-tmp` 잔재를 `RollbackService.Rollback`이 manifest가 아는 rollout target에서만
+정확히 파생해 정리하도록 추가(임의 glob 삭제 없음, 진짜 자식 프로세스 크래시로 검증), (B)
+`IncompleteApplyRecoveryService.Recover`가 lock 획득 직후·실제 Rollback 시작 직전에
+`CodexProcessGuard`를 한 번 더 확인하도록 추가(첫 확인과 Rollback 사이 시간차 동안 Codex가 다시
+켜졌을 가능성 대응), (C) `SnapshotService.Create`가 각 snapshot 파일과 manifest를
+`Flush(flushToDisk: true)` + atomic move로 rollout/journal과 같은 durability 수준으로
+publish하도록 강화, (D) `RestoreTransactionJournalStore.TryReadDetailed`가 JSON 파싱 성공만으로
+"정상 journal"이라 판단하지 않고 SnapshotId/CodexHomePath/State enum/UpdatedAtUtc까지 구조적으로
+검증하도록 강화(`{}` 같은 parseable-but-invalid journal을 Corrupt로 정확히 분류). 그 외에
+`.github/workflows/windows-ci.yml`(Windows CI — build/test(Release) + publish artifact job)을
+신설했고, `scripts/publish-release.ps1`(restore→build→test→publish→감사→ZIP→SHA-256을 한 번에
+재현하는 스크립트)을 추가했으며, self-contained/single-file publish 설정을 확정하고(App
+프로젝트 `PublishTrimmed=false`, `Directory.Build.props`에 `CbmReleasePublish=true`일 때만
+전체 프로젝트의 PDB 생성을 억제하는 조건부 설정 추가 — 참조 프로젝트에는 `SelfContained`/
+`PublishSingleFile` 같은 RID 전용 속성이 전파되지 않는다는 것을 실제로 확인한 뒤 커스텀 속성으로
+우회), 실제로 발행한 self-contained/single-file `CodexBackupManager.exe`(약 136MB, 부속 파일
+없음)를 직접 실행해 실제 사용자 `.codex`를 대상으로 한 Read-Only 탐지/카탈로그 생성이 정상
+동작함을 확인했고(SQLite native 의존성 로드 포함), 별도의 self-contained/single-file 스모크
+하네스로 같은 Restore/Backup/Codex 어셈블리 기준 New Import/IncomingAhead/Rollback을 합성 temp
+Codex Home에서 재확인했다. 상세 결과는 §2 표와 `docs/release-notes-v0.1.0.md` 참고.
 
 ---
 
@@ -131,7 +156,8 @@ IncomingAhead는 여전히 합성 데이터로만 검증)해 실제 스키마 �
 | `a3de8e8` | Phase 7 | **Safe Restore / Fast-forward Apply Core.** 이 프로젝트 최초로 실제 `.codex` write가 등장하는 Phase — 그래서 "기능을 많이 넣는 것"보다 "중간 실패가 나도 100% 원상복구"를 최우선으로 삼았다. 새 `CodexBackupManager.Restore`/`.Restore.Tests` 프로젝트 신설. 공식 `codex-rs` 소스 조사(`docs/safe-restore-phase7.md`)로 확정한 사실: (a) `threads` 테이블의 기본값 없는 NOT NULL 컬럼 9개(`rollout_path`/`created_at`/`updated_at`/`source`/`model_provider`/`cwd`/`title`/`sandbox_policy`/`approval_mode`) 실측 스키마와 공식 소스가 정확히 일치, (b) Codex 자신의 rollout writer도 이어지는 세션은 기존 파일에 그대로 append하지만 "다른 thread가 history_base 조상으로 참조 중인 파일"은 불변으로 취급함 — 그래서 append 전 이 조건을 직접 재확인하는 안전장치를 추가, (c) `.codex-global-state.json`/`threadAssignmentsMigrated`는 `codex-rs` 코어 엔진에는 존재하지 않는다 — project/thread 배정의 Core/CLI authority는 `threads.project_id`뿐이다(Desktop 사이드바가 이 값을 실제로 반영하는지는 Phase 07_01에서 "미검증"으로 재정정, 아래 참고). 계층: `CodexProcessGuard`(실행 중 프로세스 이름/경로 기반 판정) → `SchemaCompatibilityChecker`(버전 숫자가 아니라 `PRAGMA table_info` 구조 비교) → `RestoreOperationPlanner`(frozen `ImportPlan` + fresh 카탈로그 → 구체적 file/DB 연산 목록, 물리적으로 안전하지 않으면 계획 생성 자체를 거부 — 부분 성공 없음) → `SnapshotService`(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`에 temp→검증→publish) → `RestoreExecutor`(mutation 실행 + fault injection 지점 6곳) → `RestoreValidator`(post-apply 재검증) → `RollbackService`(snapshot 기준 byte-level 복구 + 재검증). 지원 범위는 `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전 증명된 fast-forward만(같은 rollout id의 물리 파일 tail이 정확히 일치할 때만 plain `.jsonl`에 append, `.jsonl.zst`에는 압축 append를 절대 시도하지 않음, 새 segment 파일 생성은 안전), `LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단. 실제 New Import/IncomingAhead append/새 segment 생성/두 PC 왕복(New→Update→Identical)/Codex 실행 중 차단/backup 변경 차단/history_base 조상 보호/압축 파일 차단/fault injection 4곳(첫 rollout 생성 후·SQLite 커밋 직전·직후·취소) 전부 실제 temp Codex Home에 파일+SQLite write를 수행해 검증했다. GitHub 코드 리뷰에서 실제 안전성 문제가 발견돼 Phase 07_01에서 하드닝했다(아래 참고). |
 | `ddfdc36` | Phase 07_01 | **Restore Hardening / Apply UI / Real-Clone E2E.** Phase 7 코드 리뷰로 발견된 문제 수정(상세: `docs/safe-restore-phase7.md` §10, 요약: `CodexProcessGuard`의 Dispose-후-속성-읽기 버그, Apply 내부 backup 재오픈 TOCTOU→`PinnedBackupSource`로 한 번만 열어 재사용, SQLite Snapshot의 `-wal`/`-shm` 누락→항상 등록, `.jsonl.zst` 새 segment 논리/물리 해시 혼동→물리 값으로 교체, IncomingAhead 메타데이터 병합 정책(`PlannedThreadMetadataUpdate`) 신설, New Import `thread_source` 누락 차단, post-validation 강화(`threads` 행/rollout_path/archived/메타데이터/project_id 실제 일치까지 확인), fresh-catalog를 `RestoreExecutor` 자신이 만들도록 재구성, Codex 실행 여부 2차 재확인, 취소(`Cancelled`)와 실제 오류(`RolledBack`)의 결과 메시지 분리). Fault Injection 6개 지점 전부 개별 테스트로 Rollback 확인. `MainViewModel`에 `ApplyCommand`/확인 dialog/진행 상태 문구/`KnownLimitationsText`를 연결해 **처음으로 Apply UI**를 완성했다(`MainViewModelApplyTests.cs` 신규). 세션 스크래치패드 하네스로 실제 `.codex`를 clone해 New/archived/segmented-New Import를 검증했다(IncomingAhead는 여전히 합성 데이터로만 검증) — 실제 원본 `.codex`에는 세션 전체에서 단 한 번도 쓰지 않았음을 `Get-FileHash`로 재확인. `.codex-global-state.json`/Desktop 사이드바 반영 여부에 대한 이전 "코스메틱 한계" 결론을 취소하고 "Core/CLI 확정, Desktop 미검증"으로 정정했다. |
 | `b298140` | Phase 07_02 | **Release Safety Gate / Full-Clone E2E / Crash Recovery.** 배포 전 마지막 안전성 게이트(상세: `docs/safe-restore-phase7.md` §11). rollout append를 in-place Seek+CopyTo에서 temp+atomic replace로 전면 교체(fault injection 3곳 추가, RED→GREEN 확인) — 크래시 중이어도 원본이 반쯤 쓰이지 않는다. `RollbackService`의 post-check가 더 이상 target DB/WAL/SHM을 다시 열지 않도록 고쳤다(별도 임시 복사본만 열어 확인) — **실제로 target을 다시 여는 옛 방식이 `-shm`을 변경한다는 것을 RED로 직접 재현**했다. 공식 `codex-rs` 소스 조사로 `threads.cwd`가 resume 시 실제 작업 디렉터리 후보로 쓰일 수 있음을 확인(`resume_config.rs`) — New Import에서 project_id가 실제로 해석됐을 때만 `threads.cwd`도 대상 PC 경로로 remap하도록 변경(rollout JSONL의 `session_meta.cwd`는 여전히 손대지 않음). `RestoreTransactionJournal`(Prepared/Applying/Completed/RolledBack) + `IncompleteApplyRecoveryService`로 크래시 후 복구 메커니즘 신설 — 별도 자식 프로세스(`CodexBackupManager.Restore.CrashSim`)를 실제로 `Process.Kill()`해 진짜 강제 종료 상태를 재현하고 다음 실행이 정확히 감지/복구함을 확인했다. Snapshot 이전 취소가 "예기치 않은 오류"로 새던 버그도 고쳤다. Apply 버튼을 `IsApplyReady` 기준으로 강화하고 완료되지 못한 이전 Apply를 막는 배너/복구 버튼을 추가했다. **세션 스크래치패드 하네스로 실제 `.codex` 전체(sessions/archived_sessions 포함)를 clone해 실제 rollout 파일 기반 IncomingAhead E2E를 처음으로 성공시켰다** — byte-precise 자르기가 아니면 `Diverged`로 오판됨을 RED로 발견 후 수정. 실제 원본에는 세션 전체에서 단 한 번도 쓰지 않았다(`Get-FileHash` 반복 재확인). |
-| (미커밋) | Phase 07_03 | **Final Restore Edge-Case Hardening.** Phase 07_02 커밋 이후 GitHub 코드 리뷰로 발견된 배포 전 Restore edge case 3개를 고쳤다(상세: `docs/safe-restore-phase7.md` §12). (1) `RolloutRestoreService.CreateNewFile`(New rollout)이 `FileMode.CreateNew`+`File.Move(overwrite:false)`만 쓰던 것을 IncomingAhead append와 같은 temp+`Flush(true)`+검증+atomic move 패턴으로 교체(fault injection 3곳 `DuringNewRolloutTempWrite`/`BeforeNewRolloutMove`/`AfterNewRolloutMove` 추가) — temp 작성 중 크래시로 남은 잔재가 다음 재시도를 막던 실제 crash recovery hole을 없앴다(진짜 자식 프로세스를 `BeforeNewRolloutMove`에서 강제 종료 → 복구 → 같은 backup으로 재시도까지 `Succeeded`로 end-to-end 확인). (2) `IncompleteApplyRecoveryService.FindIncompleteForHome(snapshotRoot, codexHomePath)` 신설 — 완료되지 못한 이전 Apply를 더 이상 전체 Home 통틀어 판단하지 않고 `CanonicalPath.AreSameLocation`으로 실제 겨냥했던 Home에만 scope한다(수동 Codex Home 선택을 지원하므로) — `RestoreExecutor.Apply`/`MainViewModel.RefreshIncompleteApplyState(codexHomePath)` 둘 다 이 API로 교체. (3) `IncompleteApplyRecoveryService.Recover`가 호출자를 신뢰하던 것을 스스로 재검증하도록 강화 — journal이 `Applying`이 아니면(Completed/RolledBack/Missing) 조용히 거부, journal/manifest의 SnapshotId·CodexHomePath가 어긋나거나 journal 파일 자체가 손상되면(`RestoreTransactionJournalReadStatus.Corrupt`) `RollbackFailedCritical`로 보수적으로 거부. (4) `RestoreProcessLock`(신규, Codex Home별 named Mutex `Local\CodexBackupManager.Restore.<hash>`) 도입 — 같은 EXE를 두 번 실행해도 같은 Codex Home에 동시 Apply할 수 없게 막았다(`RestoreExecutor.Apply`/`Recover` 둘 다 사용, `TimeSpan.Zero` 즉시 판정, `AbandonedMutexException`도 정상 획득으로 처리하되 바로 이어지는 incomplete-apply 검사가 이전 crash를 잡아낸다) — **진짜 두 프로세스**로 검증(`CodexBackupManager.Restore.CrashSim`에 `lock-hold` 서브커맨드 추가). 기존 Phase 07_02 동작은 전부 회귀 없이 유지했다(495건 전부 GREEN 유지 + 신규 19건 = 514건). |
+| `eca313f` | Phase 07_03 | **Final Restore Edge-Case Hardening.** Phase 07_02 커밋 이후 GitHub 코드 리뷰로 발견된 배포 전 Restore edge case 3개를 고쳤다(상세: `docs/safe-restore-phase7.md` §12). (1) `RolloutRestoreService.CreateNewFile`(New rollout)이 `FileMode.CreateNew`+`File.Move(overwrite:false)`만 쓰던 것을 IncomingAhead append와 같은 temp+`Flush(true)`+검증+atomic move 패턴으로 교체(fault injection 3곳 `DuringNewRolloutTempWrite`/`BeforeNewRolloutMove`/`AfterNewRolloutMove` 추가) — temp 작성 중 크래시로 남은 잔재가 다음 재시도를 막던 실제 crash recovery hole을 없앴다(진짜 자식 프로세스를 `BeforeNewRolloutMove`에서 강제 종료 → 복구 → 같은 backup으로 재시도까지 `Succeeded`로 end-to-end 확인). (2) `IncompleteApplyRecoveryService.FindIncompleteForHome(snapshotRoot, codexHomePath)` 신설 — 완료되지 못한 이전 Apply를 더 이상 전체 Home 통틀어 판단하지 않고 `CanonicalPath.AreSameLocation`으로 실제 겨냥했던 Home에만 scope한다(수동 Codex Home 선택을 지원하므로) — `RestoreExecutor.Apply`/`MainViewModel.RefreshIncompleteApplyState(codexHomePath)` 둘 다 이 API로 교체. (3) `IncompleteApplyRecoveryService.Recover`가 호출자를 신뢰하던 것을 스스로 재검증하도록 강화 — journal이 `Applying`이 아니면(Completed/RolledBack/Missing) 조용히 거부, journal/manifest의 SnapshotId·CodexHomePath가 어긋나거나 journal 파일 자체가 손상되면(`RestoreTransactionJournalReadStatus.Corrupt`) `RollbackFailedCritical`로 보수적으로 거부. (4) `RestoreProcessLock`(신규, Codex Home별 named Mutex `Local\CodexBackupManager.Restore.<hash>`) 도입 — 같은 EXE를 두 번 실행해도 같은 Codex Home에 동시 Apply할 수 없게 막았다(`RestoreExecutor.Apply`/`Recover` 둘 다 사용, `TimeSpan.Zero` 즉시 판정, `AbandonedMutexException`도 정상 획득으로 처리하되 바로 이어지는 incomplete-apply 검사가 이전 crash를 잡아낸다) — **진짜 두 프로세스**로 검증(`CodexBackupManager.Restore.CrashSim`에 `lock-hold` 서브커맨드 추가). 기존 Phase 07_02 동작은 전부 회귀 없이 유지했다(495건 전부 GREEN 유지 + 신규 19건 = 514건). |
+| (미커밋) | Phase 8 | **Release / Self-contained EXE / Final QA.** v0.1.0 Windows 배포물을 만들었다 — Restore 알고리즘/Backup V1/`ImportPlan` semantics는 전혀 바꾸지 않고, release-blocker 4개만 고쳤다(전부 RED→GREEN, 상세: `docs/safe-restore-phase7.md`는 그대로 두고 아래 §2/§4에 정리). (A) `RollbackService.Rollback`이 manifest의 `new-rollout-*`/`appended-rollout-*` 라벨에서만 `<target>.cbm-restore-tmp`를 정확히 파생해 정리(임의 glob 삭제 없음) — 진짜 자식 프로세스를 `DuringNewRolloutTempWrite`에서 강제 종료해 검증. (B) `IncompleteApplyRecoveryService.Recover`가 lock 획득 직후·Rollback 시작 직전에 `CodexProcessGuard`를 한 번 더 확인(첫 확인 이후 Codex가 다시 켜졌을 가능성 대응) — 콜 카운트를 세는 flaky processLister로 RED→GREEN 확인. (C) `SnapshotService.Create`가 각 파일과 manifest를 `Flush(flushToDisk: true)`+atomic move로 publish. (D) `RestoreTransactionJournalStore.TryReadDetailed`가 SnapshotId/CodexHomePath/State enum/UpdatedAtUtc까지 구조적으로 검증(`{}` 같은 parseable-but-invalid journal을 Corrupt로 분류). `.github/workflows/windows-ci.yml` 신설(build-and-test + publish-artifact 2개 job, push/pull_request, contents:read만). `scripts/publish-release.ps1` 신설(clean→restore→build→test→publish→감사→ZIP→SHA-256, 실제로 두 번 실행해 재현성 확인). `Directory.Build.props`에 `CbmReleasePublish=true`(Release 구성에서만) 조건부로 전체 프로젝트 PDB 생성을 억제하는 설정 추가(`SelfContained`/`PublishSingleFile`은 참조 프로젝트에 전파되지 않는다는 것을 실측으로 확인한 뒤 커스텀 global property로 우회). `AppVersionInfo`(어셈블리 버전에서 읽음)로 로그 시작/종료 문구와 창 제목을 "Codex Backup Manager 0.1.0"으로 정리. 실제 발행한 `CodexBackupManager.exe`(self-contained/single-file, 136MB, 부속 파일 없음)를 직접 실행해 실제 사용자 `.codex`를 Read-Only로 탐지/카탈로그 생성(46 projects/112 user threads/357 threads)까지 확인했고, 그 전후 원본 4개 파일 해시가 완전히 동일함을 재확인했다. 별도 self-contained/single-file 스모크 하네스(세션 스크래치패드, 커밋 안 됨)로 같은 Restore/Backup/Codex 어셈블리 기준 New Import/IncomingAhead/Rollback을 합성 temp Codex Home에서 재확인했다(전부 Succeeded/RolledBack). `.NET 미설치 clean Windows 환경 실기 검증은 수행하지 못했다`(정직하게 알려진 한계로 남김 — 아래 §4 참고). 전체 테스트 528건(514건 + 신규 14건) 전부 GREEN, 연속 2회 확인. |
 
 **Phase 4는 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5(Export)는 커밋된 뒤 Phase 05_01
 hardening까지 마쳤다 — `docs/codexbackup-format-v1.md`가 이제 FROZEN 상태다. Phase 6(Import
@@ -484,6 +510,15 @@ Apply Core, 커밋 `a3de8e8`)과 Phase 07_01(Restore Hardening / Apply UI / Real
     있었던 문제는 `RestoreProcessLock`(named Mutex, `Local\` 세션 범위)으로 막았고 진짜 두
     프로세스로 검증했다(§12.4) — 이 lock은 같은 Windows 로그인 세션 안에서만 유효하다는 것이 알려진
     한계로 남는다.
+23. **(Phase 8)** self-contained/single-file publish는 `CodexBackupManager.exe`를 실제로 발행하고
+    직접 실행해(실제 사용자 `.codex`를 Read-Only로 탐지/카탈로그 생성) 확인했고, 별도
+    self-contained/single-file 스모크 하네스로 같은 Restore 어셈블리 기준 New Import/IncomingAhead/
+    Rollback도 재확인했다. 다만 **.NET Desktop Runtime이 전혀 설치되지 않은 clean Windows
+    환경(Windows Sandbox/별도 VM)에서의 실기 검증은 수행하지 못했다** — 이 세션은 개발 머신에서만
+    실행했고, 그 머신에는 이미 .NET SDK가 설치되어 있어 "런타임 미설치 환경에서도 정말 동작하는가"
+    자체는 self-contained publish의 구조(모든 런타임 파일이 exe 안에 번들됨)로 미루어 짐작할 뿐
+    직접 실기 확인하지는 않았다. 배포 EXE는 code-signing되지 않았다 — 처음 실행 시 Windows
+    SmartScreen 경고가 뜰 수 있다(README/`docs/dist-readme.txt`에 명시).
 
 ---
 
@@ -507,12 +542,12 @@ Apply Core, 커밋 `a3de8e8`)과 Phase 07_01(Restore Hardening / Apply UI / Real
 | `CodexBackupManager.Backup.Tests` (Phase 5 신규, Phase 05_01/6/06_01/06_02/06_03 확장) | `ExportPlanBuilder`(dependency closure/dedupe/attachment/project 필터링 + **선택 대화 chain/metadata/ancestor/순환 누락 시 FatalErrors**), `BackupWriter`/`BackupReader`/`BackupValidator`(정상 export, 대상 파일 존재 시 시작 전 실패, 취소 시 temp 삭제 — 즉시 취소 + **300MB급 mid-copy 취소** 둘 다, Export 도중 원본 변경 감지 — 실제 파일 레이스로 재현, 100MB 스트리밍 bounded-memory, 변조 탐지, manifest 누락/버전 불일치/중복 entry/path traversal/참조 누락 검증 실패, **Windows 대소문자 충돌/checksums.json 자체 중복·불안전 경로(예외 없이 Fail)/manifest 개수 필드 불일치/project 참조 무결성/manifest.json 자체 변조 탐지**), `ImportPreviewBuilder`(실제 Export 파이프라인으로 만든 진짜 `.codexbackup`으로 New/Identical/IncomingAhead/LocalAhead/Diverged/Unverifiable 전부 재현, 여러 대화 혼합, dependency-only 분리, malformed backup → Preview 생성 금지, **Import Preview 동안 로컬 파일 수정 0건 확인**, 어떤 project에도 속하지 않은 선택 대화가 사라지지 않는지, **(Phase 06_01)** 로컬 metadata는 있는데 chain만 없으면 New가 아니라 Unverifiable, 반대로 metadata도 chain도 없어야만 진짜 New, dependency-only도 같은 원칙), `ProjectPathMapperTests`/`MetadataDifferenceAnalyzerTests`(canonical path 일치/불일치, metadata 필드별 차이), **`ImportPlanBuilderTests`**(Phase 06_01, 실패 Preview→null, New만 있으면 ApplyReady+BackupIdentity 일치, Diverged 있으면 HasUnresolvedDivergence, Unverifiable 있으면 HasBlockingIssues, TargetProjectPath가 project 소속 대화에만 채워지고 dependency-only는 null), **`TwoPcRoundTripTests`**(Phase 06_01 요구사항 5, temp fixture로 5단계 PC A↔B 왕복 시나리오 전체 재현 — IncomingAhead→Identical→LocalAhead→Diverged), 수동 경로 재지정 5건(NotFound/AutoLinked 재지정→ManuallyLinked, "기타 대화" 거부, 존재하지 않는 폴더/projectId 거부), **`ImportPlanPreflightValidatorTests`**(Phase 06_02, 14건 — backup 불변→Ready, backup 1바이트 변조/다른 valid backup으로 교체/CreatedAt·AppVersion·개수는 우연히 같지만 hash만 다름 3가지 모두 BackupChanged, New 이후 로컬에 같은 ThreadId 생김/IncomingAhead 이후 로컬이 이어써짐/다른 branch로 바뀜 3가지 모두 LocalStateChanged, IncomingAhead 미리보기 그대로면 Ready, 대상 프로젝트 폴더 삭제→TargetPathUnavailable, projectless 대화는 경로 확인 없이 정상, Diverged/Unverifiable 있으면 Ready 아님, preflight 검증 중 backup/로컬 파일 수정 0건, 24MB급 대형 rollout도 whole-file streaming hash로 정상 Ready 판정), **`PreviewSourceIdentityPinningTests`**(Phase 06_03, 8건 — Preview와 같은 backup으로 Plan 생성 성공, backup 1바이트 변조/다른 valid backup으로 교체/rollout 내용은 같은데 manifest metadata만 다름/CreatedAt·AppVersion·개수까지 같아도 hash만 다름 4가지 모두 Plan 생성 실패(`null`), 수동 경로 재지정 후 backup이 그대로면 성공(identity도 그대로 보존), 수동 경로 재지정 동안 backup이 바뀌면 실패, Plan 생성 후 backup이 바뀌는 경우는 기존 Preflight가 BackupChanged로 잡아냄을 재확인) | 전부 합성 임시 파일, 실제 사용자 데이터 없음 |
 | `CodexBackupManager.Codex.Tests` (Phase 6/06_01 확장) | 기존 항목 전부 + `ConversationRevisionComparerTests`(Identical/IncomingAhead/LocalAhead/Diverged 전 조합, 세그먼트 추가, parent cutoff 경계(ordinal/byte 둘 다 off-by-one까지), `.jsonl` vs `.jsonl.zst` 동일 내용, 같은 ThreadId·다른 lineage → Diverged, `ConversationRevisionBuilder`의 Unverifiable 판정 — 체인 없음/순환/조상 누락, **(Phase 06_01)** 한쪽만 끝나고 다른 쪽은 segment가 더 있어도 진짜 prefix면 IncomingAhead/LocalAhead(양방향), 진짜 prefix가 아니면 segment가 있어도 Diverged, 3개 이상 segment, `.jsonl.zst` 논리 바이트로도 동일 원칙 확인, 조상이 있는 체인에서도 leaf 자신의 segment transition이 같은 원칙으로 동작) | `ConversationTranscriptBuilder`/`ThreadDependencyResolver` 리팩터링(`ResolveFileSlices` 공유) 후에도 기존 178건 전부 회귀 없이 통과 확인 |
 | `CodexBackupManager.App.Tests` (Phase 06_03 확장) | ViewModel(Selection tri-state, Viewer/Selection 독립성, 카탈로그 refresh, `CompactSummaryText`, `MainViewModelExportTests`(Phase 5, 실제 fixture Codex Home으로 전체 Export 파이프라인 end-to-end 검증), `MainViewModelImportPreviewTests`(Phase 6, 실제 fixture Codex Home 2개로 Export→Import Preview 왕복 — 전부 Identical 확인, malformed backup 처리, **(Phase 06_01)** 실제 fixture의 진짜 프로젝트(Alpha)를 폴더 선택으로 수동 재지정 → ManuallyLinked, **(Phase 06_03)** Preview 성공 시 `MainViewModel.CurrentImportPlan`(내부 접근자)이 frozen `ImportPlan`을 보존하고 문구가 "Apply 준비 완료"가 아닌 중립적 표현인지, 경로 재지정 후에도 `Plan.Backup`의 backup identity(SHA-256/길이)가 그대로 유지되는지, **(Phase 7)** 새 Preview를 시작하는 순간 기존 frozen Plan/문구가 즉시 무효화되는지), Markdown-lite 파서/렌더러, **`FlowDocumentBindingRecyclingStressTests`**(실제 STA 스레드에서 `Window`+가상화 `ListBox`+`RichTextBox`를 띄우고 왕복 스크롤 — `System.Windows.Application`은 프로세스당 하나만 만들 수 있어 `Dispatcher.Run()`만 쓴다), **`DarkScrollBarOrientationTests`**(`App.xaml` 원본 마크업에서 ScrollBar 스타일+의존 리소스만 오려내 독립 `ResourceDictionary`로 파싱, STA 스레드에서 실제 `Track.Orientation`/커맨드 검증 — `Application` 인스턴스 없이 진행) | `net10.0-windows`+`UseWPF`, `InternalsVisibleTo`로 `MainViewModel.Selection`/`MainViewModel.CurrentImportPlan` 접근 |
-| **`CodexBackupManager.Restore.Tests`(Phase 7 신규, Phase 07_01/07_02/07_03 확장 — 15건→30건→47건→65건)** | `RestoreExecutorTests`(47건) — New Import 실제 파일+SQLite 행 생성 확인, Identical→write 0, Codex 실행 중→write 0, backup 변경→write 0, Diverged→write 0, IncomingAhead plain jsonl 안전 append, IncomingAhead 새 segment 생성(+`rollout_path` 갱신), 압축(.jsonl.zst) update는 Blocked, 물리 파일에 논리 cutoff 이후 여분 바이트가 있으면 전체 거부, 다른 대화의 history_base 조상으로 참조되는 파일에는 append 안 함, fault injection 6개 지점 전부 개별 Rollback 확인, 취소는 mutation 전/rollout 생성 후/append 후/커밋 후 각각 `Cancelled`로 구분, Two-PC 왕복 + Diverged write 0, `CodexProcessGuardTests`(7건, 실제 spawn된 프로세스 포함 — 별도 파일), **(Phase 07_02)** atomic append fault injection 3건(temp 작성 중/replace 직전/직후) + 대형 파일 스트리밍 append 1건, New Import cwd remap 2건(해석됨/안됨), durable transaction journal 6건(사전 취소 write 0/Completed·RolledBack journal/incomplete-apply 새 Apply 거부/Recover가 Codex 실행 중이면 거부/Recover 정상 복구), **(Phase 07_03)** New rollout temp/atomic move fault injection 3건 + stale temp 재시도 성공 1건, `FindIncompleteForHome` Home-scope 2건(다른 Home 안 돌려줌/다른 Home Apply 안 막음), `Recover` consistency gate 6건(Completed·RolledBack 재복구 거부, journal/manifest SnapshotId·CodexHomePath 불일치 거부, 호출자 기대 Home 불일치 거부, 손상된 journal 보수적 거부), `RollbackServiceShmSafetyTests`(3건, WAL+SHM/WAL만/둘다없음 — Rollback 후 target이 snapshot과 byte-for-byte 동일한지 직접 검증, live target을 다시 열던 옛 코드로는 실제로 실패함을 RED로 확인), `CrashRecoveryIntegrationTests`(4건 — 기존 atomic-replace/SQLite-commit 크래시 2건 + **(Phase 07_03)** New rollout temp-생성-후-move-전 크래시→복구→같은 backup 재시도 성공 1건 + 같은 Codex Home 동시 Apply 차단/다른 Home 비차단을 **진짜 두 프로세스**(`CrashSim`의 신규 `lock-hold` 서브커맨드)로 검증하는 1건, 전부 별도 `CodexBackupManager.Restore.CrashSim` 자식 프로세스를 실제 `Process.Kill()`/named Mutex로 조작), **(Phase 07_03 신규 파일)** `RestoreProcessLockTests`(4건, 단일 프로세스·다중 스레드로 named Mutex 소유권 규칙 검증 — 같은 Home 한쪽만 획득/다른 Home 동시 획득/Abandoned 처리/대소문자·`\\?\` prefix 무관) | 전부 `TestCodexHomeBuilder`(실측 threads 스키마 그대로 반영)로 만든 합성 temp Codex Home, 실제 사용자 `.codex`는 이 프로젝트의 자동화 테스트 어디에서도 열지 않는다(§7/§11.2 clone 하네스는 세션 스크래치패드일 뿐 이 테스트 프로젝트에 포함되지 않는다) |
+| **`CodexBackupManager.Restore.Tests`(Phase 7 신규, Phase 07_01/07_02/07_03/8 확장 — 15건→30건→47건→65건→79건)** | `RestoreExecutorTests`(54건, Phase 8에서 journal 구조 검증 5건(Theory 4 InlineData + 빈 객체 1건) + 정상 journal 회귀 1건 + Recover 2차 ProcessGuard 확인 1건 추가) — New Import 실제 파일+SQLite 행 생성 확인, Identical→write 0, Codex 실행 중→write 0, backup 변경→write 0, Diverged→write 0, IncomingAhead plain jsonl 안전 append, IncomingAhead 새 segment 생성(+`rollout_path` 갱신), 압축(.jsonl.zst) update는 Blocked, 물리 파일에 논리 cutoff 이후 여분 바이트가 있으면 전체 거부, 다른 대화의 history_base 조상으로 참조되는 파일에는 append 안 함, fault injection 6개 지점 전부 개별 Rollback 확인, 취소는 mutation 전/rollout 생성 후/append 후/커밋 후 각각 `Cancelled`로 구분, Two-PC 왕복 + Diverged write 0, `CodexProcessGuardTests`(7건, 실제 spawn된 프로세스 포함 — 별도 파일), **(Phase 07_02)** atomic append fault injection 3건(temp 작성 중/replace 직전/직후) + 대형 파일 스트리밍 append 1건, New Import cwd remap 2건(해석됨/안됨), durable transaction journal 6건(사전 취소 write 0/Completed·RolledBack journal/incomplete-apply 새 Apply 거부/Recover가 Codex 실행 중이면 거부/Recover 정상 복구), **(Phase 07_03)** New rollout temp/atomic move fault injection 3건 + stale temp 재시도 성공 1건, `FindIncompleteForHome` Home-scope 2건(다른 Home 안 돌려줌/다른 Home Apply 안 막음), `Recover` consistency gate 6건(Completed·RolledBack 재복구 거부, journal/manifest SnapshotId·CodexHomePath 불일치 거부, 호출자 기대 Home 불일치 거부, 손상된 journal 보수적 거부), `RollbackServiceShmSafetyTests`(3건, WAL+SHM/WAL만/둘다없음 — Rollback 후 target이 snapshot과 byte-for-byte 동일한지 직접 검증, live target을 다시 열던 옛 코드로는 실제로 실패함을 RED로 확인), `CrashRecoveryIntegrationTests`(4건 — 기존 atomic-replace/SQLite-commit 크래시 2건 + **(Phase 07_03)** New rollout temp-생성-후-move-전 크래시→복구→같은 backup 재시도 성공 1건 + 같은 Codex Home 동시 Apply 차단/다른 Home 비차단을 **진짜 두 프로세스**(`CrashSim`의 신규 `lock-hold` 서브커맨드)로 검증하는 1건, 전부 별도 `CodexBackupManager.Restore.CrashSim` 자식 프로세스를 실제 `Process.Kill()`/named Mutex로 조작), **(Phase 07_03 신규 파일)** `RestoreProcessLockTests`(4건, 단일 프로세스·다중 스레드로 named Mutex 소유권 규칙 검증 — 같은 Home 한쪽만 획득/다른 Home 동시 획득/Abandoned 처리/대소문자·`\\?\` prefix 무관), **(Phase 8, release-blocker A, 신규 파일)** `RollbackStaleTempCleanupTests`(3건 — New rollout/append가 남긴 stale temp를 Rollback이 정확히 지우는지, rollout이 아닌 라벨 옆의 동일 이름 파일은 임의로 지우지 않는지), **(Phase 8, release-blocker C, 신규 파일)** `SnapshotServiceTests`(3건 — 대형 파일 snapshot의 hash 일치, manifest.json이 정상 publish돼 재로딩 가능한지 + temp 파일 잔재 없음, 존재하지 않는 파일은 ExistedBefore=false), **(Phase 8, release-blocker A, `CrashRecoveryIntegrationTests` 추가 1건)** New rollout temp 작성 중(`DuringNewRolloutTempWrite`) 진짜 자식 프로세스 강제 종료 → 복구가 derived temp까지 지우는지 → 같은 backup 재시도 성공까지 end-to-end 확인(총 5건) | 전부 `TestCodexHomeBuilder`(실측 threads 스키마 그대로 반영)로 만든 합성 temp Codex Home, 실제 사용자 `.codex`는 이 프로젝트의 자동화 테스트 어디에서도 열지 않는다(§7/§11.2 clone 하네스는 세션 스크래치패드일 뿐 이 테스트 프로젝트에 포함되지 않는다) |
 | **`CodexBackupManager.App.Tests`(Phase 07_01/07_02/07_03 확장 — `MainViewModelApplyTests.cs`, 4건→8건→9건)** | `ApplyCommand.CanExecute`가 `IsApplyReady`까지 보는지, 확인 dialog에서 거부하면 아무 것도 호출되지 않는지(RED→GREEN), 완전히 동일한 두 fixture Codex Home 사이의 Apply가 `NothingToDo`로 끝나고 Plan을 무효화하는지, `KnownLimitationsText`가 항상 채워져 있는지, **(Phase 07_02)** 완료되지 못한 이전 Apply가 있으면 `ApplyCommand`가 비활성화되는지(RED로 확인), [이전 상태로 복구] 승인 시 실제로 해소되고 target 파일이 원래대로 복원되는지, **(Phase 07_03)** 서로 다른 두 fixture Codex Home 사이를 오갈 때 다른 Home의 미완료 Apply가 지금 화면에 나타나지 않고 그 Home을 다시 선택하면 나타나는지(snapshot/journal 자체는 그대로 보존되는지도 확인) | 실제 fixture Codex Home(`RepositoryFixtures.CopyCodexHomeFixtureToTemp`) 2개로 Export→Import Preview→Apply 왕복, 실제 사용자 `.codex`는 쓰지 않는다 |
 
-마지막 전체 실행 결과(Phase 07_03 포함): `Domain 64 + Codex 200 + Backup 88 + Restore 65 + App 97 =
-514건 전부 통과`(연속 2회 GREEN 확인), `dotnet build`(Debug/Release 둘 다) 경고/오류 0. 의존
-방향은 `App → Restore → Backup → Codex → Domain`(단방향, 역방향 없음).
+마지막 전체 실행 결과(Phase 8 포함): `Domain 64 + Codex 200 + Backup 88 + Restore 79 + App 97 =
+528건 전부 통과`(release script로 연속 2회 GREEN 확인, `dotnet build -c Release`도 경고/오류 0).
+의존 방향은 `App → Restore → Backup → Codex → Domain`(단방향, 역방향 없음).
 
 **여전히 커버하지 못한 테스트 항목(정직하게 남김)**: 대량의 요구 테스트 목록 중 다음은
 자동화 테스트로 명시적으로 덮지 않았다 — 향후 Phase 7 작업 시 필요하면 추가할 것.
@@ -535,42 +570,52 @@ Apply Core, 커밋 `a3de8e8`)과 Phase 07_01(Restore Hardening / Apply UI / Real
 
 ## 7. 다음에 할 일이 주어지면
 
-Phase 7(`a3de8e8`), Phase 07_01(`ddfdc36`), Phase 07_02(`b298140`), Phase 07_03(Final Restore
-Edge-Case Hardening, 이 문서 갱신 시점 기준 아직 미커밋)까지 완료했다 — `docs/safe-restore-phase7.md`가
-정식 스펙이다(write 대상/공식 소스 조사 결과/Snapshot·Rollback 구조/지원 범위/알려진 제약 전부,
-§10이 Phase 07_01, §11이 Phase 07_02, §12가 Phase 07_03 addendum). Apply 버튼을 포함한 UI도 이제
-있고(`MainViewModel.ApplyCommand`, `MainWindow.xaml`의 Import Preview 오버레이 안), 완료되지 못한
-이전 Apply를 Codex Home별로 scope해 감지/복구하는 배너도 있다. **Restore Core는 Phase 07_03을
-끝으로 기능을 더 바꾸지 않는다** — 다음 세션이 **Phase 8(Release / self-contained EXE / final
-QA)**을 시작하게 되면 먼저 확인할 것:
+Phase 7(`a3de8e8`), Phase 07_01(`ddfdc36`), Phase 07_02(`b298140`), Phase 07_03(`eca313f`), Phase
+8(Release / Self-contained EXE / Final QA, 이 문서 갱신 시점 기준 아직 미커밋)까지 완료했다 —
+`docs/safe-restore-phase7.md`가 Restore Core의 정식 스펙이다(§10이 Phase 07_01, §11이 Phase
+07_02, §12가 Phase 07_03 addendum — **Phase 8은 이 문서를 건드리지 않았다**, Restore
+알고리즘/Backup V1/`ImportPlan` semantics를 전혀 바꾸지 않았기 때문이다). v0.1.0
+self-contained/single-file `CodexBackupManager.exe`를 실제로 발행해 직접 실행까지 확인했고,
+`.github/workflows/windows-ci.yml`/`scripts/publish-release.ps1`/`docs/release-notes-v0.1.0.md`
+가 새로 생겼다. **다음 세션이 이어받으면 먼저 확인할 것**:
 
-- `docs/safe-restore-phase7.md` §12.7(알려진 한계, Phase 07_03 최종본)를 먼저 읽는다. 특히: **Codex
-  Desktop 사이드바에 프로젝트별로 정확히 표시되는지 여전히 미검증**(Electron 소스 미조사, `CODEX_HOME`
-  격리 실행이 Desktop에도 통하는지 확인된 바 없어 시도하지 않았다 — Phase 8 진입 전 실제 Desktop
-  앱으로 통합 검증하거나, 검증하지 못하면 Release 문서에 알려진 한계로 명시할 것), segment-transition
-  IncomingAhead의 실제 clone 재현과 물리적으로 불안전해 Blocked돼야 하는 실제 사례는 여전히
-  합성 데이터로만 검증(New/plain-append 계열 IncomingAhead는 Phase 07_02에서 실제 clone으로 검증
-  완료), 다중 신규 segment 복합 케이스 미검증, `local_image`/새 프로젝트 자동 생성/`Diverged` 자동
-  merge/`.jsonl.zst` Update는 전부 여전히 미지원(Unsupported로 UI에 계속 노출해야 한다 —
-  `MainViewModel.KnownLimitationsText`), `threads.cwd` remap은 SQLite에만 적용되고 향후 Codex의
-  backfill이 다시 덮어쓸 가능성은 배제되지 않는다, `RestoreProcessLock`은 같은 Windows 로그인
-  세션 안에서만 유효하다(원격/다른 사용자 세션 간 잠금은 범위 밖).
+- 이제 남은 것은 대부분 **코드 작업이 아니라 사용자의 판단/승인이 필요한 절차**다: (1) 사용자가
+  이 작업 트리를 검토 후 `Phase 08`로 커밋, (2) 사용자가 확인한 뒤 실제 `v0.1.0` 태그/GitHub
+  Release/ZIP+SHA256SUMS 업로드(이 세션은 태그/Release/Push를 전혀 만들지 않았다 — 명시적 요청이
+  없었다), (3) 원한다면 `.github/workflows/windows-ci.yml`이 실제 GitHub Actions에서도 그린으로
+  도는지 최초 push 후 확인(이 세션은 로컬에서 동일한 명령을 실행해 통과를 확인했을 뿐, 실제
+  GitHub Actions 실행 결과 자체는 관찰하지 못했다 — push를 하지 않았으므로).
+- `docs/project-status-and-handoff.md` §4 항목 23(알려진 한계, Phase 8)과
+  `docs/safe-restore-phase7.md` §12.7(Phase 07_03 시점 한계, Phase 8이 바꾸지 않음)을 먼저 읽는다.
+  특히 정직하게 남은 항목들: **.NET 미설치 clean Windows 환경 실기 검증 미수행**(Windows
+  Sandbox/별도 VM 필요 — 이 세션은 개발 머신에서만 실행했다), **code-signing 안 됨**(SmartScreen
+  경고 가능), Codex Desktop 사이드바 미검증, segment-transition IncomingAhead 실제 clone
+  미검증, `Diverged` 자동 병합/새 프로젝트 자동 생성/`.jsonl.zst` Update 미지원, Snapshot 자동
+  삭제 없음(README/`docs/dist-readme.txt`에 이미 안내함), `RestoreProcessLock`은 같은 Windows
+  로그인 세션 범위.
+- v1.1 이후 후보로 남을 만한 것들(이번 Phase가 일부러 손대지 않은 것): Diverged 자동
+  merge/backup 교체/복사본 가져오기 UI, Codex Desktop 사이드바 실측 검증(안전한 격리 방법이
+  공식적으로 확인되면), Snapshot 자동 정리 정책, code-signing, `.NET` 미설치 clean 환경 실기
+  검증.
 - `CodexBackupManager.Restore` 프로젝트의 안전 원칙(계획 생성 자체를 거부하면 write 0건, Snapshot
   없이는 아무것도 안 씀, 물리 안전성 재확인 없이 append/새 rollout 생성 안 함, backup은
   `PinnedBackupSource`로 Apply 전체에서 한 번만 읽음, rollout append/New rollout 생성 둘 다 항상
-  temp+atomic move, Rollback 검증은 절대 live target을 다시 열지 않음, durable transaction
-  journal로 crash 복구 가능, incomplete-apply/`Recover`는 항상 Codex Home별로 scope되고 Core가
-  스스로 journal/manifest 정합성을 재검증함, 같은 Codex Home에는 프로세스가 달라도 동시에 Apply할
-  수 없음(`RestoreProcessLock`))을 그대로 신뢰하고 그 위에 기능을 더할 것 — 이미 있는 안전장치를
-  우회하거나 다시 만들지 말 것.
+  temp+atomic move(+Rollback이 그 잔재까지 정리), Rollback 검증은 절대 live target을 다시 열지
+  않음, durable transaction journal로 crash 복구 가능, incomplete-apply/`Recover`는 항상 Codex
+  Home별로 scope되고 Core가 스스로 journal(구조까지)/manifest 정합성을 재검증하며 lock 획득 직후
+  ProcessGuard를 한 번 더 확인함, 같은 Codex Home에는 프로세스가 달라도 동시에 Apply할 수 없음
+  (`RestoreProcessLock`))을 그대로 신뢰하고 그 위에 기능을 더할 것 — 이미 있는 안전장치를 우회하거나
+  다시 만들지 말 것.
 - **실제 `.codex`로 검증할 때도 여전히 read-only/clone-only 원칙을 지킨다** — 자동화 테스트는 절대
-  실제 원본 `.codex`에 write하지 말 것. 이번 Phase까지는 매번 `Get-FileHash`로 원본 4개 파일
-  (`state_5.sqlite`/`session_index.jsonl`/`.codex-global-state.json`/`config.toml`)의 불변을
-  재확인해 왔다 — 이 습관을 계속 유지할 것. 세션 스크래치패드에 만든 실제 `.codex` clone(수 GB급,
-  실제 대화 내용 포함 가능)은 검증이 끝나면 반드시 삭제할 것 — 커밋하지 않는다.
-- Phase 8은 `dotnet publish -r win-x64 --self-contained /p:PublishSingleFile=true`(CLAUDE.md §38)
-  로 실제 단일 exe를 만들어 그 결과물로 최종 QA를 수행하는 게 핵심이다 — 아직 이 publish 명령을
-  실제로 실행/검증한 적이 없다.
+  실제 원본 `.codex`에 write하지 말 것. Phase 8에서도 실제 발행한 EXE를 실행해 Read-Only 탐지까지
+  했고, 매번 `Get-FileHash`로 원본 4개 파일(`state_5.sqlite`/`session_index.jsonl`/
+  `.codex-global-state.json`/`config.toml`)의 불변을 재확인해 왔다 — 이 습관을 계속 유지할 것.
+- 실제 self-contained/single-file publish는 `-p:SelfContained=true -p:PublishSingleFile=true
+  -p:IncludeNativeLibrariesForSelfExtract=true -p:CbmReleasePublish=true`(마지막 것은 이
+  프로젝트만의 커스텀 속성 — PDB 억제용, `Directory.Build.props` 참고)로 확정했다.
+  `scripts/publish-release.ps1`을 실제로 실행해 재현성을 확인했다 — 새로 publish 관련 설정을
+  바꿀 일이 있으면 이 스크립트와 `Directory.Build.props`/`CodexBackupManager.App.csproj`를 같이
+  본다.
 - `manifest.attachments[]`와 `BackupConversationMetadata`의 원본 38컬럼 필드가 여전히 Restore가
   쓸 수 있는 유일한 재료다 — `resolvedTitle` 같은 가공값을 원본 대신 쓰지 말 것.
 - `docs/codexbackup-format-v1.md`가 Backup V1의 정식 스펙이다(FROZEN) — `CLAUDE.md` §11~13은 이제 이

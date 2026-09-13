@@ -20,7 +20,7 @@ public partial class App : Application
         AppPaths.EnsureCreated();
 
         var logger = new FileLogger();
-        logger.Info("CodexBackupManager 시작 (Phase 1)");
+        logger.Info($"{AppVersionInfo.DisplayName} 시작");
 
         var viewModel = new MainViewModel(
             new CodexDetectionService(),
@@ -54,7 +54,7 @@ public partial class App : Application
     /// <inheritdoc />
     protected override void OnExit(ExitEventArgs e)
     {
-        new FileLogger().Info("CodexBackupManager 종료");
+        new FileLogger().Info($"{AppVersionInfo.DisplayName} 종료");
         base.OnExit(e);
     }
 }
