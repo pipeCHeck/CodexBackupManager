@@ -4,13 +4,16 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 08_01` 커밋(`7b2a8df`)까지 사용자가 커밋했다. `Phase 8` 커밋을 push한
+마지막 갱신 기준: `Phase 08_05` 커밋(`363e39b`)까지 사용자가 커밋했다. `Phase 8` 커밋을 push한
 뒤 실행된 첫 GitHub Actions Windows CI(run #1)는 Restore/Backup Format 자체의 문제가 아니라
 테스트 2건의 timing 문제로 FAIL했었지만(§2 Phase 08_01 행 참고), Phase 08_01이 두 테스트를
 전부 결정적(deterministic)으로 고쳤고 **그 뒤 GitHub Actions run #2가 Build & Test (Release) /
-self-contained single-file publish artifact job 모두 실제로 GREEN임을 확인했다.** **`v0.1.0`
-Tag/GitHub Release를 만들어도 되는 상태다** — 실제 Tag/Release/Push는 여전히 사용자가 직접
-진행한다(이 문서를 갱신한 세션은 명시적 요청 없이 Tag/Release/Push를 만들지 않는다). Import
+self-contained single-file publish artifact job 모두 실제로 GREEN임을 확인했다.** 그 뒤 문서
+정리(Phase 08_02), UI 폴리싱(Phase 08_03/08_04), Versioning(Phase 08_05 — 버전을 `0.1.0`에서
+`0.1.1`로 patch bump, 아래 참고)을 거쳤다 — 전부 기능/Restore 알고리즘은 바꾸지 않았다.
+**`v0.1.1` Tag/GitHub Release를 만들어도 되는 상태다** — 실제 Tag/Release/Push는 여전히
+사용자가 직접 진행한다(이 문서를 갱신한 세션은 명시적 요청 없이 Tag/Release/Push를 만들지
+않는다). Import
 Preview/`RevisionRelation`/
 `ImportPlan`/Preflight contract는 Phase 6/06_01/06_02/06_03 전부를 기준으로 **FINAL FROZEN**이다
 (`docs/import-preview-phase6.md` 상단 배너 참고). Backup Format V1은 `Phase 05_01`(`be2f616`)을
@@ -68,7 +71,7 @@ publish하도록 강화, (D) `RestoreTransactionJournalStore.TryReadDetailed`가
 없음)를 직접 실행해 실제 사용자 `.codex`를 대상으로 한 Read-Only 탐지/카탈로그 생성이 정상
 동작함을 확인했고(SQLite native 의존성 로드 포함), 별도의 self-contained/single-file 스모크
 하네스로 같은 Restore/Backup/Codex 어셈블리 기준 New Import/IncomingAhead/Rollback을 합성 temp
-Codex Home에서 재확인했다. 상세 결과는 §2 표와 `docs/release-notes-v0.1.0.md` 참고.
+Codex Home에서 재확인했다. 상세 결과는 §2 표와 `docs/release-notes-v0.1.1.md` 참고.
 
 그 위에 **Phase 08_01(CI Stabilization / Final Release Gate)**을 진행했다. `Phase 8` 커밋을
 push한 뒤 GitHub Actions Windows CI 첫 실행(run #1)이 FAIL했고, 실패한 테스트는 정확히 2건이었다
@@ -96,7 +99,30 @@ V1/`ImportPlan` semantics, Phase 8의 release-blocker A~D, self-contained/single
 설정은 전혀 건드리지 않았다. **사용자가 이 커밋을 push한 뒤 실제 GitHub Actions run #2가 Build
 & Test (Release) / self-contained single-file publish artifact job 모두 GREEN임을 확인했다** —
 timeout을 늘리거나 테스트를 skip하는 우회책 없이 실제 근본 원인을 없앤 결과가 실제 CI에서도
-그대로 확인된 것이다. 이로써 **v0.1.0 Release 준비가 완료됐다.**
+그대로 확인된 것이다. 이로써 **v0.1.0 Release 준비가 완료됐다** — 이 시점에는 아직 버전이
+`0.1.0`이었다(아래 Phase 08_05 참고).
+
+그 위에 문서/UI/버전 정리만 하는 세 개의 작은 Phase를 진행했다 — 셋 다 기능/코드/Restore
+알고리즘은 전혀 바꾸지 않았다. **Phase 08_02(Release Prep 문서 정리)**는 README/이 문서에
+남아 있던 "GitHub Actions 확인 필요 / Release 아직 금지" 같은 문구를 실제로 GREEN을 확인한
+현재 상태(Phase 08_01 완료 · CI GREEN · Release 가능)에 맞게 고쳤다 — known limitations는
+그대로 유지했다. **Phase 08_03(UI 폴리싱)**은 하단 "다시 확인" 버튼 문구를 "새로고침"으로
+바꾸고, 창이 비활성 상태가 되면 `TreeViewItem`/`ListBoxItem`의 선택 배경/글자색이 Windows
+기본 비활성 강조색(거의 흰 배경)으로 되돌아가 "선택은 됐는데 안 보이는" 문제를 `App.xaml`에서
+`SystemColors.HighlightBrushKey`/`HighlightTextBrushKey`/`InactiveSelectionHighlightBrushKey`/
+`InactiveSelectionHighlightTextBrushKey`를 앱 다크 테마 색으로 명시적으로 override해 고쳤다(활성/
+비활성 모두 동일하게 고정). 같은 Phase에서 하단에 "Made by ProController · power0802m@naver.com"
+표시도 추가했다. **Phase 08_04**는 그 하단 안내 문구(읽기 전용 안내 + Made by)가 한 줄로 너무
+길어지는 문제를 오른쪽 정렬 2줄 footer로 재배치해 고쳤다 — 창 폭이 좁아도 왼쪽 버튼과 겹치지
+않는다. **Phase 08_05(Versioning 정리)**는 버전을 `0.1.0`에서 **`0.1.1`**로 patch bump했다 —
+`Directory.Build.props`의 `Version`/`AssemblyVersion`/`FileVersion`이 유일한 기준이고,
+`scripts/publish-release.ps1`이 더 이상 버전을 하드코딩하지 않고 `Directory.Build.props`에서
+자동으로 읽으며(`-Version`으로 override 가능), 실제 빌드된 exe의 `FileVersion`과 다르면 스크립트
+자체가 실패하도록 검증을 추가했다. 이 정리로 배포 ZIP 이름은 자동으로
+`CodexBackupManager-v0.1.1-win-x64.zip`이 되고, `docs/release-notes-v0.1.0.md`는
+`docs/release-notes-v0.1.1.md`로 정리됐다(아직 실제 공개 Release를 하지 않았으므로 새로 만든
+것이 아니라 그대로 이름만 바꿨다). **이 정리들 이후 첫 공개 배포 목표 버전은 `v0.1.1`로
+통일됐다 — v0.1.0으로 실제 Tag/GitHub Release를 만든 적은 없다.**
 
 ---
 
@@ -191,7 +217,11 @@ IncomingAhead는 여전히 합성 데이터로만 검증)해 실제 스키마 �
 | `b298140` | Phase 07_02 | **Release Safety Gate / Full-Clone E2E / Crash Recovery.** 배포 전 마지막 안전성 게이트(상세: `docs/safe-restore-phase7.md` §11). rollout append를 in-place Seek+CopyTo에서 temp+atomic replace로 전면 교체(fault injection 3곳 추가, RED→GREEN 확인) — 크래시 중이어도 원본이 반쯤 쓰이지 않는다. `RollbackService`의 post-check가 더 이상 target DB/WAL/SHM을 다시 열지 않도록 고쳤다(별도 임시 복사본만 열어 확인) — **실제로 target을 다시 여는 옛 방식이 `-shm`을 변경한다는 것을 RED로 직접 재현**했다. 공식 `codex-rs` 소스 조사로 `threads.cwd`가 resume 시 실제 작업 디렉터리 후보로 쓰일 수 있음을 확인(`resume_config.rs`) — New Import에서 project_id가 실제로 해석됐을 때만 `threads.cwd`도 대상 PC 경로로 remap하도록 변경(rollout JSONL의 `session_meta.cwd`는 여전히 손대지 않음). `RestoreTransactionJournal`(Prepared/Applying/Completed/RolledBack) + `IncompleteApplyRecoveryService`로 크래시 후 복구 메커니즘 신설 — 별도 자식 프로세스(`CodexBackupManager.Restore.CrashSim`)를 실제로 `Process.Kill()`해 진짜 강제 종료 상태를 재현하고 다음 실행이 정확히 감지/복구함을 확인했다. Snapshot 이전 취소가 "예기치 않은 오류"로 새던 버그도 고쳤다. Apply 버튼을 `IsApplyReady` 기준으로 강화하고 완료되지 못한 이전 Apply를 막는 배너/복구 버튼을 추가했다. **세션 스크래치패드 하네스로 실제 `.codex` 전체(sessions/archived_sessions 포함)를 clone해 실제 rollout 파일 기반 IncomingAhead E2E를 처음으로 성공시켰다** — byte-precise 자르기가 아니면 `Diverged`로 오판됨을 RED로 발견 후 수정. 실제 원본에는 세션 전체에서 단 한 번도 쓰지 않았다(`Get-FileHash` 반복 재확인). |
 | `eca313f` | Phase 07_03 | **Final Restore Edge-Case Hardening.** Phase 07_02 커밋 이후 GitHub 코드 리뷰로 발견된 배포 전 Restore edge case 3개를 고쳤다(상세: `docs/safe-restore-phase7.md` §12). (1) `RolloutRestoreService.CreateNewFile`(New rollout)이 `FileMode.CreateNew`+`File.Move(overwrite:false)`만 쓰던 것을 IncomingAhead append와 같은 temp+`Flush(true)`+검증+atomic move 패턴으로 교체(fault injection 3곳 `DuringNewRolloutTempWrite`/`BeforeNewRolloutMove`/`AfterNewRolloutMove` 추가) — temp 작성 중 크래시로 남은 잔재가 다음 재시도를 막던 실제 crash recovery hole을 없앴다(진짜 자식 프로세스를 `BeforeNewRolloutMove`에서 강제 종료 → 복구 → 같은 backup으로 재시도까지 `Succeeded`로 end-to-end 확인). (2) `IncompleteApplyRecoveryService.FindIncompleteForHome(snapshotRoot, codexHomePath)` 신설 — 완료되지 못한 이전 Apply를 더 이상 전체 Home 통틀어 판단하지 않고 `CanonicalPath.AreSameLocation`으로 실제 겨냥했던 Home에만 scope한다(수동 Codex Home 선택을 지원하므로) — `RestoreExecutor.Apply`/`MainViewModel.RefreshIncompleteApplyState(codexHomePath)` 둘 다 이 API로 교체. (3) `IncompleteApplyRecoveryService.Recover`가 호출자를 신뢰하던 것을 스스로 재검증하도록 강화 — journal이 `Applying`이 아니면(Completed/RolledBack/Missing) 조용히 거부, journal/manifest의 SnapshotId·CodexHomePath가 어긋나거나 journal 파일 자체가 손상되면(`RestoreTransactionJournalReadStatus.Corrupt`) `RollbackFailedCritical`로 보수적으로 거부. (4) `RestoreProcessLock`(신규, Codex Home별 named Mutex `Local\CodexBackupManager.Restore.<hash>`) 도입 — 같은 EXE를 두 번 실행해도 같은 Codex Home에 동시 Apply할 수 없게 막았다(`RestoreExecutor.Apply`/`Recover` 둘 다 사용, `TimeSpan.Zero` 즉시 판정, `AbandonedMutexException`도 정상 획득으로 처리하되 바로 이어지는 incomplete-apply 검사가 이전 crash를 잡아낸다) — **진짜 두 프로세스**로 검증(`CodexBackupManager.Restore.CrashSim`에 `lock-hold` 서브커맨드 추가). 기존 Phase 07_02 동작은 전부 회귀 없이 유지했다(495건 전부 GREEN 유지 + 신규 19건 = 514건). |
 | `1481627` | Phase 8 | **Release / Self-contained EXE / Final QA.** v0.1.0 Windows 배포물을 만들었다 — Restore 알고리즘/Backup V1/`ImportPlan` semantics는 전혀 바꾸지 않고, release-blocker 4개만 고쳤다(전부 RED→GREEN, 상세: `docs/safe-restore-phase7.md`는 그대로 두고 아래 §2/§4에 정리). (A) `RollbackService.Rollback`이 manifest의 `new-rollout-*`/`appended-rollout-*` 라벨에서만 `<target>.cbm-restore-tmp`를 정확히 파생해 정리(임의 glob 삭제 없음) — 진짜 자식 프로세스를 `DuringNewRolloutTempWrite`에서 강제 종료해 검증. (B) `IncompleteApplyRecoveryService.Recover`가 lock 획득 직후·Rollback 시작 직전에 `CodexProcessGuard`를 한 번 더 확인(첫 확인 이후 Codex가 다시 켜졌을 가능성 대응) — 콜 카운트를 세는 flaky processLister로 RED→GREEN 확인. (C) `SnapshotService.Create`가 각 파일과 manifest를 `Flush(flushToDisk: true)`+atomic move로 publish. (D) `RestoreTransactionJournalStore.TryReadDetailed`가 SnapshotId/CodexHomePath/State enum/UpdatedAtUtc까지 구조적으로 검증(`{}` 같은 parseable-but-invalid journal을 Corrupt로 분류). `.github/workflows/windows-ci.yml` 신설(build-and-test + publish-artifact 2개 job, push/pull_request, contents:read만). `scripts/publish-release.ps1` 신설(clean→restore→build→test→publish→감사→ZIP→SHA-256, 실제로 두 번 실행해 재현성 확인). `Directory.Build.props`에 `CbmReleasePublish=true`(Release 구성에서만) 조건부로 전체 프로젝트 PDB 생성을 억제하는 설정 추가(`SelfContained`/`PublishSingleFile`은 참조 프로젝트에 전파되지 않는다는 것을 실측으로 확인한 뒤 커스텀 global property로 우회). `AppVersionInfo`(어셈블리 버전에서 읽음)로 로그 시작/종료 문구와 창 제목을 "Codex Backup Manager 0.1.0"으로 정리. 실제 발행한 `CodexBackupManager.exe`(self-contained/single-file, 136MB, 부속 파일 없음)를 직접 실행해 실제 사용자 `.codex`를 Read-Only로 탐지/카탈로그 생성(46 projects/112 user threads/357 threads)까지 확인했고, 그 전후 원본 4개 파일 해시가 완전히 동일함을 재확인했다. 별도 self-contained/single-file 스모크 하네스(세션 스크래치패드, 커밋 안 됨)로 같은 Restore/Backup/Codex 어셈블리 기준 New Import/IncomingAhead/Rollback을 합성 temp Codex Home에서 재확인했다(전부 Succeeded/RolledBack). `.NET 미설치 clean Windows 환경 실기 검증은 수행하지 못했다`(정직하게 알려진 한계로 남김 — 아래 §4 참고). 전체 테스트 528건(514건 + 신규 14건) 전부 GREEN, 연속 2회 확인. |
-| `7b2a8df` | Phase 08_01 | **CI Stabilization / Final Release Gate.** `Phase 8` 커밋을 push한 뒤 GitHub Actions Windows CI 첫 실행(run #1)이 FAIL — 실패 2건 전부 timing 의존 테스트 자체의 문제였다(제품 버그 아님), 둘 다 결정적으로 고쳤다. (1) `BackupWriterTests`의 "300MB + 30ms 뒤 취소" wall-clock race를 제거 — `BackupWriter.Write`에 테스트 전용 internal 오버로드(`sourceFileOpener` 주입)를 추가해 "N번째 Read 직후 스스로 취소하는" 커스텀 Stream으로 완전히 결정적으로 재현(신규 `StreamingHashCopyTests`로 `StreamingHashCopy.CopyWithHash`의 취소 자체도 저수준에서 별도 확인). (2) `FlowDocumentBindingRecyclingStressTests`가 로컬 단독 실행도 21~22초 걸려 30초 timeout과 여유가 없었던 문제 — "고정된 소수 지점으로 점프"하는 방식은 실제 컨테이너 재활용 race를 더 이상 재현하지 못함을 RED로 직접 확인했고(기각), 대신 `messageCount`(600→80)를 줄여 기존 촘촘한 40px 스텝 알고리즘을 그대로 유지한 채 실행 시간만 1~3초로 줄였다(RED로 버그가 여전히 매번 재현됨을 재확인). `FlowDocumentBinding`의 핵심 소유권 로직 자체를 검증하는 밀리초 단위 결정적 단위 테스트도 신설(둘 다 RED→GREEN, 최소 15회 반복 + 인위적 CPU 부하 아래에서도 GREEN 확인). CI workflow의 병렬 실행 정책은 바꾸지 않았다 — 근본 원인이 테스트의 timing 의존성이었고 이미 제거했으므로 직렬화는 불필요하다고 판단(실측: cross-project 병렬 + 인위적 CPU 부하 아래에서도 안정). Restore 알고리즘/Backup Format V1/`ImportPlan` semantics, Phase 8의 release-blocker A~D, publish 설정은 전혀 건드리지 않았다. 전체 테스트 531건(528건 + 신규 3건: `StreamingHashCopyTests` 2건 + `FlowDocumentBinding` 소유권 단위 테스트 1건), release script로 최종 산출물 재생성. **사용자가 이 커밋을 push한 뒤 GitHub Actions run #2가 Build & Test (Release) / self-contained single-file publish artifact job 모두 실제로 GREEN임을 확인했다 — v0.1.0 Release 가능.** |
+| `7b2a8df` | Phase 08_01 | **CI Stabilization / Final Release Gate.** `Phase 8` 커밋을 push한 뒤 GitHub Actions Windows CI 첫 실행(run #1)이 FAIL — 실패 2건 전부 timing 의존 테스트 자체의 문제였다(제품 버그 아님), 둘 다 결정적으로 고쳤다. (1) `BackupWriterTests`의 "300MB + 30ms 뒤 취소" wall-clock race를 제거 — `BackupWriter.Write`에 테스트 전용 internal 오버로드(`sourceFileOpener` 주입)를 추가해 "N번째 Read 직후 스스로 취소하는" 커스텀 Stream으로 완전히 결정적으로 재현(신규 `StreamingHashCopyTests`로 `StreamingHashCopy.CopyWithHash`의 취소 자체도 저수준에서 별도 확인). (2) `FlowDocumentBindingRecyclingStressTests`가 로컬 단독 실행도 21~22초 걸려 30초 timeout과 여유가 없었던 문제 — "고정된 소수 지점으로 점프"하는 방식은 실제 컨테이너 재활용 race를 더 이상 재현하지 못함을 RED로 직접 확인했고(기각), 대신 `messageCount`(600→80)를 줄여 기존 촘촘한 40px 스텝 알고리즘을 그대로 유지한 채 실행 시간만 1~3초로 줄였다(RED로 버그가 여전히 매번 재현됨을 재확인). `FlowDocumentBinding`의 핵심 소유권 로직 자체를 검증하는 밀리초 단위 결정적 단위 테스트도 신설(둘 다 RED→GREEN, 최소 15회 반복 + 인위적 CPU 부하 아래에서도 GREEN 확인). CI workflow의 병렬 실행 정책은 바꾸지 않았다 — 근본 원인이 테스트의 timing 의존성이었고 이미 제거했으므로 직렬화는 불필요하다고 판단(실측: cross-project 병렬 + 인위적 CPU 부하 아래에서도 안정). Restore 알고리즘/Backup Format V1/`ImportPlan` semantics, Phase 8의 release-blocker A~D, publish 설정은 전혀 건드리지 않았다. 전체 테스트 531건(528건 + 신규 3건: `StreamingHashCopyTests` 2건 + `FlowDocumentBinding` 소유권 단위 테스트 1건), release script로 최종 산출물 재생성. **사용자가 이 커밋을 push한 뒤 GitHub Actions run #2가 Build & Test (Release) / self-contained single-file publish artifact job 모두 실제로 GREEN임을 확인했다 — v0.1.1 Release 가능.** |
+| `1cd591e` | Phase 08_02 | **Release Prep 문서 정리.** 기능/코드/테스트는 전혀 건드리지 않고 README/이 문서에서 "Phase 08_01 로컬 완료 / GitHub Actions 확인 필요 / 아직 Release 금지"라고 남아 있던 부분을 실제로 run #2가 GREEN임을 확인한 상태(Phase 08_01 완료 · GitHub Actions Windows CI GREEN · Release 가능)에 맞게 고쳤다. 기존 known limitations는 하나도 완화·삭제하지 않았고, `docs/release-notes-v0.1.0.md`는 사실관계가 이미 맞아 손대지 않았다. |
+| `2577dc4` | Phase 08_03 | **UI 폴리싱.** Restore/Backup/Codex core 로직은 건드리지 않고 WPF UI만 최소 변경. 하단 "다시 확인" 버튼 문구를 "새로고침"으로 변경(command 그대로). 왼쪽 프로젝트/대화 트리(`TreeViewItem`)를 선택한 뒤 다른 창을 클릭해 앱이 비활성 상태가 되면 선택 배경/글자색이 Windows 기본 비활성 강조색(거의 흰 배경)으로 되돌아가 "선택은 됐는데 안 보이는" 문제가 있었다 — `App.xaml`에 `SystemColors.HighlightBrushKey`/`HighlightTextBrushKey`/`InactiveSelectionHighlightBrushKey`/`InactiveSelectionHighlightTextBrushKey`를 앱 다크 테마 색(`#FF3A6EA5`/흰색)으로 명시적으로 override해, 창 활성/비활성 상태와 무관하게 항상 같은 색으로 보이도록 고쳤다. 하단에 "Made by ProController · power0802m@naver.com" 문구를 footer로 추가했다. |
+| `b306f14` | Phase 08_04 | **하단 footer 레이아웃 수정.** `MainWindow.xaml`만 변경. 왼쪽 버튼 `StackPanel`에 있던 "Codex 원본 데이터는 읽기 전용으로만 접근합니다." 문구를 오른쪽 footer 영역으로 옮기고, 기존 "Made by" 문구와 함께 오른쪽 정렬 2줄(`FontSize=11`/`10`, 2px 간격)로 재배치했다 — 한 줄로 나란히 두면 창 폭이 좁을 때 왼쪽 버튼과 겹치던 문제를 별도 `Grid` 컬럼으로 분리해 해결했다. |
+| `363e39b` | Phase 08_05 | **Versioning 정리.** 버전을 `0.1.0`에서 `0.1.1`로 patch bump(`Directory.Build.props`의 `Version`/`AssemblyVersion`/`FileVersion` — 버전의 유일한 source of truth). `scripts/publish-release.ps1`이 더 이상 버전을 하드코딩하지 않고 `Directory.Build.props`에서 자동으로 읽으며(`-Version`으로 override 가능), 실제 빌드된 exe의 `FileVersion`이 그 버전과 다르면 스크립트 자체를 실패시키는 검증을 추가했다. 배포 ZIP 이름이 자동으로 `CodexBackupManager-v0.1.1-win-x64.zip`이 되고, `docs/dist-readme.txt`(배포 ZIP 동봉)도 버전을 갱신했으며, 아직 실제 공개 Release를 한 적이 없으므로 `docs/release-notes-v0.1.0.md`를 `docs/release-notes-v0.1.1.md`로 이름을 바꿔 정리했다(내용 자체는 버전 문구만 갱신). Restore/Backup 로직은 건드리지 않았다. |
 
 **Phase 4는 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5(Export)는 커밋된 뒤 Phase 05_01
 hardening까지 마쳤다 — `docs/codexbackup-format-v1.md`가 이제 FROZEN 상태다. Phase 6(Import
@@ -606,23 +636,27 @@ Apply Core, 커밋 `a3de8e8`)과 Phase 07_01(Restore Hardening / Apply UI / Real
 ## 7. 다음에 할 일이 주어지면
 
 Phase 7(`a3de8e8`), Phase 07_01(`ddfdc36`), Phase 07_02(`b298140`), Phase 07_03(`eca313f`), Phase
-8(`1481627`), Phase 08_01(`7b2a8df`)까지 전부 완료·커밋됐다 — `docs/safe-restore-phase7.md`가
+8(`1481627`), Phase 08_01(`7b2a8df`), Phase 08_02(`1cd591e`), Phase 08_03(`2577dc4`), Phase
+08_04(`b306f14`), Phase 08_05(`363e39b`)까지 전부 완료·커밋됐다 — `docs/safe-restore-phase7.md`가
 Restore Core의 정식 스펙이다(§10이 Phase 07_01, §11이 Phase 07_02, §12가 Phase 07_03 addendum —
-**Phase 8/08_01은 이 문서를 건드리지 않았다**, Restore 알고리즘/Backup V1/`ImportPlan`
+**Phase 8/08_01~08_05는 이 문서를 건드리지 않았다**, Restore 알고리즘/Backup V1/`ImportPlan`
 semantics를 전혀 바꾸지 않았기 때문이다). v0.1.0 self-contained/single-file
 `CodexBackupManager.exe`를 실제로 발행해 직접 실행까지 확인했고,
-`.github/workflows/windows-ci.yml`/`scripts/publish-release.ps1`/`docs/release-notes-v0.1.0.md`
-가 Phase 8에서 새로 생겼다. `Phase 8` 커밋을 push한 뒤 첫 GitHub Actions Windows CI 실행(run
+`.github/workflows/windows-ci.yml`/`scripts/publish-release.ps1`/`docs/release-notes-v0.1.1.md`
+(당시 파일명은 `docs/release-notes-v0.1.0.md`였다 — Phase 08_05에서 이름을 바꿨다)가 Phase
+8에서 새로 생겼다. `Phase 8` 커밋을 push한 뒤 첫 GitHub Actions Windows CI 실행(run
 #1)은 테스트 2건의 timing 문제로 FAIL했었지만, Phase 08_01이 결정적으로 고쳤고 **그 뒤 GitHub
 Actions run #2가 Build & Test (Release) / self-contained single-file publish artifact job
-모두 실제로 GREEN임을 확인했다.** **v0.1.0 Release 준비가 완료된 상태다** — 실제 `v0.1.0`
-Tag/GitHub Release 생성, ZIP+SHA256SUMS 업로드는 여전히 사용자가 직접 진행한다(이 문서를 다루는
-세션은 명시적 요청 없이 Tag/Release/Push를 만들지 않는다). **다음 세션이 이어받으면 먼저 확인할
-것**:
+모두 실제로 GREEN임을 확인했다.** 그 뒤 Phase 08_02(문서 정리)/08_03(UI 폴리싱)/08_04(footer
+레이아웃)/08_05(버전을 `0.1.0`→`0.1.1`로 patch bump)를 거쳤다. **`v0.1.1` Release 준비가 완료된
+상태다** — 실제 `v0.1.1` Tag/GitHub Release 생성, ZIP+SHA256SUMS 업로드는 여전히 사용자가 직접
+진행한다(이 문서를 다루는 세션은 명시적 요청 없이 Tag/Release/Push를 만들지 않는다). **다음
+세션이 이어받으면 먼저 확인할 것**:
 
-- Release 자체를 진행하는 세션이라면: (1) 사용자가 직접 `v0.1.0` Tag를 만들고, (2) GitHub
-  Release를 생성하며, (3) `artifacts/release/`의 ZIP+`SHA256SUMS.txt`(또는 release script로
-  새로 만든 산출물)를 업로드한다 — 이 작업들은 사용자가 명시적으로 요청할 때만 대신 수행할 것.
+- Release 자체를 진행하는 세션이라면: (1) 사용자가 직접 `v0.1.1` Tag를 만들고, (2) GitHub
+  Release를 생성하며, (3) `artifacts/release/`의 ZIP(`CodexBackupManager-v0.1.1-win-x64.zip`)
+  +`SHA256SUMS.txt`(또는 release script로 새로 만든 산출물)를 업로드한다 — 이 작업들은 사용자가
+  명시적으로 요청할 때만 대신 수행할 것.
 - `docs/project-status-and-handoff.md` §4 항목 23(알려진 한계, Phase 8)과
   `docs/safe-restore-phase7.md` §12.7(Phase 07_03 시점 한계, Phase 8이 바꾸지 않음)을 먼저 읽는다.
   특히 정직하게 남은 항목들: **.NET 미설치 clean Windows 환경 실기 검증 미수행**(Windows

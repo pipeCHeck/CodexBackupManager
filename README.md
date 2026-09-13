@@ -7,8 +7,9 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 > **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
 > **Phase 07_01(Restore Hardening + Apply UI) + Phase 07_02(Release Safety Gate) +**
 > **Phase 07_03(Final Restore Edge-Case Hardening) + Phase 8(Release / Self-contained EXE) +**
-> **Phase 08_01(CI Stabilization / Final Release Gate) 완료. GitHub Actions Windows CI GREEN —**
-> **v0.1.0 Release 가능.**
+> **Phase 08_01(CI Stabilization / Final Release Gate) + Phase 08_02~08_05(Release Prep 문서 정리 /**
+> **UI 폴리싱 / Versioning) 완료. GitHub Actions Windows CI GREEN —**
+> **v0.1.1 Release 가능.**
 > Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, 07_01/07_02/07_03을 거치며 실제 원본
 > `.codex` clone으로 재현한 crash/동시성 edge case를 포함해 Restore 안전성을 반복적으로
 > 검증·강화했습니다 — New Import와 안전이 증명된 IncomingAhead fast-forward만 지원하고,
@@ -20,7 +21,14 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 > **Phase 08_01**에서 두 테스트를 전부 결정적(deterministic)으로 고쳤습니다 — 이후 **GitHub
 > Actions run #2가 Build & Test (Release) / self-contained single-file publish artifact job
 > 모두 실제로 GREEN**임을 확인했습니다(자세한 내용은 `docs/project-status-and-handoff.md` 참고).
-> 배포 사용자용 안내는 `docs/dist-readme.txt`(배포 ZIP에 동봉)와 `docs/release-notes-v0.1.0.md`
+> 그 뒤 **Phase 08_02**(GitHub Actions GREEN 확인 결과에 맞춰 README/인계 문서 정리), **Phase
+> 08_03**(UI 폴리싱 — 버튼 문구를 "새로고침"으로 변경, 창이 비활성 상태여도 선택 항목이 또렷이
+> 보이도록 선택 강조색을 명시적으로 고정, 하단에 "Made by" 표시 추가), **Phase 08_04**(하단
+> 안내 문구를 2줄 footer로 재배치해 좁은 창에서도 왼쪽 버튼과 겹치지 않게 정리), **Phase
+> 08_05**(Versioning 정리 — 버전을 `0.1.1`로 patch bump하고 `Directory.Build.props`를 단일
+> 기준으로 확정, `scripts/publish-release.ps1`이 버전을 자동으로 읽어 ZIP 이름을 만들도록 수정)를
+> 거쳤습니다 — 이 네 Phase 모두 기능/Restore 알고리즘은 전혀 바꾸지 않았습니다. 배포 사용자용
+> 안내는 `docs/dist-readme.txt`(배포 ZIP에 동봉)와 `docs/release-notes-v0.1.1.md`
 > 참고. 개발 내용 상세는 `docs/safe-restore-phase7.md` §10~12 참고.
 
 ---
@@ -97,10 +105,10 @@ restore → build → **전체 테스트** → publish → 결과물 감사 → 
 powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1
 ```
 
-결과물은 `artifacts\release\CodexBackupManager-v0.1.0-win-x64.zip` + `SHA256SUMS.txt`로 나온다
+결과물은 `artifacts\release\CodexBackupManager-v0.1.1-win-x64.zip` + `SHA256SUMS.txt`로 나온다
 (ZIP에는 `CodexBackupManager.exe`와 `docs\dist-readme.txt`(`README.txt`로 이름 변경)만 들어간다 —
 PDB/테스트 바이너리/소스는 포함하지 않는다). 배포용 릴리스 노트는
-[`docs/release-notes-v0.1.0.md`](./docs/release-notes-v0.1.0.md) 참고.
+[`docs/release-notes-v0.1.1.md`](./docs/release-notes-v0.1.1.md) 참고.
 
 ---
 
@@ -460,7 +468,11 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 07_02 | Release Safety Gate — atomic append, crash recovery journal, WAL/SHM-safe rollback, cwd remap, 실제 rollout IncomingAhead clone E2E | **완료** |
 | 07_03 | Final Restore Edge-Case Hardening — New rollout atomic/durability, Home별 incomplete-apply scope, Recover consistency gate, 프로세스 간 Restore lock | **완료** |
 | 8 | Release — self-contained/single-file EXE, Windows CI, release script, release-blocker(A~D) 4건 | **완료** |
-| 08_01 | CI Stabilization / Final Release Gate — GitHub Actions 실제 실패 2건(Backup cancellation race, WPF recycling timeout) 결정적으로 수정, GitHub Actions Windows CI GREEN 확인 | **완료 — v0.1.0 Release 가능** |
+| 08_01 | CI Stabilization / Final Release Gate — GitHub Actions 실제 실패 2건(Backup cancellation race, WPF recycling timeout) 결정적으로 수정, GitHub Actions Windows CI GREEN 확인 | **완료 — v0.1.1 Release 가능** |
+| 08_02 | Release Prep — GitHub Actions GREEN 확인 결과에 맞춰 README/`docs/project-status-and-handoff.md` 문구 정리(기능/코드 변경 없음) | **완료** |
+| 08_03 | UI 폴리싱 — 버튼 문구 "새로고침", 비활성 창에서도 선택 항목 강조색을 명시적으로 고정(`SystemColors` override), 하단 "Made by" 표시 추가 | **완료** |
+| 08_04 | 하단 안내 문구를 2줄 footer로 재배치(우측 정렬, 좁은 창에서도 왼쪽 버튼과 겹치지 않음) | **완료** |
+| 08_05 | Versioning — 버전 `0.1.0`→`0.1.1` patch bump, `Directory.Build.props`를 단일 기준으로 확정, `scripts/publish-release.ps1`이 버전을 자동으로 읽고 실제 빌드 버전과 검증하도록 수정 | **완료** |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure
@@ -499,7 +511,7 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
   환경(Windows Sandbox/별도 VM)에서의 실기 검증은 수행하지 못했다** — 개발 머신에는 이미 .NET
   SDK가 있어서다. 배포 EXE는 code-signing되지 않았다 — 첫 실행 시 Windows SmartScreen 경고가 뜰
   수 있다(`docs/dist-readme.txt` 참고).
-- **(Phase 8)** Snapshot(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`)은 v0.1.0에서 자동 삭제
+- **(Phase 8)** Snapshot(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`)은 v0.1.1에서도 자동 삭제
   정책을 넣지 않았다 — 완료된 Snapshot도 계속 쌓인다(사용자가 직접 정리해야 한다). 자동 cleanup은
   v1.1 이후 후보로 남겨 뒀다.
 
