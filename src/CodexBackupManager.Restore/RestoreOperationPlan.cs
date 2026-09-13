@@ -56,10 +56,22 @@ public sealed record PlannedRolloutAppend(
 /// 일치하는 로컬 프로젝트를 찾았을 때만 그 프로젝트의 ID(<c>threads.project_id</c>에 그대로 쓴다).
 /// 못 찾았으면 <c>null</c>(기타 대화로 Import).
 /// </param>
+/// <param name="ResolvedTargetCwd">
+/// Phase 07_02 요구사항 4 — 공식 소스 조사로 확인한 사실: <c>threads.cwd</c>는 단순 표시용이
+/// 아니다. Codex CLI가 이 thread를 다시 열 때(<c>resume_config.rs</c>) 이 값을 실제 작업 디렉터리
+/// 후보로 쓸 수 있다(설정에 따라 그대로 채택되거나, 선택 프롬프트의 기본값으로 제시된다 — 존재
+/// 여부를 확인하지 않는다). 그래서 원본 PC의 경로를 그대로 두면 대상 PC에 없는 폴더가 resume 시
+/// 기본값으로 뜰 수 있다. <see cref="ResolvedProjectId"/>가 있을 때만(=이 대화의 프로젝트 경로가
+/// 실제로 대상 PC의 로컬 프로젝트로 해석됐을 때만) 그 프로젝트의 대상 PC 경로로 값을 채운다 —
+/// 해석 불가(기타 대화)면 <c>null</c>이고, 이때는 원본 <c>Source.OriginalCwd</c>를 그대로 쓴다(더
+/// 나은 값이 없다 — 알려진 한계로 남는다). <b>rollout JSONL 내부의 <c>session_meta.cwd</c>는
+/// 절대 건드리지 않는다</b> — 이 필드는 SQLite `threads.cwd`에만 쓰인다.
+/// </param>
 public sealed record PlannedThreadInsert(
     BackupConversationMetadata Source,
     string ResolvedRolloutPathAbsolute,
-    string? ResolvedProjectId);
+    string? ResolvedProjectId,
+    string? ResolvedTargetCwd = null);
 
 /// <summary>
 /// IncomingAhead로 새 segment가 생겨 <c>threads.rollout_path</c>가 바뀌어야 하는 기존 thread의

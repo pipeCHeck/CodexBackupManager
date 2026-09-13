@@ -12,6 +12,18 @@ public enum RestoreFaultInjectionPoint
     /// <summary>rollout append 연산 직후.</summary>
     AfterRolloutAppend,
 
+    /// <summary>
+    /// append용 temp 파일(원본 복사본 + incoming delta)을 쓰는 도중(Phase 07_02 요구사항 6). 이
+    /// 지점에서 실패해도 원본 rollout 파일은 전혀 건드리지 않은 상태여야 한다.
+    /// </summary>
+    DuringAppendTempWrite,
+
+    /// <summary>temp 검증까지 끝나고 atomic move로 원본을 교체하기 직전(Phase 07_02 요구사항 6).</summary>
+    BeforeAtomicReplace,
+
+    /// <summary>atomic move로 원본을 교체한 직후(Phase 07_02 요구사항 6).</summary>
+    AfterAtomicReplace,
+
     /// <summary>SQLite 트랜잭션을 열기 직전.</summary>
     BeforeSqliteTransaction,
 

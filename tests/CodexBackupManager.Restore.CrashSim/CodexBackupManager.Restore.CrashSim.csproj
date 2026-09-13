@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Phase 07_02 요구사항 7 — 실제 프로세스 강제 종료를 재현하는 전용 헬퍼. RestoreExecutorTests가
+    이 exe를 별도 자식 프로세스로 띄운 뒤, 지정된 fault-injection 지점에 도달하면(sentinel 파일로
+    신호) 부모 프로세스가 실제로 Kill()한다 — .NET 예외를 던지는 방식(catch/Rollback이 정상
+    동작함)과 달리, 이 방식은 RestoreExecutor의 catch 블록 자체가 전혀 실행되지 않는 진짜
+    "죽었다"는 상태를 만든다. 테스트 전용이며 제품에는 포함되지 않는다(publish 대상 아님).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>CodexBackupManager.Restore.CrashSim</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CodexBackupManager.Domain\CodexBackupManager.Domain.csproj" />
+    <ProjectReference Include="..\..\src\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj" />
+    <ProjectReference Include="..\..\src\CodexBackupManager.Backup\CodexBackupManager.Backup.csproj" />
+    <ProjectReference Include="..\..\src\CodexBackupManager.Restore\CodexBackupManager.Restore.csproj" />
+  </ItemGroup>
+
+</Project>

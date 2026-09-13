@@ -4,15 +4,20 @@
 스펙이다. Phase 6/06_01/06_02/06_03(`docs/import-preview-phase6.md`, FROZEN)이 "무엇을 할지"를
 결정했다면, 이 문서는 "그것을 어떻게 안전하게 실제로 쓰는가"를 다룬다.
 
-> **상태: Phase 7 완료 + Phase 07_01(Restore Hardening / Apply UI / Real-Clone E2E) 완료.**
-> `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전이 증명되는 경우만 Fast-forward,
-> `LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단까지 실제로 구현하고 검증했다(§9,
-> §10). Diverged 자동 merge/backup으로 교체/복사본 가져오기, `.codex-global-state.json` write, 새
-> 로컬 프로젝트 자동 생성, attachment 실제 파일 복원 같은 고위험/미확정 기능은 여전히 구현하지
-> 않았다(§2/§9.2/§10). Phase 07_01에서 GitHub 코드 리뷰로 발견된 실제 안전성/정합성 문제(§10.1)를
-> 전부 고쳤고, Apply 버튼을 포함한 UI를 연결했으며(§10.5), 실제 사용자 `.codex`를 clone한 데이터로
-> New Import 계열 시나리오를 검증했다(§10.4) — 단 IncomingAhead 계열은 여전히 합성 데이터로만
-> 검증했다(§10.4/§10.6 한계 참고).
+> **상태: Phase 7 + Phase 07_01 + Phase 07_02(Release Safety Gate / Full-Clone E2E / Crash
+> Recovery) 완료.** `New`→Import, `Identical`→NoOp, `IncomingAhead`→안전이 증명되는 경우만
+> Fast-forward, `LocalAhead`→Skip, `Diverged`/`Unverifiable`→Apply 전체 차단까지 실제로 구현하고
+> 검증했다(§9, §10, §11). Diverged 자동 merge/backup으로 교체/복사본 가져오기,
+> `.codex-global-state.json` write, 새 로컬 프로젝트 자동 생성, attachment 실제 파일 복원 같은
+> 고위험/미확정 기능은 여전히 구현하지 않았다(§2/§9.2/§10/§11.7). Phase 07_01에서 GitHub 코드
+> 리뷰로 발견된 실제 안전성/정합성 문제(§10.1)를 전부 고쳤고, Apply 버튼을 포함한 UI를
+> 연결했다(§10.5). **Phase 07_02**는 배포 전 마지막 안전성 게이트다 — rollout append를 항상
+> temp+atomic replace로만 하도록 바꿔 crash-safety를 확보했고, Rollback의 post-check가 실제 target
+> 파일을 다시 열지 않도록 고쳤으며(WAL/`-shm` 재오염 방지), durable transaction journal +
+> incomplete-apply 복구를 추가했고, New Import의 `threads.cwd`를 대상 PC 경로로 remap하도록
+> 바꿨다(공식 소스 조사 근거, §11.4). 그리고 **실제 `.codex`를 clone한 진짜 rollout 파일로
+> IncomingAhead(fast-forward) E2E를 처음으로 성공시켰다**(§11.2) — 이전까지는 합성 데이터로만
+> 검증했었다.
 
 ---
 
@@ -533,3 +538,195 @@ Codex Home에서만 동작한다 — §10.4의 clone 하네스만 실제 `.codex
 `session_index.jsonl=050C3D8505735E6CD08BDB1650DE733B6A30B55EE4F5E75F9BEB4D99CC82993E`,
 `.codex-global-state.json=707D63DFDC779E6A2324FDD602F71997CA14CC4583A7CFFCCADE3681DABA7C50`,
 `config.toml=A081B92A5F4F099692B1AA6EA5154CA88A9E135644F1ACC0913CF2A9E8A6A10E`).
+
+---
+
+## 11. Phase 07_02 — Release Safety Gate / Full-Clone E2E / Crash Recovery
+
+실제 다른 사용자에게 EXE를 배포하기 전 마지막 Restore 안전성 검증 단계. Phase 7/07_01의 아키텍처는
+그대로 두고, GitHub 코드 리뷰/재검토로 나온 안전성 문제만 고쳤다. 이번 Phase가 PASS하면
+Phase 8(self-contained EXE + Release QA)로 넘어간다.
+
+### 11.1 In-place append → temp + atomic replace(요구사항 6)
+
+기존 `RolloutRestoreService.AppendToFile`은 기존 rollout 파일에 `Seek(end)+CopyTo`로 **직접**
+append했다. 정상 예외라면 Snapshot Rollback이 처리하지만, 프로세스 강제 종료/정전 중에는
+catch/Rollback 자체가 실행되지 않아 원본이 반쯤 쓰인 상태로 남을 위험이 있었다.
+
+고친 방식: (1) 원본을 같은 디렉터리의 temp로 streaming copy(전체 메모리 로드 없음) (2) incoming
+delta를 그 temp 뒤에 이어붙임 (3) temp 전체 길이/해시 검증 (4) `Flush(flushToDisk: true)`로 디스크에
+내림 (5) `File.Move(..., overwrite: true)`로 원본을 atomic 교체(Windows에서 같은 볼륨 내 이동은
+원자적이다). 이 과정에 새 fault-injection 지점 3개(`DuringAppendTempWrite`/`BeforeAtomicReplace`/
+`AfterAtomicReplace`)를 추가해 각 지점에서 강제 실패해도 원본이 안전한지(temp 작성 중/replace
+직전) 또는 Rollback으로 정확히 복구되는지(replace 직후)를 각각 전용 테스트로 확인했다(RED→GREEN).
+temp는 `FileMode.Create`로 열어 이전 크래시가 남긴 잔재가 있어도 재시도를 막지 않는다. 큰 파일에서도
+스트리밍임을 확인하기 위한 수십 MB급 append 테스트도 추가했다(288MB 실측 사례의 축소판).
+
+### 11.2 실제 rollout 파일 기반 IncomingAhead E2E(요구사항 2/3) — 이번 Phase의 핵심 검증
+
+Phase 07_01의 "real clone E2E"는 상태 DB 등 4개 파일만 clone하고 `sessions`/`archived_sessions`는
+비워 뒀다 — 그래서 New Import만 검증할 수 있었다. 이번에는 세션 스크래치패드 하네스(커밋되지
+않음, 세션 종료 시 삭제)로 **`sessions`/`archived_sessions`를 포함한 `.codex` 전체를 read-only로
+clone**했다.
+
+절차:
+1. 실제 `state_5.sqlite`(read-only)에서 안전한 후보 thread를 골랐다 — `thread_source='user'`,
+   비archived, `.jsonl`(비압축), 6줄 이상, **다른 thread의 `history_base` 조상으로 참조되지 않음**을
+   전부 만족하는 것만(대화 원문/제목/경로는 어떤 로그/보고서에도 남기지 않았다 — thread id만 내부
+   진행 로그에 출력).
+2. 실제 `.codex` 전체(`state_5.sqlite`(+`-wal`/`-shm`), `config.toml`, `session_index.jsonl`,
+   `.codex-global-state.json`, `sessions/**`, `archived_sessions/**`)를 `newerHome`으로
+   복사(read-only 원본 접근, 총 약 1.5GB)한 뒤, `newerHome`을 그대로 한 번 더 복사해 `olderHome`을
+   만들었다(로컬→로컬 복사라 원본은 이 시점부터 전혀 관여하지 않는다).
+3. `olderHome`에서만 후보 thread의 rollout 파일을 "실제 유효 record boundary"에서 정확히 잘랐다 —
+   **처음에는 `File.ReadAllLines`+`File.WriteAllLines`로 잘랐다가 `Diverged`로 잘못 판정되는 것을
+   발견했다**: `WriteAllLines`가 `Environment.NewLine`(Windows에서 `\r\n`)으로 다시 join해, 원본이
+   `\n`만 쓰던 줄바꿈 바이트 자체를 바꿔버려 "남은 부분"조차 원본과 byte-for-byte 같지 않게 만든
+   것이 원인이었다(RED). 원본 바이트를 그대로 두고 정확한 개행 바이트 위치에서만 자르도록
+   고치자(byte-precise truncation) 올바르게 `IncomingAhead`로 판정됐다(GREEN) — 이 자체가 "rollout
+   바이트를 조금이라도 바꾸면 안 된다"는 이 프로젝트의 핵심 원칙을 실제 데이터로 재확인한
+   사례다.
+4. `newerHome` 기준으로 실제 프로덕션 카탈로그(357개 대화 전체)를 빌드하고, 후보 thread **하나만**
+   `.codexbackup`으로 Export했다.
+5. `olderHome`(잘린 파일) 기준으로 `ImportPreviewBuilder.Build` → 후보 thread의 relation이 정확히
+   **`IncomingAhead`**로 판정됨을 확인했다.
+6. `olderHome`에 실제 production 진입점(`RestoreExecutor.Apply(plan, olderHome)` — internal 테스트
+   오버로드가 아니라 실제 앱이 쓰는 것과 동일한 경로, 실제 `CodexProcessGuard.SystemRunningProcessLister`
+   포함)으로 Apply했다. 결과: **`Succeeded`**(post-apply validation까지 통과). Apply 후
+   `olderHome`의 rollout 파일이 `newerHome`(=원본 온전한 내용)과 **byte-for-byte 완전히 동일**함을
+   확인했다. `olderHome`의 다른 thread 3건(무작위 표본)의 DB 행 해시도 Apply 전후 무변경.
+7. 하네스 실행 전/후 **실제 원본** `C:\Users\User\.codex`의 4개 source-of-truth 파일 SHA-256이
+   전부 동일함을 재확인했다(§11.6 최종 재확인 값과 일치).
+8. 하네스와 그 안의 clone(약 3GB, 실제 대화 내용 포함) 전체를 세션 종료 전에 삭제했다.
+
+**의도적으로 검증하지 않은 것**: segment-transition(여러 물리 segment 파일에 걸친) IncomingAhead는
+이번에도 실제 clone으로 재현하지 않았다 — 안전하게 재현할 만한 실제 다중 segment 후보를 찾는
+추가 조사가 필요해 이번 Phase 범위 밖으로 남긴다(합성 fixture로는 이미 검증됨, §9.2). 물리적으로
+안전하지 않아 Blocked돼야 하는 실제 사례도 이번에는 만나지 못했다(고른 후보가 안전한 경우였다) —
+Blocked 경로 자체는 합성 fixture로 이미 충분히 검증됐다(§9.2/`RestoreOperationPlanner`).
+
+### 11.3 Rollback post-check가 더 이상 live target을 다시 열지 않는다(요구사항 5)
+
+기존 `RollbackService`는 파일 복원 → 재검증 → **복원된 state DB를 다시 열어** `PRAGMA quick_check`를
+확인하는 순서였다. 이 프로젝트는 실제 `.codex`에서 ReadOnly SQLite 연결도 WAL index 재구성으로
+`-shm`을 다시 건드릴 수 있음을 실측했었다(Phase 07_01) — 그런데 "복구 결과를 확인하는 절차 자체가
+그 결과를 또 바꿔버릴" 위험은 그때 미처 못 고쳤다.
+
+고친 방식: 복원된 DB(+`-wal`/`-shm`, 있으면)를 **별도 임시 검증 폴더로 복사**한 뒤 그 복사본만 열어
+`quick_check`+`threads` 조회를 확인하고, 검증이 끝나면 그 임시 폴더는 지운다 — target 파일은 이
+과정에서 단 한 번도 다시 열리지 않는다. 그리고 이 확인이 끝난 뒤 target의 DB/WAL/SHM 해시/존재
+상태를 **한 번 더** 재확인한다(무언가 target에 영향을 줬다면 여기서 잡힌다).
+
+실제 WAL 있음+SHM 있음/WAL 있음+SHM 없음/둘 다 없음 3가지 fixture로 직접 테스트했다
+(`RollbackServiceShmSafetyTests`). **RED로 실제 버그를 재현**했다 — 검증 코드를 예전 방식(live
+target을 다시 여는 방식)으로 되돌리자, WAL 있음 케이스 2건 모두 실패했다(`복구 후 해시가
+snapshot과 다릅니다(state-db-shm)` 등 — 실제로 `-shm`이 변경됨을 직접 관찰했다). 고친 코드로
+되돌리자 재통과했다.
+
+### 11.4 New Import의 `threads.cwd` remap(요구사항 4) — 공식 소스 조사로 확정
+
+**조사 결과(공식 `openai/codex` `codex-rs` 소스, 실제 파일/함수 인용)**: `threads.cwd`는 단순
+표시/필터용이 아니다. `tui/src/app/resume_config.rs::resume_config_for_target()`이 이 값(정확히는
+`state/src/runtime/threads.rs`의 SQL SELECT를 거친 `ThreadMetadata.cwd`)을 thread를 다시 열 때의
+작업 디렉터리 후보로 쓴다 — `tui.resume_cwd = "session"` 설정이면 **그대로, 존재 확인 없이**
+채택되고(`resume_config.rs` L82-84), 기본 설정이면 `cwd_prompt.rs`의 선택 프롬프트가 이 값을
+기본 강조 선택지로 제시한다(`CwdPromptScreen::new`). 즉 원본 PC 경로를 그대로 두면 대상 PC에
+**존재하지 않는 폴더가 기본값으로 뜨거나 그대로 채택**될 수 있다. (반대로 turn replay 자체의
+작업 디렉터리 폴백은 `codex_thread.rs`의 `config.cwd`이지 `threads.cwd`가 아니다 — 이 부분은
+Phase 7의 기존 결론과 일치한다. 별개의 메커니즘이다.) `project_id`와의 SQL 상관관계는 찾지
+못했다(project 배정은 순수 FK, cwd 매칭과 무관).
+
+**정책**: New Import에서 `project_id`가 실제로 대상 PC의 로컬 프로젝트로 해석됐을 때만(=
+`ResolvedProjectId`가 있을 때만) `threads.cwd`도 그 프로젝트의 대상 PC 경로로 remap한다
+(`RestoreOperationPlanner`의 `resolvedTargetCwd`, `StateDatabaseWriter.InsertThread`). 해석
+불가(기타 대화)면 원본 `OriginalCwd`를 그대로 쓴다 — 더 나은 값이 없다. **rollout JSONL 내부의
+`session_meta.cwd`는 이번에도 절대 건드리지 않는다** — SQLite 컬럼에만 적용되는 정책이다(공식 조사
+결과 향후 어떤 backfill이 SQLite `cwd`를 rollout의 `session_meta.cwd`에서 다시 파생시킬 수도
+있다는 근거도 나왔다 — `state/src/extract.rs` — 그래서 이 remap이 "완벽히 영구적"이라고
+주장하지는 않는다. 그럼에도 원본 PC의, 대상 PC에 존재하지 않는 경로를 그대로 두는 것보다는
+이 remap이 안전하다). RED→GREEN으로 확인: remap 로직을 되돌리면 전용 테스트가 실패한다.
+
+### 11.5 Durable transaction journal / incomplete-apply 복구(요구사항 7/8)
+
+Snapshot만으로는 프로세스가 강제 종료됐을 때 "복원 도중 죽었다"는 사실 자체를 다음 실행이 알 방법이
+없었다. `RestoreTransactionJournal`(`Prepared`/`Applying`/`Completed`/`RolledBack`)을 Snapshot
+디렉터리 안 `restore-transaction.json`에 atomic write(temp+flush+move)로 기록한다.
+
+- Snapshot 검증 완료 → `Prepared`.
+- 첫 mutation 직전 → `Applying`(atomic write).
+- post-apply validation PASS → `Completed`(best-effort — 이 기록 자체가 실패해도 이미 끝난 성공을
+  뒤집지 않는다).
+- 정상 Rollback PASS → `RolledBack`(best-effort, 이유는 위와 대칭).
+- **`RestoreExecutor.Apply` 진입점 자신이** 시작하자마자 `IncompleteApplyRecoveryService.FindIncomplete`로
+  `Applying` 상태 snapshot이 있는지 확인하고, 있으면 새 Apply를 거부한다(`NotReady`) — UI 가드가
+  없거나 우회돼도 Core가 최종적으로 막는다.
+- `IncompleteApplyRecoveryService.Recover`는 사용자가 명시적으로 승인했을 때만(App의 [이전
+  상태로 복구] 버튼) 호출된다 — Codex 실행 중이면 거부(복구 자체를 시작하지 않는다, 강제
+  종료하지 않는다). manifest를 다시 읽어 기존 `RollbackService.Rollback`으로 byte-for-byte 복구하고
+  journal을 `RolledBack`으로 갱신한다.
+- **또한 Snapshot 이전(=아직 아무것도 안 쓴 상태) 취소가 그대로 밖으로 새어 나가 "예기치 않은
+  오류"처럼 보이던 버그를 고쳤다**(요구사항 8) — `RestoreExecutor.Apply`가 이제 이 구간 전체를
+  `OperationCanceledException` 전용으로 잡아 깨끗한 `Cancelled`를 돌려준다(Rollback 불필요 — 아직
+  아무것도 안 썼다). App의 확인 대화상자에서 취소하는 것과는 별개로, Preflight/hash 계산 도중의
+  취소가 대상이다. RED로 확인: 이 catch를 비활성화하면 `OperationCanceledException`이 그대로
+  테스트 밖으로 튀어나옴을 확인했다.
+
+**실제 프로세스 강제 종료 재현(요구사항 7 "가능하면")**: 별도 헬퍼 프로젝트
+`CodexBackupManager.Restore.CrashSim`(테스트 전용, 제품에는 포함 안 됨)을 새로 만들어, 자식
+프로세스로 production `RestoreExecutor.Apply`를 실제로 실행시키고, 지정된 fault-injection
+지점(`AfterAtomicReplace`/`AfterSqliteCommit`)에 도달하면 sentinel 파일로 신호만 남기고 블록하게
+한 뒤, 부모 테스트가 **실제로 `Process.Kill(entireProcessTree: true)`** 호출한다 — .NET 예외가
+아니라 진짜 OS 레벨 강제 종료라 `RestoreExecutor`의 catch/Rollback이 전혀 실행되지 않는다. 두
+경우 모두 다음 "실행"(`IncompleteApplyRecoveryService.FindIncomplete`+`Recover`)이 정확히
+`Applying` 상태를 찾아내 정상 복구함을 확인했다(`CrashRecoveryIntegrationTests`).
+
+### 11.6 Apply UI 정리(요구사항 9) / README 정책 문구(요구사항 10)
+
+`ApplyCommand`의 `CanExecute`를 `Plan 존재`에서 `Plan 존재 && IsApplyReady`로 강화했다 — Diverged/
+Unverifiable이 섞인 Plan은 이제 버튼 자체가 비활성화된다(Core의 최종 Preflight 차단은 그대로
+유지, 이건 1차 UI 판단일 뿐이다). 프로젝트 "폴더 선택" 버튼도 Apply 진행 중에는 비활성화되도록
+`InverseBooleanConverter`를 추가해 바인딩했다. 완료되지 못한 이전 Apply가 있으면 새 Apply를
+막고("이전 복원 작업이 완료되지 않았습니다") [이전 상태로 복구] 버튼을 제공하는 배너를 추가했다.
+
+README의 "SQLite는 Mode=ReadOnly로만 연다"는 문구는 Phase 7 이후 실제 동작과 모순됐다 — "탐색/
+Viewer/Export/Import Preview는 Read-Only, 실제 write는 Apply에서만(Codex 종료 확인 + fresh
+preflight + Snapshot 이후 제한적으로) 일어나고 실패하면 Rollback한다"로 정정했다.
+
+### 11.7 Codex Desktop 사이드바(요구사항 12) — 여전히 미검증, 시도하지 않음
+
+Core/CLI의 `threads.project_id` authority는 그대로 유지한다(변경 없음). Electron Desktop이 이 값을
+실제로 반영하는지는 여전히 확인하지 못했다. `CODEX_HOME` 환경변수는 Codex **CLI**가 인식하는
+공식 오버라이드임을 실측으로 이미 확인했지만(`docs/codex-storage-format.md`), Codex **Desktop**
+(Electron 셸)이 같은 변수를 존중하는지는 확인된 바 없다 — Electron 소스가 이 저장소에 없어 정적으로
+확인할 수 없고, 실제로 Desktop 앱을 격리된 프로필로 띄워 실측하는 것은 이번 Phase의 안전 범위(실제
+사용자 프로필/앱 상태를 건드리지 않는다) 밖이라고 판단해 시도하지 않았다. 추측으로
+`.codex-global-state.json`을 수정하지 않는다는 원칙도 그대로 유지한다. **Release 시점의 알려진
+한계로 남긴다** — 확실한 격리 방법이 공식적으로 확인되면 향후 Phase에서 재검토한다.
+
+### 11.8 Phase 07_02 최종 테스트 수 / 실제 원본 무변경
+
+`Domain 64 + Codex 200 + Backup 88 + Restore 47 + App 96 = 495건 전부 통과`, `dotnet build`
+(Debug/Release 둘 다) 경고/오류 0. 새로 생긴 테스트: `RollbackServiceShmSafetyTests`(3),
+`CrashRecoveryIntegrationTests`(2, 실제 자식 프로세스 강제 종료 포함), atomic append fault
+injection 3건 + 대형 파일 스트리밍 1건 + durable journal/incomplete-apply 6건 + cwd remap 2건
+(전부 `RestoreExecutorTests.cs`에 추가). 세션 스크래치패드의 IncomingAhead 하네스(§11.2, 커밋 안
+됨)까지 포함해 이번 Phase 전체에서 **실제 원본 `C:\Users\User\.codex`에는 단 한 번도 쓰지
+않았다** — 작업 전/중/후 반복 확인한 4개 source-of-truth 파일 SHA-256이 세션 전체에서 완전히
+동일했다(`state_5.sqlite=57C75D6B58045E4DDB3EFD5B5696C120E653661A850C6BD4A7B5FAD4474908D6`,
+`session_index.jsonl=050C3D8505735E6CD08BDB1650DE733B6A30B55EE4F5E75F9BEB4D99CC82993E`,
+`.codex-global-state.json=707D63DFDC779E6A2324FDD602F71997CA14CC4583A7CFFCCADE3681DABA7C50`,
+`config.toml=A081B92A5F4F099692B1AA6EA5154CA88A9E135644F1ACC0913CF2A9E8A6A10E`).
+
+### 11.9 알려진 한계(Phase 07_02 시점 최종, 정직하게 남김)
+
+- Desktop 사이드바 프로젝트 그룹핑 반영 여부(§11.7) — 미검증, 방법 없음.
+- segment-transition IncomingAhead의 실제 clone 재현(§11.2) — 미검증, 합성 fixture로만 확인.
+- 물리적으로 불안전해 Blocked돼야 하는 실제 사례(§11.2) — 이번 clone에서 만나지 못함, 합성
+  fixture로만 확인.
+- `threads.cwd` remap(§11.4)은 SQLite 값만 바꾼다 — rollout JSONL의 `session_meta.cwd`는 원본
+  그대로이며, 향후 Codex 자체의 어떤 backfill 동작이 SQLite `cwd`를 다시 덮어쓸 가능성은 공식
+  소스상 배제되지 않는다(빈도/조건 모두 불명).
+- 다중 신규 segment(2개 이상)를 한 번에 만드는 복합 케이스 — Phase 7부터 이어지는 미검증 항목,
+  이번에도 추가 검증 없음.
+- `local_image`/새 프로젝트 자동 생성/`Diverged` 자동 merge/`.jsonl.zst` Update는 여전히 전부
+  미지원(Unsupported).

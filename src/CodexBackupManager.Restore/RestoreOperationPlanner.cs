@@ -236,7 +236,13 @@ public static class RestoreOperationPlanner
         }
 
         string? resolvedProjectId = ResolveLocalProjectId(conversation.TargetProjectPath, freshLocalCatalog);
-        threadInserts.Add(new PlannedThreadInsert(metadata, leafTargetPath, resolvedProjectId));
+
+        // 요구사항 4(Phase 07_02) — project_id가 실제로 해석됐을 때만(=대상 PC에 실존하는 프로젝트
+        // 폴더일 때만) cwd도 그 경로로 remap한다. 해석 불가(기타 대화)면 원본 cwd를 그대로 둔다 —
+        // 더 나은 값이 없고, rollout JSONL은 어차피 절대 건드리지 않는다.
+        string? resolvedTargetCwd = resolvedProjectId is not null ? conversation.TargetProjectPath : null;
+
+        threadInserts.Add(new PlannedThreadInsert(metadata, leafTargetPath, resolvedProjectId, resolvedTargetCwd));
     }
 
     private static void PlanFastForward(

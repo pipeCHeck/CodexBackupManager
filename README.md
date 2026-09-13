@@ -17,8 +17,12 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 
 > 사용자의 기존 Codex 데이터를 **절대 잃지 않으면서** 프로젝트와 대화를 안전하게 이동시킨다.
 
-- 조회 기능은 전부 **Read-Only**. Codex Home 아래에 어떤 파일도 만들거나 바꾸거나 지우지 않는다.
-- SQLite는 `Mode=ReadOnly` + `Pooling=False`로만 연다. `INSERT`/`UPDATE`/`DELETE`/`CREATE`/쓰기 PRAGMA 없음.
+- **탐색/Viewer/Export/Import Preview는 전부 Read-Only.** 이 경로에서는 Codex Home 아래 어떤 파일도
+  만들거나 바꾸거나 지우지 않고, SQLite도 `Mode=ReadOnly` + `Pooling=False`로만 연다.
+- **실제 write는 [적용] 버튼(Apply, Phase 7/07_01/07_02)에서만, 그것도 제한적으로 일어난다** — Codex가
+  완전히 종료되어 있는지 확인하고, 그 순간 다시 fresh preflight를 통과한 뒤, 반드시 복구용 Snapshot을
+  먼저 만들고 나서야 rollout 파일/`threads` 테이블에 쓴다. 실패하면 Snapshot으로 자동 Rollback한다
+  (상세: [`docs/safe-restore-phase7.md`](./docs/safe-restore-phase7.md)).
 - 프로그램 설정과 로그는 `%APPDATA%\CodexBackupManager\`에만 둔다.
 - 확인되지 않은 값을 추측해서 채우지 않는다. 모르면 "확인 불가"로 표시한다.
 
@@ -424,6 +428,7 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 06_01~06_03 | Revision Relation Hardening / Apply Preconditions Freeze / Preview Source Identity Pinning | **완료** |
 | 7 | Restore Core — Snapshot → Apply(New/IncomingAhead fast-forward만) → 검증 → Rollback | **완료** |
 | 07_01 | Restore Hardening + Apply UI — 안전성/정합성 하드닝, Apply 버튼, 실제 `.codex` clone E2E | **완료** |
+| 07_02 | Release Safety Gate — atomic append, crash recovery journal, WAL/SHM-safe rollback, cwd remap, 실제 rollout IncomingAhead clone E2E | **완료** |
 | 8 | Release / self-contained EXE / final QA | 예정 |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에

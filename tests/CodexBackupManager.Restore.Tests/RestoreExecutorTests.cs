@@ -33,12 +33,17 @@ public sealed class RestoreExecutorTests : IDisposable
     private readonly string _pcADir;
     private readonly string _pcBHome;
     private readonly string _outDir;
+    private readonly string _snapshotRoot;
 
     public RestoreExecutorTests()
     {
         _pcADir = Path.Combine(_root, "pcA-rollouts");
         _pcBHome = Path.Combine(_root, "pcB-home");
         _outDir = Path.Combine(_root, "out");
+        // Phase 07_02 — snapshotRoot를 명시적으로 넘기지 않으면 RestoreExecutor는 실제
+        // %LOCALAPPDATA%\CodexBackupManager\Snapshots\를 쓴다. journal/manifest 파일을 직접 열어
+        // 검사해야 하는 새 recovery 테스트는 이 테스트 전용 temp 폴더를 명시적으로 넘긴다.
+        _snapshotRoot = Path.Combine(_root, "snapshots");
         Directory.CreateDirectory(_pcADir);
         Directory.CreateDirectory(_outDir);
         TestCodexHomeBuilder.CreateEmpty(_pcBHome);
@@ -173,7 +178,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.New);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
         Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -181,6 +186,80 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(rolloutPath);
         Assert.True(File.Exists((string)rolloutPath!));
         Assert.Equal(File.ReadAllText(aFile), File.ReadAllText((string)rolloutPath!));
+    }
+
+    // ── Phase 07_02 요구사항 4 — New Import은 project_id가 실제로 해석됐을 때만 cwd도 대상 PC
+    //    경로로 remap한다(공식 codex-rs 소스 조사 결과 threads.cwd는 단순 표시용이 아니라 resume 시
+    //    실제 작업 디렉터리 후보로 쓰일 수 있음을 확인했다). rollout JSONL 내부 cwd는 절대 건드리지
+    //    않는다 — 이 테스트는 SQLite 컬럼만 확인한다.
+
+    [Fact]
+    public void New_Import은_프로젝트_경로가_해석되면_target_PC_경로로_cwd를_remap한다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+
+        // PC A: 프로젝트 "proj-1"이 C:\Old\Project에 연결돼 있다.
+        ConversationEntry sourceEntry = MakeEntry(threadId, projectId: "proj-1");
+        var pcA = new CodexCatalog(
+            [new ProjectEntry("proj-1", "Old Project", [@"C:\Old\Project"], [sourceEntry])],
+            [sourceEntry],
+            new Dictionary<string, ThreadChain> { [threadId] = Chain(threadId, [Ref(threadId, null, aFile, ts)]) },
+            [], DateTimeOffset.UtcNow, new CodexCatalogStats(1, 1, 1, TimeSpan.Zero, TimeSpan.Zero));
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "cwd-remap.codexbackup");
+
+        // PC B: 같은 프로젝트가 이미 다른 실제 경로(overrideFolder)에 연결돼 있다 — 자동 연결은 안
+        // 되지만(경로가 다르다), 사용자가 수동으로 재지정하면 그 경로로 project_id가 해석된다.
+        string overrideFolder = Path.Combine(_root, $"remapped-project-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(overrideFolder);
+        var pcBBefore = new CodexCatalog(
+            [new ProjectEntry("local-proj", "Local Project", [overrideFolder], [])],
+            [], new Dictionary<string, ThreadChain>(),
+            [], DateTimeOffset.UtcNow, new CodexCatalogStats(0, 0, 1, TimeSpan.Zero, TimeSpan.Zero));
+
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        Assert.True(preview.Success, string.Join(";", preview.ValidationErrors));
+
+        ImportPreview overridden = ImportPreviewBuilder.ApplyManualProjectPathOverride(preview, "proj-1", overrideFolder);
+        ImportPlan? plan = ImportPlanBuilder.Build(overridden, backupPath);
+        Assert.NotNull(plan);
+        Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.TargetProjectPath == overrideFolder);
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+        object? writtenCwd = TestCodexHomeBuilder.ReadThreadColumn(_pcBHome, threadId, "cwd");
+        Assert.Equal(overrideFolder, writtenCwd);
+
+        // rollout 파일 원문의 session_meta.cwd는 여전히 원본(PC A) 값 그대로다 — 절대 건드리지 않는다.
+        object? rolloutPath = TestCodexHomeBuilder.ReadThreadColumn(_pcBHome, threadId, "rollout_path");
+        Assert.Contains(@"C:\\Fixture\\Proj", File.ReadAllText((string)rolloutPath!));
+    }
+
+    [Fact]
+    public void New_Import은_프로젝트를_해석할_수_없으면_원본_cwd를_그대로_보존한다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "cwd-unresolved.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        Assert.True(preview.Success);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+        // MakeEntry(threadId)는 projectId=null(기타 대화)이라 TargetProjectPath가 애초에 없다 —
+        // project_id를 해석할 수 없는 경우를 그대로 재현한다.
+        Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.TargetProjectPath is null);
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+        object? writtenCwd = TestCodexHomeBuilder.ReadThreadColumn(_pcBHome, threadId, "cwd");
+        Assert.Equal(@"C:\Fixture\Proj", writtenCwd);
     }
 
     // ── 2) Identical → NoOp, write 0 ─────────────────────────────────────────
@@ -207,7 +286,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.Identical);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.Equal(RestoreOutcome.NothingToDo, result.Outcome);
         Dictionary<string, string> after = SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome), bPath);
@@ -233,7 +312,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Dictionary<string, string> before = SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome));
 
         RestoreResult result = RestoreExecutor.Apply(
-            plan, _pcBHome, () => [new RunningProcessInfo("Codex", null)], _ => pcBBefore);
+            plan, _pcBHome, () => [new RunningProcessInfo("Codex", null)], _ => pcBBefore, _snapshotRoot);
 
         Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -260,7 +339,7 @@ public sealed class RestoreExecutorTests : IDisposable
         bytes[bytes.Length / 2] ^= 0xFF;
         File.WriteAllBytes(backupPath, bytes);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
         Assert.Equal(ImportPlanPreflightStatus.BackupChanged, result.PreflightStatus);
@@ -289,7 +368,148 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.IncomingAhead);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+        Assert.Equal(File.ReadAllText(aFile), File.ReadAllText(bPath));
+    }
+
+    // ── Phase 07_02 요구사항 6 — append는 기존 파일에 직접 쓰지 않고 temp+atomic replace로만
+    //    바뀐다. 아래 3개 지점(DuringAppendTempWrite/BeforeAtomicReplace/AfterAtomicReplace) 각각에서
+    //    강제 실패해도 "원본 rollout이 반쯤 쓰인 상태"가 되지 않아야 한다 — temp 작성 중/replace
+    //    직전에 실패하면 원본은 애초에 전혀 안 건드렸어야 하고(Rollback과 무관하게 이미 안전),
+    //    replace 직후에 실패하면 Snapshot 기반 Rollback이 원본을 원래 상태로 정확히 복원해야 한다.
+
+    [Fact]
+    public void Append_temp_작성_중_강제_실패해도_원본_rollout은_그대로다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"), Line(2, "world"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "append-temp-crash.codexbackup");
+
+        string localContent = SessionMetaLine(threadId, ts) + "\n" + Line(1, "hello") + "\n";
+        string bPath = TestCodexHomeBuilder.WriteRolloutFile(_pcBHome, Path.GetFileName(aFile), localContent, archived: false, ts);
+        TestCodexHomeBuilder.InsertExistingThread(_pcBHome, threadId, bPath, @"C:\Fixture\Proj");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        string originalContent = File.ReadAllText(bPath);
+        string tempPath = bPath + ".cbm-restore-tmp";
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.DuringAppendTempWrite));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Equal(originalContent, File.ReadAllText(bPath));
+        Assert.False(File.Exists(tempPath), "temp 작업 파일이 정리되지 않고 남아 있습니다.");
+    }
+
+    [Fact]
+    public void Append_atomic_replace_직전_강제_실패해도_원본_rollout은_그대로다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"), Line(2, "world"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "append-before-replace-crash.codexbackup");
+
+        string localContent = SessionMetaLine(threadId, ts) + "\n" + Line(1, "hello") + "\n";
+        string bPath = TestCodexHomeBuilder.WriteRolloutFile(_pcBHome, Path.GetFileName(aFile), localContent, archived: false, ts);
+        TestCodexHomeBuilder.InsertExistingThread(_pcBHome, threadId, bPath, @"C:\Fixture\Proj");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        string originalContent = File.ReadAllText(bPath);
+        string tempPath = bPath + ".cbm-restore-tmp";
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.BeforeAtomicReplace));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Equal(originalContent, File.ReadAllText(bPath));
+        Assert.False(File.Exists(tempPath), "temp 작업 파일이 정리되지 않고 남아 있습니다.");
+    }
+
+    [Fact]
+    public void Append_atomic_replace_직후_강제_실패하면_Snapshot_Rollback으로_원본_rollout이_복원된다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"), Line(2, "world"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "append-after-replace-crash.codexbackup");
+
+        string localContent = SessionMetaLine(threadId, ts) + "\n" + Line(1, "hello") + "\n";
+        string bPath = TestCodexHomeBuilder.WriteRolloutFile(_pcBHome, Path.GetFileName(aFile), localContent, archived: false, ts);
+        TestCodexHomeBuilder.InsertExistingThread(_pcBHome, threadId, bPath, @"C:\Fixture\Proj");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        string originalContent = File.ReadAllText(bPath);
+        string tempPath = bPath + ".cbm-restore-tmp";
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterAtomicReplace));
+
+        // 이 지점에서는 replace 자체는 이미 끝났다(원본이 incoming 내용으로 바뀐 뒤) — Snapshot 기반
+        // Rollback이 그 결과를 되돌려 원본(append 이전) 내용으로 정확히 복원해야 한다.
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Equal(originalContent, File.ReadAllText(bPath));
+        Assert.False(File.Exists(tempPath), "temp 작업 파일이 정리되지 않고 남아 있습니다.");
+    }
+
+    /// <summary>
+    /// Phase 07_02 요구사항 6 — 큰 rollout 파일(수십 MB급)에서도 append가 전체 파일을 메모리에 올리지
+    /// 않고 스트리밍으로 처리되는지 확인한다(288MB 실측 사례의 축소판 — 테스트 실행 시간을 고려해
+    /// 수십 MB로 줄였다. `CopyTo`가 내부적으로 고정 크기 버퍼만 쓰는 스트리밍 복사이므로, 파일
+    /// 크기와 무관하게 정확성은 동일하다).
+    /// </summary>
+    [Fact]
+    public void 대형_rollout_파일도_append가_스트리밍으로_정확하게_처리된다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+
+        // 로컬(=이미 있는 부분)에 큰 첫 줄 여러 개를 채워 파일을 수십 MB급으로 키운다.
+        string bigLine = new string('x', 200_000);
+        var localLines = new List<string>();
+        for (int i = 0; i < 150; i++)
+        {
+            localLines.Add(Line(i + 1, bigLine));
+        }
+
+        string[] incomingExtraLines = [.. localLines, Line(151, "final incoming line")];
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, incomingExtraLines);
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "append-large-file.codexbackup");
+
+        string localContent = SessionMetaLine(threadId, ts) + "\n" + string.Join("\n", localLines) + "\n";
+        string bPath = TestCodexHomeBuilder.WriteRolloutFile(_pcBHome, Path.GetFileName(aFile), localContent, archived: false, ts);
+        TestCodexHomeBuilder.InsertExistingThread(_pcBHome, threadId, bPath, @"C:\Fixture\Proj");
+        Assert.True(new FileInfo(bPath).Length > 20_000_000, "테스트 전제(로컬 파일이 충분히 커야 함)가 깨졌습니다.");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        Assert.True(preview.Success);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+        Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.IncomingAhead);
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
         Assert.Equal(File.ReadAllText(aFile), File.ReadAllText(bPath));
@@ -321,7 +541,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.IncomingAhead);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
         string expectedNewSegmentPath = Path.Combine(
@@ -382,7 +602,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         Dictionary<string, string> before = SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome), bZstFile);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.True(result.Outcome == RestoreOutcome.NotReady, $"{result.Outcome}: {result.Message}");
         Assert.Equal(before, SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome), bZstFile));
@@ -417,7 +637,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         Dictionary<string, string> before = SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome), bPath);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBAtApply);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBAtApply, _snapshotRoot);
 
         // Preflight가 이미 LocalStateChanged로 잡거나(파일이 바뀌었으므로), 혹시 통과하더라도
         // OperationPlanner가 물리 안전성 재확인에서 거부해야 한다 — 어느 경로든 write는 0건이어야 한다.
@@ -462,7 +682,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         Dictionary<string, string> before = SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome), parentPath, childPath);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
         Assert.Equal(before, SnapshotHashes(TestCodexHomeBuilder.FindStateDbPath(_pcBHome), parentPath, childPath));
@@ -490,7 +710,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.BeforeSqliteTransaction));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.BeforeSqliteTransaction));
 
         Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -517,7 +737,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSqliteCommit));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSqliteCommit));
 
         Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -541,7 +761,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterFirstRolloutCreate));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterFirstRolloutCreate));
 
         Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -568,7 +788,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan1);
         Assert.Contains(plan1!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.New);
 
-        RestoreResult result1 = RestoreExecutor.Apply(plan1, _pcBHome, CodexNotRunning, _ => pcBEmpty);
+        RestoreResult result1 = RestoreExecutor.Apply(plan1, _pcBHome, CodexNotRunning, _ => pcBEmpty, _snapshotRoot);
         Assert.True(result1.Outcome == RestoreOutcome.Succeeded, $"{result1.Outcome}: {result1.Message}");
         Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
 
@@ -584,7 +804,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan2);
         Assert.Contains(plan2!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.IncomingAhead);
 
-        RestoreResult result2 = RestoreExecutor.Apply(plan2, _pcBHome, CodexNotRunning, _ => pcBAfterNew);
+        RestoreResult result2 = RestoreExecutor.Apply(plan2, _pcBHome, CodexNotRunning, _ => pcBAfterNew, _snapshotRoot);
         Assert.True(result2.Outcome == RestoreOutcome.Succeeded, $"{result2.Outcome}: {result2.Message}");
 
         object? rolloutPathAfterUpdate = TestCodexHomeBuilder.ReadThreadColumn(_pcBHome, threadId, "rollout_path");
@@ -600,7 +820,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         ImportPlan? plan3 = ImportPlanBuilder.Build(preview3, backup2);
         Assert.NotNull(plan3);
-        RestoreResult result3 = RestoreExecutor.Apply(plan3, _pcBHome, CodexNotRunning, _ => pcBAfterUpdate);
+        RestoreResult result3 = RestoreExecutor.Apply(plan3, _pcBHome, CodexNotRunning, _ => pcBAfterUpdate, _snapshotRoot);
         Assert.Equal(RestoreOutcome.NothingToDo, result3.Outcome);
 
         // ThreadId는 시종일관 동일하게 유지됐다 — 삭제 후 재생성 방식이 아니다.
@@ -650,7 +870,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new CancellingFaultInjectionHook(RestoreFaultInjectionPoint.AfterFirstRolloutCreate, cts),
+            snapshotRoot: _snapshotRoot, faultInjection: new CancellingFaultInjectionHook(RestoreFaultInjectionPoint.AfterFirstRolloutCreate, cts),
             cancellationToken: cts.Token);
 
         // Phase 07_01 요구사항 13 — 사용자 취소는 실제 오류(RolledBack)와 구분된 Cancelled로 보고한다.
@@ -682,7 +902,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.True(plan!.HasUnresolvedDivergence);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
         Assert.Equal(ImportPlanPreflightStatus.UnresolvedDivergence, result.PreflightStatus);
@@ -730,7 +950,7 @@ public sealed class RestoreExecutorTests : IDisposable
             }
         });
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, faultInjection: tamperHook);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, snapshotRoot: _snapshotRoot, faultInjection: tamperHook);
 
         Assert.True(tamperAttempted);
         Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
@@ -765,7 +985,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSqliteCommit));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSqliteCommit));
 
         Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
         // WAL 모드로 연 SQLite가 만들었을 수 있는 -wal/-shm이 원래(둘 다 없던) 상태로 되돌아가야 한다.
@@ -818,7 +1038,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.IncomingAhead);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
         string expectedNewSegmentPath = Path.Combine(
@@ -872,7 +1092,7 @@ public sealed class RestoreExecutorTests : IDisposable
         Assert.NotNull(plan);
         Assert.Contains(plan!.Conversations, c => c.ThreadId == threadId && c.Relation == RevisionRelation.IncomingAhead);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
         Assert.Equal(1_770_005_000L, (long)TestCodexHomeBuilder.ReadThreadColumn(_pcBHome, threadId, "updated_at")!);
@@ -914,7 +1134,7 @@ public sealed class RestoreExecutorTests : IDisposable
         ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
         Assert.NotNull(plan);
 
-        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore);
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
 
         Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -943,7 +1163,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterRolloutAppend));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterRolloutAppend));
 
         Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
         Assert.Equal(localContent, File.ReadAllText(bPath));
@@ -965,7 +1185,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.BeforePostValidation));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.BeforePostValidation));
 
         Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -988,7 +1208,7 @@ public sealed class RestoreExecutorTests : IDisposable
 
         RestoreResult result = RestoreExecutor.Apply(
             plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
-            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSnapshot));
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSnapshot));
 
         // 아직 mutation을 하나도 하지 않았지만(Snapshot은 읽기만 한다), 이 지점 이후의 예외는
         // 일관되게 Rollback 경로를 타 RolledBack으로 보고한다(빈 Rollback이라도 수행).
@@ -1018,5 +1238,173 @@ public sealed class RestoreExecutorTests : IDisposable
                 action();
             }
         }
+    }
+
+    // ── Phase 07_02 요구사항 7/8 — durable transaction journal / incomplete-apply 복구 ────────
+
+    [Fact]
+    public void Snapshot_생성_이전에_취소하면_write_0건이고_Snapshot도_생성되지_않는다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "cancel-before-snapshot.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel(); // Apply를 부르기도 전에 이미 취소된 상태 — preflight 단계에서 곧바로 감지돼야 한다.
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, cancellationToken: cts.Token);
+
+        // 요구사항 8 — Snapshot 이전 취소는 예기치 않은 예외가 아니라 명확한 Cancelled다.
+        Assert.Equal(RestoreOutcome.Cancelled, result.Outcome);
+        Assert.Null(result.SnapshotId);
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        Assert.False(Directory.Exists(_snapshotRoot) && Directory.EnumerateDirectories(_snapshotRoot).Any(), "Snapshot이 만들어지면 안 됩니다 — 아직 mutation 전이었습니다.");
+    }
+
+    [Fact]
+    public void Apply가_성공하면_journal이_Completed_상태로_남는다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "journal-completed.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, snapshotRoot: _snapshotRoot);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+        Assert.NotNull(result.SnapshotId);
+        string snapshotDir = Path.Combine(_snapshotRoot, result.SnapshotId!);
+        RestoreTransactionJournal? journal = RestoreTransactionJournalStore.TryRead(snapshotDir);
+        Assert.NotNull(journal);
+        Assert.Equal(RestoreTransactionState.Completed, journal!.State);
+        Assert.Empty(IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot));
+    }
+
+    [Fact]
+    public void Apply가_실패해_Rollback되면_journal이_RolledBack_상태로_남는다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "journal-rolledback.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot,
+            faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterSqliteCommit));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.NotNull(result.SnapshotId);
+        string snapshotDir = Path.Combine(_snapshotRoot, result.SnapshotId!);
+        RestoreTransactionJournal? journal = RestoreTransactionJournalStore.TryRead(snapshotDir);
+        Assert.NotNull(journal);
+        Assert.Equal(RestoreTransactionState.RolledBack, journal!.State);
+        Assert.Empty(IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot));
+    }
+
+    [Fact]
+    public void Applying_상태로_남은_Snapshot이_있으면_새_Apply를_production_진입점_자체가_거부한다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "blocked-by-incomplete.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        // 이전에 죽은 Apply가 남긴 것과 같은 모양의 snapshot 디렉터리를 직접 만든다 — journal만
+        // Applying이면 충분하다(FindIncomplete는 journal만 본다).
+        string staleSnapshotDir = Path.Combine(_snapshotRoot, "stale-snapshot");
+        Directory.CreateDirectory(staleSnapshotDir);
+        RestoreTransactionJournalStore.Write(
+            staleSnapshotDir, new RestoreTransactionJournal("stale-snapshot", _pcBHome, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, snapshotRoot: _snapshotRoot);
+
+        Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
+        Assert.Contains("이전 복원 작업", result.Message);
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void IncompleteApplyRecoveryService_Recover가_Codex_실행_중이면_거부한다()
+    {
+        (string snapshotDir, _) = CreateStuckApplyingSnapshot();
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(
+            snapshotDir, processLister: () => [new RunningProcessInfo("Codex", null)]);
+
+        Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
+        // 복구를 거부했으니 journal은 여전히 Applying이어야 한다 — 상태를 함부로 바꾸지 않는다.
+        RestoreTransactionJournal? journal = RestoreTransactionJournalStore.TryRead(snapshotDir);
+        Assert.Equal(RestoreTransactionState.Applying, journal!.State);
+    }
+
+    [Fact]
+    public void IncompleteApplyRecoveryService_Recover가_정상적으로_이전_상태로_복구하고_journal을_RolledBack으로_갱신한다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+
+        // "죽기 직전"까지의 mutation을 시뮬레이션한다 — 이미 thread 행이 하나 추가된 상태.
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, CodexNotRunning);
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        RestoreTransactionJournal? journal = RestoreTransactionJournalStore.TryRead(snapshotDir);
+        Assert.Equal(RestoreTransactionState.RolledBack, journal!.State);
+        Assert.Empty(IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot));
+    }
+
+    /// <summary>
+    /// state DB를 snapshot한 뒤(=원래 비어 있던 상태), 실제로 thread 하나를 INSERT해서 "mutation을
+    /// 시작했지만 아직 끝내지 못하고 죽은" 상태를 직접 재현한다 — <see cref="RestoreExecutor.Apply"/>를
+    /// 거치지 않는다(그건 항상 catch/Rollback을 스스로 수행하므로, 이 "그 사이에 죽었다" 상태는
+    /// 정상적인 예외 경로로는 만들 수 없다 — 진짜 프로세스 kill 시뮬레이션은 별도 크래시 하네스로
+    /// 검증한다).
+    /// </summary>
+    private (string SnapshotDirectory, string ThreadId) CreateStuckApplyingSnapshot()
+    {
+        string stateDbPath = TestCodexHomeBuilder.FindStateDbPath(_pcBHome);
+        SnapshotCreateResult snapshot = SnapshotService.Create(
+            _snapshotRoot, _pcBHome, "deadbeef", [("state-db", stateDbPath)]);
+        Assert.True(snapshot.Success, snapshot.FailureReason);
+
+        RestoreTransactionJournalStore.Write(
+            snapshot.SnapshotDirectory!,
+            new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, _pcBHome, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        string threadId = NewId();
+        string rolloutPath = TestCodexHomeBuilder.WriteRolloutFile(
+            _pcBHome, $"rollout-{threadId}.jsonl", "{}", archived: false, DateTimeOffset.UtcNow);
+        TestCodexHomeBuilder.InsertExistingThread(_pcBHome, threadId, rolloutPath, @"C:\Fixture\Proj");
+
+        return (snapshot.SnapshotDirectory!, threadId);
     }
 }

@@ -112,46 +112,99 @@ public static class RestoreExecutor
 
         onStatusChanged("안전성 확인 중");
 
+        // 요구사항 7(Phase 07_02) — 이전 Apply가 완료되지 못하고 중단된 채(Applying) 남아 있으면
+        // 새 Apply를 아예 시작하지 않는다. UI뿐 아니라 이 진입점 자체가 최종 판단자다 — UI 가드가
+        // 없거나 우회돼도 여기서 막힌다. 사용자가 명시적으로 승인해야만
+        // (<see cref="IncompleteApplyRecoveryService.Recover"/>) 그 이전 Snapshot으로 복구할 수 있다.
+        IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(snapshotRoot);
+        if (incomplete.Count > 0)
+        {
+            return new RestoreResult(
+                RestoreOutcome.NotReady,
+                "이전 복원 작업이 완료되지 않았습니다. 먼저 이전 상태로 복구해야 합니다.",
+                null, incomplete[0].Journal.SnapshotId);
+        }
+
         if (CodexProcessGuard.Check(processLister).IsRunning)
         {
             return new RestoreResult(RestoreOutcome.NotReady, CodexRunningMessage, null, null);
         }
 
-        CodexCatalog freshLocalCatalog = catalogBuilder(codexHomePath);
-
-        ImportPlanPreflightValidator.Result preflight = ImportPlanPreflightValidator.Validate(plan, freshLocalCatalog, cancellationToken);
-        if (!preflight.IsReady)
+        // 요구사항 8(Phase 07_02) — Snapshot 이전(=아직 아무것도 안 쓴 상태) 취소는 여기서 그냥
+        // "취소했다"로 끝난다. Rollback이 필요 없다(건드린 게 없다) — 그리고 이 예외가 그대로
+        // 바깥(App ViewModel)까지 새어 나가 "예기치 않은 오류"처럼 보이는 일도 없어야 한다.
+        PinnedBackupSource? pinnedBackup = null;
+        RestoreOperationPlan opPlan;
+        SnapshotCreateResult snapshot;
+        bool proceedingToMutation = false;
+        try
         {
-            return new RestoreResult(RestoreOutcome.NotReady, MessageForPreflightStatus(preflight.Status), preflight.Status, null);
+            CodexCatalog freshLocalCatalog = catalogBuilder(codexHomePath);
+
+            ImportPlanPreflightValidator.Result preflight = ImportPlanPreflightValidator.Validate(plan, freshLocalCatalog, cancellationToken);
+            if (!preflight.IsReady)
+            {
+                return new RestoreResult(RestoreOutcome.NotReady, MessageForPreflightStatus(preflight.Status), preflight.Status, null);
+            }
+
+            pinnedBackup = PinnedBackupSource.Open(plan.Backup.BackupFilePath, cancellationToken);
+            if (!pinnedBackup.MatchesExpected(plan.Backup))
+            {
+                return new RestoreResult(RestoreOutcome.NotReady, MessageForPreflightStatus(ImportPlanPreflightStatus.BackupChanged), ImportPlanPreflightStatus.BackupChanged, null);
+            }
+
+            RestoreOperationPlanResult planResult = RestoreOperationPlanner.Build(plan, freshLocalCatalog, codexHomePath, pinnedBackup, cancellationToken);
+            if (!planResult.Success)
+            {
+                return new RestoreResult(
+                    RestoreOutcome.NotReady,
+                    $"안전하게 적용할 수 없는 항목이 있어 적용을 시작하지 않았습니다: {string.Join("; ", planResult.RejectionReasons)}",
+                    null, null);
+            }
+
+            opPlan = planResult.Plan!;
+            if (opPlan.IsEmpty)
+            {
+                return new RestoreResult(RestoreOutcome.NothingToDo, "적용할 변경 사항이 없습니다(모두 이미 최신 상태입니다).", null, null);
+            }
+
+            onStatusChanged("Snapshot 생성 중");
+            IReadOnlyList<(string Label, string AbsolutePath)> snapshotTargets = ComputeSnapshotTargets(codexHomePath, opPlan);
+            snapshot = SnapshotService.Create(snapshotRoot, codexHomePath, plan.Backup.BackupFileSha256, snapshotTargets);
+            if (!snapshot.Success)
+            {
+                return new RestoreResult(RestoreOutcome.NotReady, $"복구용 Snapshot을 만들지 못해 적용을 시작하지 않았습니다: {snapshot.FailureReason}", null, null);
+            }
+
+            // Snapshot까지 성공했다 — 이 지점부터는 pinnedBackup을 ExecuteMutations이 끝날 때까지
+            // 계속 열어 둬야 한다(아래 finally가 조기 반환 경로에서만 정리하게 한다).
+            proceedingToMutation = true;
+        }
+        catch (OperationCanceledException)
+        {
+            return new RestoreResult(RestoreOutcome.Cancelled, "적용을 취소했습니다.", null, null);
+        }
+        finally
+        {
+            if (!proceedingToMutation)
+            {
+                pinnedBackup?.Dispose();
+            }
         }
 
-        using PinnedBackupSource pinnedBackup = PinnedBackupSource.Open(plan.Backup.BackupFilePath, cancellationToken);
-        if (!pinnedBackup.MatchesExpected(plan.Backup))
+        try
         {
-            return new RestoreResult(RestoreOutcome.NotReady, MessageForPreflightStatus(ImportPlanPreflightStatus.BackupChanged), ImportPlanPreflightStatus.BackupChanged, null);
+            // 요구사항 7 — Snapshot 검증까지 끝났다(아직 mutation 전) → Prepared를 기록한다. 이
+            // 기록 자체가 실패하면(디스크 오류 등) mutation을 시작하지 않고 그대로 중단한다 —
+            // 아직 아무것도 안 썼으므로 Rollback 없이 안전하게 끝낼 수 있다.
+            RestoreTransactionJournalStore.Write(
+                snapshot.SnapshotDirectory!,
+                new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Prepared, DateTimeOffset.UtcNow));
         }
-
-        RestoreOperationPlanResult planResult = RestoreOperationPlanner.Build(plan, freshLocalCatalog, codexHomePath, pinnedBackup, cancellationToken);
-        if (!planResult.Success)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new RestoreResult(
-                RestoreOutcome.NotReady,
-                $"안전하게 적용할 수 없는 항목이 있어 적용을 시작하지 않았습니다: {string.Join("; ", planResult.RejectionReasons)}",
-                null, null);
-        }
-
-        RestoreOperationPlan opPlan = planResult.Plan!;
-        if (opPlan.IsEmpty)
-        {
-            return new RestoreResult(RestoreOutcome.NothingToDo, "적용할 변경 사항이 없습니다(모두 이미 최신 상태입니다).", null, null);
-        }
-
-        onStatusChanged("Snapshot 생성 중");
-        IReadOnlyList<(string Label, string AbsolutePath)> snapshotTargets = ComputeSnapshotTargets(codexHomePath, opPlan);
-        SnapshotCreateResult snapshot = SnapshotService.Create(snapshotRoot, codexHomePath, plan.Backup.BackupFileSha256, snapshotTargets);
-        if (!snapshot.Success)
-        {
-            return new RestoreResult(RestoreOutcome.NotReady, $"복구용 Snapshot을 만들지 못해 적용을 시작하지 않았습니다: {snapshot.FailureReason}", null, null);
+            pinnedBackup.Dispose();
+            return new RestoreResult(RestoreOutcome.NotReady, $"복원 진행 기록을 만들지 못해 적용을 시작하지 않았습니다: {ex.GetType().Name}", null, snapshot.Manifest!.SnapshotId);
         }
 
         // 요구사항 12 — AfterSnapshot 지점은 아직 mutation 전이지만, 여기서 강제 예외가 나도
@@ -171,6 +224,13 @@ public static class RestoreExecutor
                 return new RestoreResult(RestoreOutcome.NotReady, CodexRunningMessage, null, snapshot.Manifest!.SnapshotId);
             }
 
+            // 요구사항 7 — 첫 mutation 직전에 Applying을 기록한다. 재시작 후에도 이 상태로 남아
+            // 있으면 "이전 Apply가 완료되지 못했다"는 뜻이다(이 메서드 시작 부분의 incomplete
+            // 검사가 다음 Apply 시도를 막는다).
+            RestoreTransactionJournalStore.Write(
+                snapshot.SnapshotDirectory!,
+                new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
             onStatusChanged("적용 중");
             ExecuteMutations(codexHomePath, opPlan, pinnedBackup, faultInjection, cancellationToken);
 
@@ -183,6 +243,7 @@ public static class RestoreExecutor
                 throw new InvalidOperationException(validation.FailureReason ?? "post-apply validation 실패");
             }
 
+            TryWriteJournalBestEffort(snapshot.SnapshotDirectory!, snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Completed);
             return new RestoreResult(RestoreOutcome.Succeeded, "적용이 완료됐습니다.", null, snapshot.Manifest!.SnapshotId);
         }
         catch (Exception ex)
@@ -201,9 +262,33 @@ public static class RestoreExecutor
                     null, snapshot.Manifest!.SnapshotId);
             }
 
+            TryWriteJournalBestEffort(snapshot.SnapshotDirectory!, snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.RolledBack);
+
             return wasCancelled
                 ? new RestoreResult(RestoreOutcome.Cancelled, "적용을 취소하여 이전 상태로 복원했습니다.", null, snapshot.Manifest!.SnapshotId)
                 : new RestoreResult(RestoreOutcome.RolledBack, "적용 중 오류가 발생해 이전 상태로 복원했습니다.", null, snapshot.Manifest!.SnapshotId);
+        }
+        finally
+        {
+            pinnedBackup.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// journal 기록 자체의 실패는 이미 끝난 Apply/Rollback의 성패에 영향을 주지 않는다(이미 실제
+    /// 파일/DB 결과는 확정됐다) — 그래서 여기서는 예외를 삼킨다. 최악의 경우 journal이 실제보다
+    /// 오래된 상태(Applying)로 남아, 다음 실행이 "복구가 필요하다"고 잘못 판단할 수 있지만, 이는
+    /// 사용자가 확인 후 안전하게 넘어갈 수 있는 보수적인 오탐이다 — 반대로 실패를 삼키지 않고 이미
+    /// 끝난 결과를 뒤집는 것보다 훨씬 안전하다.
+    /// </summary>
+    private static void TryWriteJournalBestEffort(string snapshotDirectory, string snapshotId, string codexHomePath, RestoreTransactionState state)
+    {
+        try
+        {
+            RestoreTransactionJournalStore.Write(snapshotDirectory, new RestoreTransactionJournal(snapshotId, codexHomePath, state, DateTimeOffset.UtcNow));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -243,7 +328,7 @@ public static class RestoreExecutor
         foreach (PlannedRolloutAppend append in opPlan.RolloutAppends)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RolloutRestoreService.AppendToFile(reader, append);
+            RolloutRestoreService.AppendToFile(reader, append, faultInjection);
             faultInjection.Check(RestoreFaultInjectionPoint.AfterRolloutAppend);
             cancellationToken.ThrowIfCancellationRequested();
         }

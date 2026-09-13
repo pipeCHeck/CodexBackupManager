@@ -83,7 +83,12 @@ public static class StateDatabaseWriter
         Required("updated_at", m.UpdatedAtSeconds);
         Required("source", m.Source);
         Required("model_provider", m.ModelProvider);
-        Required("cwd", m.OriginalCwd);
+        // 요구사항 4(Phase 07_02) — 대상 PC의 실제 프로젝트 경로로 해석됐으면(project_id도 함께
+        // 채워졌다는 뜻) 그 경로를 쓴다. 해석 못 했으면(기타 대화) 원본 cwd 그대로 — 공식 소스
+        // 조사 결과 threads.cwd는 단순 표시용이 아니라 resume 시 실제 작업 디렉터리 후보로 쓰일 수
+        // 있어(존재 여부 확인 없이), 원본 PC 경로를 그대로 두면 대상 PC에 없는 폴더가 제시될 수
+        // 있다(docs/safe-restore-phase7.md §1.D).
+        Required("cwd", insert.ResolvedTargetCwd ?? m.OriginalCwd);
         Required("title", m.Title);
         Required("sandbox_policy", m.SandboxPolicyRaw);
         Required("approval_mode", m.ApprovalMode);

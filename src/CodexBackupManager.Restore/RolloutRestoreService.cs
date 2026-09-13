@@ -45,30 +45,82 @@ public static class RolloutRestoreService
         File.Move(tempPath, planned.TargetAbsolutePath, overwrite: false);
     }
 
-    /// <summary>기존 파일 끝에 backup entry의 뒷부분을 이어붙인다(plain jsonl fast-forward만).</summary>
-    public static void AppendToFile(BackupReader reader, PlannedRolloutAppend planned)
+    /// <summary>
+    /// 기존 파일 끝에 backup entry의 뒷부분을 이어붙인다(plain jsonl fast-forward만).
+    /// </summary>
+    /// <remarks>
+    /// <b>기존 파일에 직접 Seek+CopyTo로 append하지 않는다(Phase 07_02 요구사항 6).</b> 정상 예외라면
+    /// <see cref="RestoreExecutor"/>의 Snapshot 기반 Rollback이 처리하지만, 프로세스 강제 종료/정전
+    /// 중에는 그 catch/Rollback 자체가 실행되지 않아 원본 rollout이 반쯤 쓰인 상태로 남을 위험이
+    /// 있다. 대신 같은 디렉터리의 temp 파일에 (1) 원본을 streaming copy (2) incoming delta를 이어
+    /// 붙이고 (3) 전체 길이/해시를 검증하고 (4) <c>Flush(true)</c>로 디스크에 내린 뒤, (5) atomic
+    /// move로 원본을 교체한다 — temp 작성 중 크래시가 나도 원본은 전혀 건드리지 않았으므로 안전하다.
+    /// </remarks>
+    public static void AppendToFile(BackupReader reader, PlannedRolloutAppend planned, IRestoreFaultInjectionHook? faultInjection = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(planned);
+        faultInjection ??= NoOpRestoreFaultInjectionHook.Instance;
 
-        (long beforeLength, string beforeSha256) = HashFile(planned.TargetAbsolutePath);
+        string targetPath = planned.TargetAbsolutePath;
+        string tempPath = targetPath + ".cbm-restore-tmp";
+
+        (long beforeLength, string beforeSha256) = HashFile(targetPath);
         if (beforeLength != planned.ExpectedBeforeLength ||
             !string.Equals(beforeSha256, planned.ExpectedBeforeSha256Hex, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"append 직전 재확인 실패 — 파일이 예상과 다릅니다(thread={Redact(planned.ThreadId)}).");
         }
 
-        using (Stream source = reader.OpenEntry(planned.AppendSourceEntryPath)
-            ?? throw new InvalidDataException($"backup entry를 열 수 없습니다: {planned.ThreadId}"))
+        try
         {
-            SkipBytes(source, planned.AppendSourceSkipBytes);
+            using (FileStream original = new(targetPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            // FileMode.Create(덮어쓰기 허용): 이전 시도가 크래시로 temp를 남겼을 수 있는데, 그 잔재
+            // 때문에 재시도 자체가 막히면 안 된다 — temp는 순전히 작업용이라 남아 있어도 버려도 되는
+            // 내용이다.
+            using (FileStream temp = new(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                original.CopyTo(temp);
 
-            using FileStream dest = new(planned.TargetAbsolutePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            dest.Seek(0, SeekOrigin.End);
-            source.CopyTo(dest);
+                faultInjection.Check(RestoreFaultInjectionPoint.DuringAppendTempWrite);
+
+                using Stream source = reader.OpenEntry(planned.AppendSourceEntryPath)
+                    ?? throw new InvalidDataException($"backup entry를 열 수 없습니다: {planned.ThreadId}");
+                SkipBytes(source, planned.AppendSourceSkipBytes);
+                source.CopyTo(temp);
+
+                temp.Flush(flushToDisk: true);
+            }
+
+            (long tempLength, string tempSha256) = HashFile(tempPath);
+            if (tempLength != planned.ExpectedAfterLength ||
+                !string.Equals(tempSha256, planned.ExpectedAfterSha256Hex, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"append 결과 검증 실패 — temp 파일이 예상과 다릅니다(thread={Redact(planned.ThreadId)}).");
+            }
+
+            faultInjection.Check(RestoreFaultInjectionPoint.BeforeAtomicReplace);
+            File.Move(tempPath, targetPath, overwrite: true);
+            faultInjection.Check(RestoreFaultInjectionPoint.AfterAtomicReplace);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
         }
 
-        (long afterLength, string afterSha256) = HashFile(planned.TargetAbsolutePath);
+        (long afterLength, string afterSha256) = HashFile(targetPath);
         if (afterLength != planned.ExpectedAfterLength ||
             !string.Equals(afterSha256, planned.ExpectedAfterSha256Hex, StringComparison.Ordinal))
         {

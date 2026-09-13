@@ -6,6 +6,7 @@ using CodexBackupManager.App.Services;
 using CodexBackupManager.App.Tests.TestSupport;
 using CodexBackupManager.App.ViewModels;
 using CodexBackupManager.Codex;
+using CodexBackupManager.Restore;
 using Xunit;
 
 namespace CodexBackupManager.App.Tests.ViewModels;
@@ -73,7 +74,8 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         Func<string, string?>? exportFilePicker = null,
         Func<string?>? importFilePicker = null,
         Func<string?>? projectPathPicker = null,
-        Func<string, string, bool>? confirmDialog = null)
+        Func<string, string, bool>? confirmDialog = null,
+        Func<string>? snapshotRootProvider = null)
         => new(
             new CodexDetectionService(),
             new SettingsStore(Path.Combine(_testDir!, $"settings-{Guid.NewGuid():N}.json")),
@@ -82,7 +84,8 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
             exportFilePicker: exportFilePicker,
             importFilePicker: importFilePicker,
             projectPathPicker: projectPathPicker,
-            confirmDialog: confirmDialog);
+            confirmDialog: confirmDialog,
+            snapshotRootProvider: snapshotRootProvider ?? (() => Path.Combine(_testDir!, "snapshots")));
 
     /// <summary>
     /// 같은 fixture를 복사한 source/target Codex Home 사이에서 Export → Import Preview까지 실행해
@@ -207,5 +210,77 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
     public void KnownLimitationsText는_항상_비어있지_않다()
     {
         Assert.False(string.IsNullOrWhiteSpace(MainViewModel.KnownLimitationsText));
+    }
+
+    [Fact]
+    public async Task 완료되지_못한_이전_Apply가_있으면_ApplyCommand가_비활성화된다()
+    {
+        // Phase 07_02 요구사항 7 — RestoreExecutor.Apply 자신도 같은 조건으로 새 Apply를 거부하지만,
+        // UI도 미리 알아채고 버튼을 눌러도 소용없게 막아야 한다.
+        MainViewModel importer = await BuildImporterWithFrozenPlanAsync();
+        Assert.True(importer.ApplyCommand.CanExecute(null));
+
+        string snapshotRoot = Path.Combine(_testDir!, "snapshots");
+        string staleSnapshotDir = Path.Combine(snapshotRoot, "stale");
+        Directory.CreateDirectory(staleSnapshotDir);
+        RestoreTransactionJournalStore.Write(
+            staleSnapshotDir, new RestoreTransactionJournal("stale", _targetHome!, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        // 다시 탐지하면(Codex Home이 갱신될 때마다 확인한다) 이제 완료되지 못한 Apply를 찾아야 한다.
+        importer.RefreshCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsBusy, "탐지");
+
+        Assert.True(importer.HasIncompleteApply);
+        Assert.False(importer.ApplyCommand.CanExecute(null));
+        Assert.True(importer.RecoverIncompleteApplyCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task 이전_상태로_복구를_승인하면_완료되지_못한_Apply가_해소된다()
+    {
+        _testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testDir);
+        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+
+        string snapshotRoot = Path.Combine(_testDir, "snapshots");
+        string staleSnapshotDir = Path.Combine(snapshotRoot, "stale");
+        Directory.CreateDirectory(staleSnapshotDir);
+
+        // 실제로 존재하는 파일 하나를 snapshot 대상으로 등록해야 Recover가 (아무리 사소해도) 실제
+        // Rollback 절차를 완주할 수 있다 — 존재하지 않는 파일은 Rollback이 아예 할 일이 없다.
+        string dummyTarget = Path.Combine(_testDir, "dummy.txt");
+        File.WriteAllText(dummyTarget, "original");
+        SnapshotCreateResult snapshot = SnapshotService.Create(snapshotRoot, _sourceHome, "deadbeef", [("dummy", dummyTarget)]);
+        Assert.True(snapshot.Success, snapshot.FailureReason);
+        RestoreTransactionJournalStore.Write(
+            snapshot.SnapshotDirectory!,
+            new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, _sourceHome, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+        File.WriteAllText(dummyTarget, "mutated-by-interrupted-apply");
+
+        bool confirmShown = false;
+        MainViewModel viewModel = CreateViewModel(
+            _sourceHome,
+            confirmDialog: (_, _) => { confirmShown = true; return true; },
+            snapshotRootProvider: () => snapshotRoot);
+        viewModel.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsBusy, "탐지");
+
+        Assert.True(viewModel.HasIncompleteApply);
+
+        viewModel.RecoverIncompleteApplyCommand.Execute(null);
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (viewModel.HasIncompleteApply)
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException("복구가 제한 시간 안에 끝나지 않았습니다.");
+            }
+
+            await Task.Delay(10);
+        }
+
+        Assert.True(confirmShown);
+        Assert.False(viewModel.HasIncompleteApply);
+        Assert.Equal("original", File.ReadAllText(dummyTarget));
     }
 }

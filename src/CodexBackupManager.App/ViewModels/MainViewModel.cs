@@ -43,6 +43,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly Func<string?> _importFilePicker;
     private readonly Func<string?> _projectPathPicker;
     private readonly Func<string, string, bool> _confirmDialog;
+    private readonly Func<string> _snapshotRootProvider;
 
     private bool _isBusy;
     private bool _isConnected;
@@ -102,6 +103,13 @@ public sealed class MainViewModel : ObservableObject
     private string? _applyStatusText;
     private CancellationTokenSource? _applyCancellation;
 
+    // Phase 07_02 — 완료되지 못한 이전 Apply(durable transaction journal이 Applying으로 멈춘 것)가
+    // 있으면 새 Apply를 막고 사용자가 명시적으로 승인해야만 복구한다. RestoreExecutor.Apply 자신도
+    // 같은 조건으로 새 Apply를 거부하므로(최종 판단자는 Core), 이건 UI가 미리 보여주는 안내일 뿐이다.
+    private bool _hasIncompleteApply;
+    private string? _incompleteApplySnapshotDirectory;
+    private string? _incompleteApplyStatusText;
+
     /// <summary>생성자.</summary>
     /// <param name="detection">탐지 서비스.</param>
     /// <param name="settings">설정 저장소.</param>
@@ -123,6 +131,10 @@ public sealed class MainViewModel : ObservableObject
     /// Apply(Phase 07_01) 직전 확인 대화상자. (메시지, 제목) → 사용자가 "예"를 눌렀는지. 생략하면
     /// <see cref="Services.ConfirmDialog.Confirm"/>을 쓴다.
     /// </param>
+    /// <param name="snapshotRootProvider">
+    /// Snapshot이 저장되는 루트 디렉터리(Phase 07_02, 완료되지 못한 이전 Apply 검색에 쓴다). 생략하면
+    /// 실제 <see cref="SnapshotService.DefaultSnapshotRoot"/>를 쓴다 — 테스트에서만 temp 폴더로 바꾼다.
+    /// </param>
     public MainViewModel(
         CodexDetectionService detection,
         SettingsStore settings,
@@ -131,7 +143,8 @@ public sealed class MainViewModel : ObservableObject
         Func<string, string?>? exportFilePicker = null,
         Func<string?>? importFilePicker = null,
         Func<string?>? projectPathPicker = null,
-        Func<string, string, bool>? confirmDialog = null)
+        Func<string, string, bool>? confirmDialog = null,
+        Func<string>? snapshotRootProvider = null)
     {
         ArgumentNullException.ThrowIfNull(detection);
         ArgumentNullException.ThrowIfNull(settings);
@@ -146,6 +159,7 @@ public sealed class MainViewModel : ObservableObject
         _importFilePicker = importFilePicker ?? BackupFilePicker.PickOpenLocation;
         _projectPathPicker = projectPathPicker ?? FolderPicker.PickProjectFolder;
         _confirmDialog = confirmDialog ?? Services.ConfirmDialog.Confirm;
+        _snapshotRootProvider = snapshotRootProvider ?? SnapshotService.DefaultSnapshotRoot;
 
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
         RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy && !IsApplying);
@@ -156,8 +170,13 @@ public sealed class MainViewModel : ObservableObject
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
         ImportPreviewCommand = new RelayCommand(() => _ = ImportPreviewAsync(), () => !IsImportPreviewLoading && !IsApplying);
         CloseImportPreviewCommand = new RelayCommand(CloseImportPreview, () => !IsApplying);
-        ApplyCommand = new RelayCommand(() => _ = ApplyAsync(), () => _currentImportPlan is not null && !IsApplying);
+        // 요구사항 9(Phase 07_02) — Diverged/Unverifiable이 섞인 Plan은 버튼 자체를 비활성화한다
+        // (이전에는 Plan이 있기만 하면 눌렸다 — 실제 차단은 Core의 최종 Preflight가 하지만, 애초에
+        // 막힐 게 뻔한 Plan으로 클릭조차 못 하게 하는 편이 더 명확하다). Core의 최종 판단은 그대로
+        // 유지한다 — 이 조건은 1차 UI 판단일 뿐이다.
+        ApplyCommand = new RelayCommand(() => _ = ApplyAsync(), () => _currentImportPlan is { IsApplyReady: true } && !IsApplying && !HasIncompleteApply);
         CancelApplyCommand = new RelayCommand(CancelApply, () => IsApplying);
+        RecoverIncompleteApplyCommand = new RelayCommand(() => _ = RecoverIncompleteApplyAsync(), () => HasIncompleteApply && !IsApplying);
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -198,6 +217,13 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>진행 중인 Apply를 취소한다. Snapshot 이후라면 취소도 Rollback으로 처리된다.</summary>
     public RelayCommand CancelApplyCommand { get; }
+
+    /// <summary>
+    /// 완료되지 못하고 중단된 이전 Apply를 사용자가 명시적으로 승인해 이전 상태로 복구한다(Phase
+    /// 07_02). Codex가 실행 중이면 <see cref="IncompleteApplyRecoveryService.Recover"/> 자신이
+    /// 거부한다 — 여기서 강제 종료하지 않는다.
+    /// </summary>
+    public RelayCommand RecoverIncompleteApplyCommand { get; }
 
     /// <summary>Import Preview를 만드는 중인지.</summary>
     public bool IsImportPreviewLoading
@@ -307,6 +333,30 @@ public sealed class MainViewModel : ObservableObject
     {
         get => _applyStatusText;
         private set => SetProperty(ref _applyStatusText, value);
+    }
+
+    /// <summary>
+    /// 완료되지 못한 이전 Apply가 남아 있는지(Phase 07_02). 참이면 새 Apply를 시작할 수 없고,
+    /// <see cref="RecoverIncompleteApplyCommand"/>로 먼저 복구해야 한다.
+    /// </summary>
+    public bool HasIncompleteApply
+    {
+        get => _hasIncompleteApply;
+        private set
+        {
+            if (SetProperty(ref _hasIncompleteApply, value))
+            {
+                ApplyCommand.RaiseCanExecuteChanged();
+                RecoverIncompleteApplyCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>이전 Apply 복구 진행/결과 문구.</summary>
+    public string? IncompleteApplyStatusText
+    {
+        get => _incompleteApplyStatusText;
+        private set => SetProperty(ref _incompleteApplyStatusText, value);
     }
 
     /// <summary>탐지 결과 표. 라벨/값 쌍.</summary>
@@ -683,6 +733,7 @@ public sealed class MainViewModel : ObservableObject
         _lastHome = info.Home;
 
         IsConnected = true;
+        RefreshIncompleteApplyState();
         StatusGlyph = "●";
         StatusText = info.Validation.Status == CodexHomeStatus.Valid
             ? "Codex 연결됨"
@@ -1182,6 +1233,7 @@ public sealed class MainViewModel : ObservableObject
                 () => RestoreExecutor.Apply(
                     plan,
                     codexHomePath,
+                    snapshotRoot: _snapshotRootProvider(),
                     onStatusChanged: status => ReportApplyStatus(status, uiContext),
                     cancellationToken: cancellation.Token),
                 cancellation.Token).ConfigureAwait(true);
@@ -1238,6 +1290,70 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>진행 중인 Apply를 취소한다. Snapshot 이전이면 그냥 중단되고, 이후면 Rollback된다.</summary>
     private void CancelApply() => _applyCancellation?.Cancel();
+
+    /// <summary>
+    /// <see cref="IncompleteApplyRecoveryService.FindIncomplete"/>로 완료되지 못한 이전 Apply가
+    /// 있는지 다시 확인한다. 탐지 성공 시(=Codex Home이 정해질 때마다) 호출한다 — 여기서 아무것도
+    /// 찾지 못해도 <see cref="RestoreExecutor.Apply"/> 자신이 클릭 시점에 다시 한번 확인하므로,
+    /// 이 확인이 실패하거나(디스크 오류 등) 놓쳐도 실제 안전성에는 영향이 없다.
+    /// </summary>
+    private void RefreshIncompleteApplyState()
+    {
+        try
+        {
+            IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRootProvider());
+            if (incomplete.Count > 0)
+            {
+                _incompleteApplySnapshotDirectory = incomplete[0].SnapshotDirectory;
+                HasIncompleteApply = true;
+                IncompleteApplyStatusText = "이전 복원 작업이 완료되지 않았습니다. Codex를 완전히 종료한 뒤 [이전 상태로 복구]를 눌러주세요.";
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        _incompleteApplySnapshotDirectory = null;
+        HasIncompleteApply = false;
+        IncompleteApplyStatusText = null;
+    }
+
+    /// <summary>
+    /// 사용자가 [이전 상태로 복구]를 명시적으로 눌렀을 때만 부른다 — 사용자 모르게 자동으로
+    /// 덮어쓰지 않는다(요구사항 7).
+    /// </summary>
+    private async Task RecoverIncompleteApplyAsync()
+    {
+        if (_incompleteApplySnapshotDirectory is not { } snapshotDir)
+        {
+            return;
+        }
+
+        bool confirmed = _confirmDialog(
+            "이전에 완료되지 못한 적용 작업이 있습니다.\nCodex가 완전히 종료되어 있어야 합니다.\n이전 상태로 복구하시겠습니까?",
+            "이전 상태로 복구");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        IncompleteApplyStatusText = "복구 중…";
+
+        try
+        {
+            RestoreResult result = await Task.Run(() => IncompleteApplyRecoveryService.Recover(snapshotDir)).ConfigureAwait(true);
+            IncompleteApplyStatusText = DescribeApplyResult(result);
+            _logger.Info($"이전 Apply 복구 시도. outcome={result.Outcome}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("이전 Apply 복구 중 예기치 않은 오류", ex);
+            IncompleteApplyStatusText = $"복구 중 예기치 않은 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+
+        RefreshIncompleteApplyState();
+    }
 
     private static string DescribeApplyResult(RestoreResult result) => result.Outcome switch
     {

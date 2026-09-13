@@ -45,36 +45,44 @@ public static class RollbackService
         // 복구 후 재검증 — snapshot manifest와 정확히 일치해야 "복구 완료"다.
         foreach (SnapshotFileEntry entry in manifest.Files)
         {
-            if (entry.ExistedBefore)
+            string? mismatch = VerifyEntryMatchesSnapshot(entry);
+            if (mismatch is not null)
             {
-                if (!File.Exists(entry.OriginalAbsolutePath))
-                {
-                    return new Result(false, $"CRITICAL: 복구했어야 할 파일이 없습니다({entry.RelativeLabel}).");
-                }
-
-                (long length, string sha256) = HashFile(entry.OriginalAbsolutePath);
-                if (length != entry.ByteLength || !string.Equals(sha256, entry.Sha256Hex, StringComparison.Ordinal))
-                {
-                    return new Result(false, $"CRITICAL: 복구 후 해시가 snapshot과 다릅니다({entry.RelativeLabel}).");
-                }
-            }
-            else if (File.Exists(entry.OriginalAbsolutePath))
-            {
-                return new Result(false, $"CRITICAL: 새로 생겼던 파일이 삭제되지 않았습니다({entry.RelativeLabel}).");
+                return new Result(false, $"CRITICAL: {mismatch}");
             }
         }
 
-        // 요구사항 6 — state DB를 복구했으면(=이번 Restore가 SQL write를 했으면), 복구 후 다시
-        // read-only로 열어 기본적인 integrity/threads 상태까지 확인한다. byte-level hash가 이미
-        // snapshot과 정확히 같음을 위에서 확인했으므로 이 결과는 "복구가 됐다"의 재확인일 뿐이지만,
-        // 파일은 정확한데 어떤 이유로든 SQLite 자체가 손상된 상태로 열리는 경우까지 방어한다.
+        // 요구사항 5(Phase 07_02) — state DB를 복구했으면(=이번 Restore가 SQL write를 했으면), 복구
+        // 후 기본적인 integrity/threads 상태까지 확인한다. 단, 실제 target 파일을 다시 열어서
+        // 확인하지 않는다 — 이 프로젝트가 실제 `.codex`에서 ReadOnly SQLite 연결도 WAL index
+        // 재구성으로 `-shm`을 다시 건드릴 수 있음을 실측했다(Rollback 검증 자체가 방금 만든 rollback
+        // 결과를 또 바꿔버리면 안 된다). 그래서 target을 별도 임시 검증 폴더로 복사한 뒤 그 복사본만
+        // 열어 확인하고, 마지막에 target의 DB/WAL/SHM 해시/존재 상태를 한 번 더 재확인한다(integrity
+        // 확인이 어떤 경로로든 target에 영향을 줬다면 여기서 잡힌다).
         SnapshotFileEntry? stateDbEntry = manifest.Files.FirstOrDefault(f => f.RelativeLabel == "state-db" && f.ExistedBefore);
         if (stateDbEntry is not null)
         {
-            string? integrityError = CheckStateDbIntegrity(stateDbEntry.OriginalAbsolutePath);
+            SnapshotFileEntry? walEntry = manifest.Files.FirstOrDefault(f => f.RelativeLabel == "state-db-wal");
+            SnapshotFileEntry? shmEntry = manifest.Files.FirstOrDefault(f => f.RelativeLabel == "state-db-shm");
+
+            string? integrityError = CheckStateDbIntegrityViaDisposableCopy(stateDbEntry, walEntry, shmEntry);
             if (integrityError is not null)
             {
                 return new Result(false, $"CRITICAL: 복구 후 state DB integrity 확인 실패: {integrityError}");
+            }
+
+            foreach (SnapshotFileEntry? entry in new SnapshotFileEntry?[] { stateDbEntry, walEntry, shmEntry })
+            {
+                if (entry is null)
+                {
+                    continue;
+                }
+
+                string? mismatch = VerifyEntryMatchesSnapshot(entry);
+                if (mismatch is not null)
+                {
+                    return new Result(false, $"CRITICAL: integrity 확인 이후 target 상태가 바뀌었습니다 — {mismatch}");
+                }
             }
         }
 
@@ -82,8 +90,83 @@ public static class RollbackService
     }
 
     /// <summary>
-    /// 복구된 state DB를 read-only로 열어 <c>PRAGMA quick_check</c>와 <c>threads</c> 테이블을 실제로
-    /// 조회할 수 있는지 확인한다. 문제가 없으면 <c>null</c>.
+    /// <paramref name="entry"/>가 지금 원본 위치에서 snapshot과 정확히 일치하는지 확인한다(존재
+    /// 해야 할 파일이 없거나 해시가 다르면, 또는 없어야 할 파일이 여전히 있으면 실패 사유 문자열).
+    /// 일치하면 <c>null</c>.
+    /// </summary>
+    private static string? VerifyEntryMatchesSnapshot(SnapshotFileEntry entry)
+    {
+        if (entry.ExistedBefore)
+        {
+            if (!File.Exists(entry.OriginalAbsolutePath))
+            {
+                return $"복구했어야 할 파일이 없습니다({entry.RelativeLabel}).";
+            }
+
+            (long length, string sha256) = HashFile(entry.OriginalAbsolutePath);
+            if (length != entry.ByteLength || !string.Equals(sha256, entry.Sha256Hex, StringComparison.Ordinal))
+            {
+                return $"복구 후 해시가 snapshot과 다릅니다({entry.RelativeLabel}).";
+            }
+        }
+        else if (File.Exists(entry.OriginalAbsolutePath))
+        {
+            return $"새로 생겼던 파일이 삭제되지 않았습니다({entry.RelativeLabel}).";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// target의 DB(+있으면 WAL/SHM)를 임시 검증 폴더로 복사해 그 복사본만 열어
+    /// <c>PRAGMA quick_check</c>와 <c>threads</c> 테이블 조회를 확인한다 — target 자체는 절대 다시
+    /// 열지 않는다. 문제가 없으면 <c>null</c>.
+    /// </summary>
+    private static string? CheckStateDbIntegrityViaDisposableCopy(
+        SnapshotFileEntry dbEntry, SnapshotFileEntry? walEntry, SnapshotFileEntry? shmEntry)
+    {
+        string verifyDir = Path.Combine(Path.GetTempPath(), "CodexBackupManager-RollbackVerify", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(verifyDir);
+        try
+        {
+            string verifyDbPath = Path.Combine(verifyDir, "verify.sqlite");
+            File.Copy(dbEntry.OriginalAbsolutePath, verifyDbPath, overwrite: true);
+
+            if (walEntry is { ExistedBefore: true } && File.Exists(walEntry.OriginalAbsolutePath))
+            {
+                File.Copy(walEntry.OriginalAbsolutePath, verifyDbPath + "-wal", overwrite: true);
+            }
+
+            if (shmEntry is { ExistedBefore: true } && File.Exists(shmEntry.OriginalAbsolutePath))
+            {
+                File.Copy(shmEntry.OriginalAbsolutePath, verifyDbPath + "-shm", overwrite: true);
+            }
+
+            return CheckStateDbIntegrity(verifyDbPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"integrity 검증용 복사본 준비 실패: {ex.GetType().Name}";
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(verifyDir, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="stateDbPath"/>를 read-only로 열어 <c>PRAGMA quick_check</c>와 <c>threads</c>
+    /// 테이블을 실제로 조회할 수 있는지 확인한다. 문제가 없으면 <c>null</c>. 항상 임시 복사본
+    /// 경로로만 호출된다 — 실제 Codex Home의 파일을 직접 열지 않는다.
     /// </summary>
     private static string? CheckStateDbIntegrity(string stateDbPath)
     {

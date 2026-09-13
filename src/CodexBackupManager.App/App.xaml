@@ -1,9 +1,11 @@
 <Application x:Class="CodexBackupManager.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:CodexBackupManager.App.Converters">
   <Application.Resources>
 
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    <converters:InverseBooleanConverter x:Key="InverseBool" />
 
     <!-- ── 색상 토큰 ──────────────────────────────────────────────────────
          UI/UX 개선(다크 테마 대비 정리) 작업에서 뽑아낸 재사용 가능한 팔레트.
