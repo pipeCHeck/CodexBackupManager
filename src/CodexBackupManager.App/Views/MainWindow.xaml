@@ -491,26 +491,38 @@
     </Grid>
 
     <!-- 하단 버튼 -->
-    <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,18,0,0">
-      <Button Content="Codex 폴더 선택" Command="{Binding ChangeFolderCommand}" />
-      <Button Content="다시 확인" Command="{Binding RefreshCommand}" />
-      <!-- Phase 5 — Export. 선택 0개면 ExportCommand.CanExecute가 false라 자동으로 비활성화된다.
-           내보내는 중에는 IsExporting이 true가 되어 재실행(재클릭)도 막는다. -->
-      <Button Content="백업 내보내기" Command="{Binding ExportCommand}" Margin="18,0,8,0" />
-      <!-- Phase 05_01 — 취소 버튼. 평소엔 숨겨져 있고 Export 중에만 나타난다. 취소하면
-           BackupWriter가 CancellationToken을 보고 temp를 지우고 실패 처리한다(core가 처리 —
-           여기서는 신호만 보낸다). -->
-      <Button Content="취소" Command="{Binding CancelExportCommand}" Margin="0,0,8,0"
-              Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibility}}" />
-      <!-- Phase 6 — Import Preview. 선택 즉시 적용하지 않고 미리보기만 만든다(Codex에는 쓰지 않는다). -->
-      <Button Content="백업 불러오기" Command="{Binding ImportPreviewCommand}" Margin="0,0,8,0" />
-      <TextBlock Text="Codex 원본 데이터는 읽기 전용으로만 접근합니다."
-                 Foreground="{StaticResource Muted}" FontSize="11"
-                 VerticalAlignment="Center" Margin="10,0,0,0" />
-      <TextBlock Text="{Binding ExportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
-                 VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
-      <TextBlock Text="{Binding ImportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
-                 VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
-    </StackPanel>
+    <Grid Grid.Row="4" Margin="0,18,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <StackPanel Orientation="Horizontal">
+        <Button Content="Codex 폴더 선택" Command="{Binding ChangeFolderCommand}" />
+        <Button Content="새로고침" Command="{Binding RefreshCommand}" />
+        <!-- Phase 5 — Export. 선택 0개면 ExportCommand.CanExecute가 false라 자동으로 비활성화된다.
+             내보내는 중에는 IsExporting이 true가 되어 재실행(재클릭)도 막는다. -->
+        <Button Content="백업 내보내기" Command="{Binding ExportCommand}" Margin="18,0,8,0" />
+        <!-- Phase 05_01 — 취소 버튼. 평소엔 숨겨져 있고 Export 중에만 나타난다. 취소하면
+             BackupWriter가 CancellationToken을 보고 temp를 지우고 실패 처리한다(core가 처리 —
+             여기서는 신호만 보낸다). -->
+        <Button Content="취소" Command="{Binding CancelExportCommand}" Margin="0,0,8,0"
+                Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibility}}" />
+        <!-- Phase 6 — Import Preview. 선택 즉시 적용하지 않고 미리보기만 만든다(Codex에는 쓰지 않는다). -->
+        <Button Content="백업 불러오기" Command="{Binding ImportPreviewCommand}" Margin="0,0,8,0" />
+        <TextBlock Text="Codex 원본 데이터는 읽기 전용으로만 접근합니다."
+                   Foreground="{StaticResource Muted}" FontSize="11"
+                   VerticalAlignment="Center" Margin="10,0,0,0" />
+        <TextBlock Text="{Binding ExportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
+                   VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
+        <TextBlock Text="{Binding ImportStatusText}" Foreground="{StaticResource Muted}" FontSize="11"
+                   VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
+      </StackPanel>
+
+      <!-- footer: 앱 하단 상태 영역 오른쪽에 자연스럽게 배치된 제작자 표시. 다른 버튼/안내문을
+           가리지 않도록 별도 Grid 컬럼으로 분리했다. -->
+      <TextBlock Grid.Column="1" Text="Made by ProController · power0802m@naver.com"
+                 Foreground="{StaticResource Muted}" FontSize="10"
+                 VerticalAlignment="Center" Margin="14,0,0,0" />
+    </Grid>
   </Grid>
 </Window>
