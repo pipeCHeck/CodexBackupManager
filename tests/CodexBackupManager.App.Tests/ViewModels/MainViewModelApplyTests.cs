@@ -226,8 +226,12 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         RestoreTransactionJournalStore.Write(
             staleSnapshotDir, new RestoreTransactionJournal("stale", _targetHome!, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
 
-        // 다시 탐지하면(Codex Home이 갱신될 때마다 확인한다) 이제 완료되지 못한 Apply를 찾아야 한다.
-        importer.RefreshCommand.Execute(null);
+        // 다시 탐지하면(Codex Home이 갱신될 때마다 확인한다) 이제 완료되지 못한 Apply를 찾아야
+        // 한다. RefreshCommand(자동 탐지)가 아니라 ChangeFolderCommand를 쓴다 — Phase 07_03에서
+        // 미완료 Apply가 Home별로 scope되므로, 이 테스트 머신에 실제로 다른 .codex가 있어도(자동
+        // 탐지가 그쪽을 찾아버릴 수 있다) importer가 원래 가리키던 바로 그 _targetHome을 다시
+        // 확인해야 한다.
+        importer.ChangeFolderCommand.Execute(null);
         await WaitUntilFalse(() => importer.IsBusy, "탐지");
 
         Assert.True(importer.HasIncompleteApply);
@@ -282,5 +286,55 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         Assert.True(confirmShown);
         Assert.False(viewModel.HasIncompleteApply);
         Assert.Equal("original", File.ReadAllText(dummyTarget));
+    }
+
+    [Fact]
+    public async Task 다른_Home의_미완료_Apply는_현재_Home에_나타나지_않고_그_Home을_다시_선택하면_나타난다()
+    {
+        // Phase 07_03 요구사항 2 — 수동 Codex Home 선택을 지원하므로, 완료되지 못한 이전 Apply는
+        // 그 Apply가 실제로 겨냥했던 Home에서만 배너로 나타나야 한다.
+        _testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_testDir);
+        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        _targetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        string homeA = _sourceHome;
+        string homeB = _targetHome;
+
+        string snapshotRoot = Path.Combine(_testDir, "snapshots");
+        string staleSnapshotDir = Path.Combine(snapshotRoot, "stale-home-a");
+        Directory.CreateDirectory(staleSnapshotDir);
+        RestoreTransactionJournalStore.Write(
+            staleSnapshotDir, new RestoreTransactionJournal("stale-home-a", homeA, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        string currentFolder = homeB;
+        var viewModel = new MainViewModel(
+            new CodexDetectionService(),
+            new SettingsStore(Path.Combine(_testDir, $"settings-{Guid.NewGuid():N}.json")),
+            new FileLogger(Path.Combine(_testDir, "logs")),
+            folderPicker: () => currentFolder,
+            snapshotRootProvider: () => snapshotRoot);
+
+        // Home B를 먼저 선택한다 — Home A에 대한 미완료 Apply가 여기 나타나면 안 된다.
+        viewModel.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsBusy, "탐지");
+        Assert.False(viewModel.HasIncompleteApply);
+
+        // Home A로 바꾸면 그제야 나타나야 한다.
+        currentFolder = homeA;
+        viewModel.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsBusy, "탐지");
+        Assert.True(viewModel.HasIncompleteApply);
+
+        // 다시 Home B로 바꾸면 사라져야 한다 — Home A의 snapshot을 지우거나 건드리지 않고, 단지
+        // 지금 화면에는 보이지 않는 것뿐이다.
+        currentFolder = homeB;
+        viewModel.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsBusy, "탐지");
+        Assert.False(viewModel.HasIncompleteApply);
+
+        // Home A의 snapshot/journal 자체는 그대로 남아 있다.
+        Assert.True(Directory.Exists(staleSnapshotDir));
+        RestoreTransactionJournal? journal = RestoreTransactionJournalStore.TryRead(staleSnapshotDir);
+        Assert.Equal(RestoreTransactionState.Applying, journal!.State);
     }
 }

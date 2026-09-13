@@ -38,6 +38,22 @@ public sealed record RestoreTransactionJournal(
     RestoreTransactionState State,
     DateTimeOffset UpdatedAtUtc);
 
+/// <summary>journal 파일을 읽어본 결과의 분류(Phase 07_03 요구사항 3).</summary>
+public enum RestoreTransactionJournalReadStatus
+{
+    /// <summary>journal 파일 자체가 없다 — journal 개념이 생기기 전의 오래된 정상 Snapshot일 수 있다.</summary>
+    Missing,
+
+    /// <summary>정상적으로 읽고 파싱했다.</summary>
+    Valid,
+
+    /// <summary>파일은 있지만 읽거나 파싱할 수 없다(손상) — 상태를 알 수 없으므로 보수적으로 취급해야 한다.</summary>
+    Corrupt,
+}
+
+/// <summary>journal 읽기 결과. <see cref="Status"/>가 <see cref="RestoreTransactionJournalReadStatus.Valid"/>일 때만 <see cref="Journal"/>이 non-null이다.</summary>
+public sealed record RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus Status, RestoreTransactionJournal? Journal);
+
 /// <summary>
 /// <see cref="RestoreTransactionJournal"/>을 Snapshot 디렉터리 안에 원자적으로 읽고 쓴다(temp
 /// write + flush + atomic move — <see cref="SnapshotService"/>의 manifest.json과 같은 패턴).
@@ -68,23 +84,35 @@ public static class RestoreTransactionJournalStore
         File.Move(tempPath, path, overwrite: true);
     }
 
-    /// <summary>journal을 읽는다. 없거나 손상됐으면 <c>null</c>(존재하지 않는 것과 같이 취급한다).</summary>
-    public static RestoreTransactionJournal? TryRead(string snapshotDirectory)
+    /// <summary>
+    /// journal을 읽는다. 없거나 손상됐으면 <c>null</c> — 두 경우를 구분해야 하면(요구사항 3)
+    /// <see cref="TryReadDetailed"/>를 쓴다.
+    /// </summary>
+    public static RestoreTransactionJournal? TryRead(string snapshotDirectory) => TryReadDetailed(snapshotDirectory).Journal;
+
+    /// <summary>
+    /// journal을 읽되, "파일이 없다"와 "파일은 있는데 손상됐다"를 구분해서 돌려준다(요구사항 3 —
+    /// 손상된 journal을 마치 없는 것처럼 조용히 무시하면 위험한 상태를 놓칠 수 있다).
+    /// </summary>
+    public static RestoreTransactionJournalReadResult TryReadDetailed(string snapshotDirectory)
     {
         string path = Path.Combine(snapshotDirectory, FileName);
         if (!File.Exists(path))
         {
-            return null;
+            return new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Missing, null);
         }
 
         try
         {
             string json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<RestoreTransactionJournal>(json, JsonOptions);
+            RestoreTransactionJournal? journal = JsonSerializer.Deserialize<RestoreTransactionJournal>(json, JsonOptions);
+            return journal is null
+                ? new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Corrupt, null)
+                : new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Valid, journal);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            return null;
+            return new RestoreTransactionJournalReadResult(RestoreTransactionJournalReadStatus.Corrupt, null);
         }
     }
 }

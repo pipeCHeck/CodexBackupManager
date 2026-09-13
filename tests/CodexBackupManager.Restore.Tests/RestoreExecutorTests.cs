@@ -1407,4 +1407,229 @@ public sealed class RestoreExecutorTests : IDisposable
 
         return (snapshot.SnapshotDirectory!, threadId);
     }
+
+    // ── Phase 07_03 요구사항 1 — New rollout temp/atomic move hardening ─────────
+
+    [Fact]
+    public void New_rollout_temp_작성_중_강제_실패해도_target은_생성되지_않는다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "new-rollout-temp-fault.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.DuringNewRolloutTempWrite));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        Assert.Empty(Directory.GetFiles(Path.Combine(_pcBHome, "sessions"), "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void New_rollout_move_직전_강제_실패해도_target은_생성되지_않는다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "new-rollout-before-move-fault.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.BeforeNewRolloutMove));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        Assert.Empty(Directory.GetFiles(Path.Combine(_pcBHome, "sessions"), "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void New_rollout_move_직후_강제_실패하면_Snapshot_Rollback으로_target이_삭제된다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "new-rollout-after-move-fault.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        RestoreResult result = RestoreExecutor.Apply(
+            plan, _pcBHome, CodexNotRunning, _ => pcBBefore,
+            snapshotRoot: _snapshotRoot, faultInjection: new ThrowingFaultInjectionHook(RestoreFaultInjectionPoint.AfterNewRolloutMove));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        Assert.Empty(Directory.GetFiles(Path.Combine(_pcBHome, "sessions"), "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public void stale_New_rollout_temp가_있어도_재시도가_성공한다()
+    {
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "stale-new-rollout-temp.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        // 운영 코드와 동일한 계산으로 실제 target 경로를 알아낸 뒤, 이전 크래시가 남긴 것과 같은
+        // 모양의 stale temp를 미리 만들어 둔다.
+        using PinnedBackupSource pinned = PinnedBackupSource.Open(backupPath);
+        RestoreOperationPlanResult planResult = RestoreOperationPlanner.Build(plan!, pcBBefore, _pcBHome, pinned, CancellationToken.None);
+        Assert.True(planResult.Success, string.Join(";", planResult.RejectionReasons));
+        string targetPath = planResult.Plan!.NewRolloutFiles.Single().TargetAbsolutePath;
+
+        string staleTemp = targetPath + ".cbm-restore-tmp";
+        Directory.CreateDirectory(Path.GetDirectoryName(staleTemp)!);
+        File.WriteAllText(staleTemp, "garbage-left-by-a-previous-crash");
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, _snapshotRoot);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+        Assert.False(File.Exists(staleTemp), "temp 파일이 정리되지 않았습니다.");
+        Assert.Equal(File.ReadAllText(aFile), File.ReadAllText(targetPath));
+    }
+
+    // ── Phase 07_03 요구사항 2 — Incomplete Apply를 Codex Home별로 scope ─────────
+
+    [Fact]
+    public void FindIncompleteForHome은_다른_Home의_미완료_Apply를_돌려주지_않는다()
+    {
+        (string snapshotDir, _) = CreateStuckApplyingSnapshot();
+
+        string otherHome = Path.Combine(_root, "unrelated-home-for-scoping-test");
+        Directory.CreateDirectory(otherHome);
+
+        Assert.Empty(IncompleteApplyRecoveryService.FindIncompleteForHome(_snapshotRoot, otherHome));
+        Assert.Contains(IncompleteApplyRecoveryService.FindIncompleteForHome(_snapshotRoot, _pcBHome), i => i.SnapshotDirectory == snapshotDir);
+    }
+
+    [Fact]
+    public void 다른_Home을_겨냥한_미완료_Apply는_지금_Home의_Apply를_막지_않는다()
+    {
+        string otherHome = Path.Combine(_root, "home-a-with-stale-apply");
+        Directory.CreateDirectory(otherHome);
+        string staleSnapshotDir = Path.Combine(_snapshotRoot, "stale-other-home");
+        Directory.CreateDirectory(staleSnapshotDir);
+        RestoreTransactionJournalStore.Write(
+            staleSnapshotDir, new RestoreTransactionJournal("stale-other-home", otherHome, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, null, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, [Ref(threadId, null, aFile, ts)]);
+        string backupPath = ExportToBackup(pcA, new HashSet<string> { threadId }, "different-home-not-blocked.codexbackup");
+
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
+        ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
+        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+        Assert.NotNull(plan);
+
+        RestoreResult result = RestoreExecutor.Apply(plan, _pcBHome, CodexNotRunning, _ => pcBBefore, snapshotRoot: _snapshotRoot);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+    }
+
+    // ── Phase 07_03 요구사항 3 — Recover 자체의 journal/manifest consistency 검증 ─
+
+    [Fact]
+    public void Recover는_Completed_snapshot을_다시_되돌리지_않는다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+        RestoreTransactionJournalStore.Write(
+            snapshotDir, new RestoreTransactionJournal(Path.GetFileName(snapshotDir), _pcBHome, RestoreTransactionState.Completed, DateTimeOffset.UtcNow));
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, CodexNotRunning);
+
+        Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void Recover는_RolledBack_snapshot을_다시_되돌리지_않는다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+        RestoreTransactionJournalStore.Write(
+            snapshotDir, new RestoreTransactionJournal(Path.GetFileName(snapshotDir), _pcBHome, RestoreTransactionState.RolledBack, DateTimeOffset.UtcNow));
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, CodexNotRunning);
+
+        Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void journal과_manifest의_SnapshotId가_다르면_Recover를_거부한다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+        RestoreTransactionJournalStore.Write(
+            snapshotDir, new RestoreTransactionJournal("mismatched-snapshot-id", _pcBHome, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, CodexNotRunning);
+
+        Assert.Equal(RestoreOutcome.RollbackFailedCritical, result.Outcome);
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void journal과_manifest의_CodexHomePath가_다르면_Recover를_거부한다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+        string snapshotId = Path.GetFileName(snapshotDir);
+        RestoreTransactionJournalStore.Write(
+            snapshotDir, new RestoreTransactionJournal(snapshotId, Path.Combine(_root, "a-different-home"), RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, CodexNotRunning);
+
+        Assert.Equal(RestoreOutcome.RollbackFailedCritical, result.Outcome);
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void 호출자가_기대한_Home과_manifest의_Home이_다르면_Recover를_거부한다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(
+            snapshotDir, CodexNotRunning, expectedCodexHomePath: Path.Combine(_root, "unrelated-expected-home"));
+
+        Assert.Equal(RestoreOutcome.NotReady, result.Outcome);
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void journal_파일이_손상되어_있으면_Recover가_보수적으로_거부한다()
+    {
+        (string snapshotDir, string threadId) = CreateStuckApplyingSnapshot();
+        File.WriteAllText(Path.Combine(snapshotDir, "restore-transaction.json"), "{ this is not valid json !!");
+
+        RestoreResult result = IncompleteApplyRecoveryService.Recover(snapshotDir, CodexNotRunning);
+
+        Assert.Equal(RestoreOutcome.RollbackFailedCritical, result.Outcome);
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+
+        IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot);
+        Assert.Contains(incomplete, i => i.SnapshotDirectory == snapshotDir && i.Reason == IncompleteApplyReason.JournalUnreadable);
+    }
 }

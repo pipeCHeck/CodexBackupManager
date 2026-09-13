@@ -13,6 +13,19 @@ public enum RestoreFaultInjectionPoint
     AfterRolloutAppend,
 
     /// <summary>
+    /// 새 rollout 파일용 temp를 쓰는 도중(Phase 07_03 요구사항 1). 이 지점에서 실패해도(또는 진짜
+    /// 프로세스가 죽어도) target 파일은 아직 전혀 만들어지지 않은 상태여야 한다 — temp만 남을 수
+    /// 있고, 그 temp는 다음 시도가 안전하게 덮어쓸 수 있어야 한다.
+    /// </summary>
+    DuringNewRolloutTempWrite,
+
+    /// <summary>새 rollout temp 검증까지 끝나고 target으로 atomic move하기 직전(Phase 07_03 요구사항 1).</summary>
+    BeforeNewRolloutMove,
+
+    /// <summary>새 rollout temp를 target으로 atomic move한 직후(Phase 07_03 요구사항 1).</summary>
+    AfterNewRolloutMove,
+
+    /// <summary>
     /// append용 temp 파일(원본 복사본 + incoming delta)을 쓰는 도중(Phase 07_02 요구사항 6). 이
     /// 지점에서 실패해도 원본 rollout 파일은 전혀 건드리지 않은 상태여야 한다.
     /// </summary>

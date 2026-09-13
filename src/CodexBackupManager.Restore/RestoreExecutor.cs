@@ -110,19 +110,55 @@ public static class RestoreExecutor
         snapshotRoot ??= SnapshotService.DefaultSnapshotRoot();
         onStatusChanged ??= static _ => { };
 
+        // 요구사항 4(Phase 07_03) — 같은 Codex Home에 대한 Apply/Recovery는 프로세스가 달라도
+        // 동시에 진행되면 안 된다. 대기하지 않고 즉시 판정한다(다른 인스턴스가 이미 처리 중이면
+        // 그 사실을 곧바로 알려준다) — write는 0건이다. 이전 소유자가 죽어서 lock이 abandon된
+        // 경우도 이번 호출이 정상적으로 획득한 것으로 처리하되(바로 아래), 그 이전 시도가 남긴
+        // Applying journal은 곧이어 있는 incomplete-apply 검사가 그대로 잡아낸다.
+        RestoreProcessLock.AcquireResult lockResult = RestoreProcessLock.TryAcquire(codexHomePath, TimeSpan.Zero);
+        if (!lockResult.Acquired)
+        {
+            return new RestoreResult(
+                RestoreOutcome.NotReady,
+                "다른 Codex Backup Manager 인스턴스가 이 Codex Home을 처리 중입니다.",
+                null, null);
+        }
+
+        try
+        {
+            return ApplyLocked(plan, codexHomePath, processLister, catalogBuilder, snapshotRoot, faultInjection, onStatusChanged, cancellationToken);
+        }
+        finally
+        {
+            lockResult.Handle!.Dispose();
+        }
+    }
+
+    private static RestoreResult ApplyLocked(
+        ImportPlan plan,
+        string codexHomePath,
+        CodexProcessGuard.RunningProcessLister processLister,
+        Func<string, CodexCatalog> catalogBuilder,
+        string snapshotRoot,
+        IRestoreFaultInjectionHook faultInjection,
+        Action<string> onStatusChanged,
+        CancellationToken cancellationToken)
+    {
         onStatusChanged("안전성 확인 중");
 
         // 요구사항 7(Phase 07_02) — 이전 Apply가 완료되지 못하고 중단된 채(Applying) 남아 있으면
         // 새 Apply를 아예 시작하지 않는다. UI뿐 아니라 이 진입점 자체가 최종 판단자다 — UI 가드가
         // 없거나 우회돼도 여기서 막힌다. 사용자가 명시적으로 승인해야만
         // (<see cref="IncompleteApplyRecoveryService.Recover"/>) 그 이전 Snapshot으로 복구할 수 있다.
-        IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(snapshotRoot);
+        // 요구사항 2(Phase 07_03) — 다른 Codex Home을 겨냥했던 미완료 Apply는 지금 이 Home의 Apply를
+        // 막지 않는다(수동 Codex Home 선택을 지원하므로).
+        IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncompleteForHome(snapshotRoot, codexHomePath);
         if (incomplete.Count > 0)
         {
             return new RestoreResult(
                 RestoreOutcome.NotReady,
                 "이전 복원 작업이 완료되지 않았습니다. 먼저 이전 상태로 복구해야 합니다.",
-                null, incomplete[0].Journal.SnapshotId);
+                null, incomplete[0].SnapshotId);
         }
 
         if (CodexProcessGuard.Check(processLister).IsRunning)
@@ -316,7 +352,7 @@ public static class RestoreExecutor
         foreach (PlannedNewRolloutFile newFile in opPlan.NewRolloutFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RolloutRestoreService.CreateNewFile(reader, newFile);
+            RolloutRestoreService.CreateNewFile(reader, newFile, faultInjection);
             if (!firstRolloutDone)
             {
                 faultInjection.Check(RestoreFaultInjectionPoint.AfterFirstRolloutCreate);

@@ -18,6 +18,16 @@
 > 바꿨다(공식 소스 조사 근거, §11.4). 그리고 **실제 `.codex`를 clone한 진짜 rollout 파일로
 > IncomingAhead(fast-forward) E2E를 처음으로 성공시켰다**(§11.2) — 이전까지는 합성 데이터로만
 > 검증했었다.
+>
+> **Phase 07_03(Final Restore Edge-Case Hardening)**도 완료했다. GitHub 코드 리뷰에서 배포 전
+> 고쳐야 할 Restore edge case 3개가 발견됐다: (1) New rollout도 IncomingAhead append와 같은 수준의
+> temp/atomic move + durability를 갖추지 않아 temp 작성 중 크래시가 재시도를 막을 수 있었던 문제,
+> (2) 완료되지 못한 이전 Apply(incomplete-apply) 판정이 Codex Home을 구분하지 않아 수동으로 여러
+> Home을 오가며 쓰는 이 프로그램의 실제 사용 패턴과 맞지 않았던 문제, (3) 같은 EXE를 두 번 실행하면
+> 두 프로세스가 같은 Codex Home에 동시에 Apply할 수 있었던 문제. 셋 다 고쳤고(§12), 추가로
+> `IncompleteApplyRecoveryService.Recover` 자신도 journal/manifest 정합성을 스스로 재검증하도록
+> 강화했다(§12.3). 이제 **Restore Core는 기능을 더 바꾸지 않고 Phase 8(Release/Packaging)로
+> 넘어간다**.
 
 ---
 
@@ -730,3 +740,169 @@ injection 3건 + 대형 파일 스트리밍 1건 + durable journal/incomplete-ap
   이번에도 추가 검증 없음.
 - `local_image`/새 프로젝트 자동 생성/`Diverged` 자동 merge/`.jsonl.zst` Update는 여전히 전부
   미지원(Unsupported).
+
+## 12. Phase 07_03 — Final Restore Edge-Case Hardening
+
+Phase 07_02를 사용자가 커밋한 뒤(HEAD `b298140`), 공유 가능한 EXE로 배포하기 전 마지막 GitHub
+코드 리뷰에서 Restore edge case 3개가 발견됐다. 이 Phase는 그 3개만 고친다 — Restore Core의 기존
+동작(§9~§11)은 전부 그대로 유지한다.
+
+### 12.1 New rollout temp/atomic move + durability(요구사항 1/6)
+
+`RolloutRestoreService.CreateNewFile`은 원래 temp를 `FileMode.CreateNew`로 열고 `File.Move(overwrite:
+false)`로 target을 만들었다 — IncomingAhead append(§11.1)와 달리 durability/재시도 안전성을 갖추지
+않았다. temp 작성 중 프로세스가 강제 종료되면 target은 아직 없고 temp만 남는데, 다음 Apply
+시도가 같은 temp 경로에 `CreateNew`로 다시 쓰려다 `IOException`으로 실패할 수 있었다 — 실제
+crash recovery hole이었다.
+
+append와 동일한 패턴으로 고쳤다: temp를 `FileMode.Create`(덮어쓰기 허용)로 열어 이전 크래시의
+잔재를 안전하게 재활용하고, 쓰기 후 `Flush(flushToDisk: true)`로 디스크에 내리고, 길이/해시를
+검증한 뒤 `File.Move`로 target을 atomic하게 만들고, `finally`에서 temp를 정리한다. 새 fault
+injection 지점 3개를 추가했다: `DuringNewRolloutTempWrite`(temp 작성 도중), `BeforeNewRolloutMove`
+(검증까지 끝나고 이동 직전), `AfterNewRolloutMove`(이동 직후). `RestoreExecutor.ExecuteMutations`가
+이 3개 지점 전부를 실제로 통과하도록 `faultInjection`을 `CreateNewFile`에도 넘긴다(이전에는 append
+에만 넘겼었다).
+
+검증:
+
+- `New_rollout_temp_작성_중_강제_실패해도_target은_생성되지_않는다` / `New_rollout_move_직전_...`
+  / `New_rollout_move_직후_...` — 3개 fault injection 지점 각각에서 target이 만들어지지 않거나
+  (또는 만들어졌다면) Snapshot Rollback으로 정확히 지워지는지 확인.
+- `stale_New_rollout_temp가_있어도_재시도가_성공한다` — 운영 코드와 동일한
+  `RestoreOperationPlanner.Build`를 테스트에서 직접 호출해 실제 target 경로를 계산한 뒤, 그 자리에
+  이전 크래시가 남긴 것과 같은 모양의 garbage temp 파일을 미리 만들어 두고 Apply가 그래도
+  성공하는지 확인(RED로 먼저 확인: `FileMode.CreateNew`로 되돌리면 이 테스트가
+  `IOException`으로 실패했다).
+- `크래시_시뮬레이션_New_rollout_temp_생성_후_target_이동_전_강제_종료되면_다음_실행에서_복구되고_재시도가_성공한다`
+  (`CrashRecoveryIntegrationTests`) — **진짜 자식 프로세스**를 `BeforeNewRolloutMove`에서
+  `Process.Kill(entireProcessTree: true)`로 강제 종료한 뒤, target/thread가 전혀 생기지 않았음을
+  확인하고, `IncompleteApplyRecoveryService.Recover`로 복구한 뒤, **같은 backup으로 다시 Apply해
+  `Succeeded`까지 end-to-end로 확인했다**.
+
+### 12.2 Incomplete Apply를 Codex Home별로 scope(요구사항 2)
+
+이 프로그램은 수동 Codex Home 선택을 지원하므로, Home A에서 crash recovery가 필요한 상태로
+남아 있어도 사용자가 Home B를 선택했다면 Home B의 Apply를 막으면 안 되고, [이전 상태로 복구]
+배너도 Home B 화면에는 나타나면 안 된다 — 이전에는 `IncompleteApplyRecoveryService.FindIncomplete`가
+`snapshotRoot` 아래 모든 Snapshot을 Home 구분 없이 반환해 이 문제가 있었다.
+
+`IncompleteApplyRecoveryService.FindIncompleteForHome(snapshotRoot, codexHomePath)`를 추가했다 —
+내부적으로 기존 `FindIncomplete`(전체 Home, 진단/테스트용으로 남겨 둠)를 호출한 뒤,
+`CanonicalPath.AreSameLocation`(대소문자/`\\?\` prefix/trailing slash 차이를 정규화하는 기존
+Phase 0 타입, `docs/codex-storage-format.md` §6)으로 journal(우선) 또는 manifest(journal이 손상돼
+읽을 수 없을 때의 대체)의 `CodexHomePath`와 비교해 필터링한다. `RestoreExecutor.Apply`의 production
+진입점과 `MainViewModel.RefreshIncompleteApplyState(codexHomePath)`(생성자 파라미터로 Home을
+명시적으로 받도록 변경) 둘 다 이 scoped API로 갈아탔다.
+
+Home도 manifest도 알 수 없는 극히 드문 경우(journal이 손상되고 manifest까지 없는 경우)는 조용히
+무시하지 않고 안전 쪽으로 기울여 모든 Home에 노출한다 — 놓치는 것보다 과잉 경고가 낫다는
+원칙이다.
+
+검증: `FindIncompleteForHome은_다른_Home의_미완료_Apply를_돌려주지_않는다`,
+`다른_Home을_겨냥한_미완료_Apply는_지금_Home의_Apply를_막지_않는다`(실제
+`RestoreExecutor.Apply`가 Succeeded까지 끝나는 것으로 확인), App 레벨에서
+`다른_Home의_미완료_Apply는_현재_Home에_나타나지_않고_그_Home을_다시_선택하면_나타난다`(두 개의
+서로 다른 fixture Codex Home 사이를 오가며 배너 표시/은닉/재표시 확인, snapshot/journal 자체는
+그대로 남아 있음도 함께 확인).
+
+### 12.3 `IncompleteApplyRecoveryService.Recover` 자체의 consistency gate(요구사항 3)
+
+이전 `Recover(snapshotDirectory)`는 호출자(UI)가 올바른 Applying snapshot만 넘긴다는 것을 사실상
+신뢰했다 — journal 상태를 스스로 확인하지 않고 곧바로 `RollbackService.Rollback`을 실행했다.
+즉 이미 `Completed`되거나 `RolledBack`된 snapshot을 실수로(또는 UI 버그로)다시 넘기면 **성공적으로
+끝난 Apply 결과를 도로 되돌려 버리는** 위험이 있었다.
+
+Core 레벨에서 스스로 재검증하도록 강화했다:
+
+1. journal을 읽되 "없다"/"정상"/"손상됐다"를 구분하는
+   `RestoreTransactionJournalStore.TryReadDetailed`(새로 추가, 기존 `TryRead`는 이를 감싼
+   호환 유지용 wrapper)로 상태를 확인한다.
+2. journal이 손상됐으면(`RestoreTransactionJournalReadStatus.Corrupt`) — Applying이었는지 이미
+   끝난 뒤였는지 알 수 없으므로 "없는 것"처럼 조용히 넘어가지 않고 `RollbackFailedCritical`로
+   보수적으로 거부한다(RecoveryStateUnknown 성격 — 사용자에게 수동 확인을 안내). journal 개념이
+   아예 없던(파일 자체가 없는) 오래된 정상 Snapshot까지 전부 위험 상태로 오판하지는 않는다 —
+   `Missing`은 별도로 취급한다.
+3. journal이 있지만 `Applying`이 아니면(`Missing` 포함) — 이미 처리된 것으로 보고
+   `RestoreOutcome.NotReady`로 조용히(비-CRITICAL) 거부한다. `Completed`/`RolledBack` snapshot을
+   다시 Rollback하지 않는다.
+4. journal의 `SnapshotId`/`CodexHomePath`가 manifest와 다르면(디렉터리가 잘못 합쳐졌거나 손으로
+   편집된 경우) `RollbackFailedCritical`로 거부한다.
+5. 호출자가 `expectedCodexHomePath`를 넘겼는데 manifest의 Home과 다르면(호출자 실수로 다른
+   Home의 snapshot을 넘긴 경우) `NotReady`로 거부한다. `MainViewModel.RecoverIncompleteApplyAsync`는
+   `FindIncompleteForHome`이 찾아 둔 Home을 항상 이 값으로 넘긴다(방어적 이중 확인).
+6. 모든 검증을 통과했을 때만 실제 lock을 잡고(§12.4) Rollback을 실행한다.
+
+검증: `Recover는_Completed_snapshot을_다시_되돌리지_않는다`,
+`Recover는_RolledBack_snapshot을_다시_되돌리지_않는다`,
+`journal과_manifest의_SnapshotId가_다르면_Recover를_거부한다`,
+`journal과_manifest의_CodexHomePath가_다르면_Recover를_거부한다`,
+`호출자가_기대한_Home과_manifest의_Home이_다르면_Recover를_거부한다`,
+`journal_파일이_손상되어_있으면_Recover가_보수적으로_거부한다`(손상된 journal이
+`FindIncomplete`에서도 `IncompleteApplyReason.JournalUnreadable`로 잡히는지 함께 확인) — 전부
+"실제로 INSERT된 thread가 그대로 남아 있는지"로 되돌리지 않았음을 확인한다.
+
+### 12.4 Restore 프로세스 간(inter-process) lock(요구사항 4/5)
+
+한 앱 인스턴스 안에서는 `IsApplying`으로 막고 있었지만, 같은 EXE를 두 번 실행하면 서로 다른
+프로세스가 같은 Codex Home에 동시에 Apply할 수 있었다 — 배포 전 반드시 막아야 하는 문제였다.
+
+`RestoreProcessLock`(신규)을 추가했다 — Codex Home 경로를 `CanonicalPath`로 정규화한 뒤
+SHA-256 해시로 `Local\CodexBackupManager.Restore.<hash32>` 형태의 named Mutex 이름을 만든다.
+`RestoreExecutor.Apply`(production 진입점, 새로 분리한 내부 `ApplyLocked`가 실제 로직을 담당)와
+`IncompleteApplyRecoveryService.Recover`(정합성 검증을 모두 통과한 뒤) 둘 다 이 lock을
+`TimeSpan.Zero`(대기 없이 즉시 판정)로 시도하고, 이미 다른 프로세스가 잡고 있으면 즉시
+`"다른 Codex Backup Manager 인스턴스가 이 Codex Home을 처리 중입니다."`로 `NotReady`(write
+0건)를 돌려준다. 이전 소유자가 죽어서 lock이 `AbandonedMutexException`으로 넘어온 경우는 이번
+호출이 정상적으로 획득한 것으로 처리하되, 바로 이어지는 incomplete-apply 검사(§12.2)가 그
+이전 시도의 `Applying` journal을 그대로 잡아내 recovery를 요구한다 — lock 자체가 "이전 상태를
+안전한 것으로 착각"하게 만들지 않는다.
+
+검증:
+
+- `RestoreProcessLockTests`(4건, 단일 프로세스·다중 스레드로 named Mutex 소유권 규칙을 빠르고
+  결정적으로 검증 — 같은 Home은 한쪽만 획득, 다른 Home은 동시 획득 가능, 소유 스레드가 놓지 않고
+  끝나면 다음 획득이 Abandoned로 처리됨, 대소문자/`\\?\` prefix가 달라도 같은 lock).
+- `같은_Codex_Home에서_동시에_Apply를_시도하면_한쪽만_lock을_획득하고_다른_Home은_막히지_않는다`
+  (`CrashRecoveryIntegrationTests`) — **진짜 두 프로세스**로 검증한다. `CodexBackupManager.Restore.CrashSim`에
+  `lock-hold` 서브커맨드를 추가해 자식 프로세스가 지정된 Home의 lock을 실제로 잡고 sentinel
+  파일로 신호를 남긴 뒤, 부모가 release 신호 파일을 만들 때까지 그대로 쥐고 있게 했다. 부모
+  프로세스는 production `RestoreExecutor.Apply`로 (1) 같은 Home에 Apply를 시도해 `NotReady`임을,
+  (2) 완전히 다른 Home에는 동시에 Apply해 `Succeeded`임을 확인한다.
+- 기존 `크래시_시뮬레이션_...` 2건(§11.5)이 lock 도입 이후에도 그대로 GREEN이다 — 자식
+  프로세스가 kill되면 그 프로세스가 쥐고 있던 lock도 OS가 abandon 처리하고, 부모의
+  `Recover` 호출이 (같은 lock을 다시 잡고) 정상적으로 복구한다는 것을 방증한다.
+
+### 12.5 기존 Phase 07_02 동작 회귀 없음
+
+`PinnedBackupSource`/fresh catalog/atomic IncomingAhead replace/WAL·SHM Snapshot·Rollback/
+disposable-copy quick_check/durable transaction journal/`threads.cwd` remap/`ApplyCommand`의
+`IsApplyReady` 게이팅/`New`·`Identical`·`IncomingAhead`·`LocalAhead`·`Diverged`·`Unverifiable`
+정책은 전부 코드 변경 없이 그대로다 — Phase 07_02의 기존 테스트 전체(§11.8의 495건)가 이번
+Phase의 전체 테스트 실행에도 그대로 포함되어 GREEN이다.
+
+### 12.6 Phase 07_03 최종 테스트 수 / 실제 원본 무변경
+
+`Domain 64 + Codex 200 + Backup 88 + Restore 65 + App 97 = 514건 전부 통과`(Phase 07_02의
+495건 + 이번 Phase 신규 19건), `dotnet build`(Debug/Release 둘 다) 경고/오류 0. 새로 생긴 테스트:
+`RestoreExecutorTests.cs`에 New rollout 하드닝 4건 + Home-scope 2건 + Recover consistency 6건 =
+12건, `CrashRecoveryIntegrationTests.cs`에 진짜 크래시/두 프로세스 통합 테스트 2건,
+`RestoreProcessLockTests.cs`(신규 파일) 4건, `MainViewModelApplyTests.cs`에 Home 전환 시나리오
+1건. 전체 실행을 연속 2회 그린으로 확인했다. 실제 원본 `C:\Users\User\.codex`의 4개
+source-of-truth 파일 SHA-256은 이번 Phase 전/후로도 완전히 동일했다(§11.8과 같은 값 —
+`state_5.sqlite=57C75D6B58045E4DDB3EFD5B5696C120E653661A850C6BD4A7B5FAD4474908D6`,
+`session_index.jsonl=050C3D8505735E6CD08BDB1650DE733B6A30B55EE4F5E75F9BEB4D99CC82993E`,
+`.codex-global-state.json=707D63DFDC779E6A2324FDD602F71997CA14CC4583A7CFFCCADE3681DABA7C50`,
+`config.toml=A081B92A5F4F099692B1AA6EA5154CA88A9E135644F1ACC0913CF2A9E8A6A10E`) — 실제 rollout
+clone도 이번 Phase에서는 별도로 만들지 않았다(순수 합성 fixture + 실제 자식 프로세스 crash
+시뮬레이션만으로 전부 검증 가능했다).
+
+### 12.7 알려진 한계(Phase 07_03 시점 최종)
+
+- `RestoreProcessLock`은 named Mutex(`Local\` 네임스페이스) 기반이라 같은 Windows 로그인 세션
+  안에서만 유효하다 — 여러 사용자 세션/원격 데스크톱 세션을 넘나드는 잠금은 범위 밖이다(단일
+  사용자 데스크톱 앱을 전제하므로 의도적으로 범위를 좁혔다).
+- lock 획득은 `TimeSpan.Zero`(즉시 판정)만 지원한다 — "잠깐 기다렸다가 자동 재시도"는 하지
+  않는다(사용자에게 명확히 알리고 다시 시도하게 하는 편이 더 안전하다는 기존 UX 원칙과 일치).
+- §11.9의 한계(Desktop 사이드바, segment-transition IncomingAhead 실제 clone, 물리적으로 불안전한
+  실제 Blocked 사례, 다중 신규 segment 복합 케이스, `local_image`/새 프로젝트 자동 생성/`Diverged`
+  자동 merge/`.jsonl.zst` Update 미지원)는 이번 Phase의 범위가 아니었으므로 그대로 남아 있다.

@@ -16,10 +16,19 @@ namespace CodexBackupManager.Restore;
 public static class RolloutRestoreService
 {
     /// <summary>backup entry 바이트를 그대로 복사해 새 rollout 파일을 만든다(New/새 segment).</summary>
-    public static void CreateNewFile(BackupReader reader, PlannedNewRolloutFile planned)
+    /// <remarks>
+    /// <b>temp에 CreateNew로 쓰지 않는다(Phase 07_03 요구사항 1).</b> 이전 시도가 temp 작성 중
+    /// 강제 종료됐다면 target은 아직 없고 temp만 남아 있을 수 있다 — 그 잔재 때문에 재시도 자체가
+    /// <see cref="IOException"/>으로 막히면 안 된다. append와 같은 패턴을 따른다: temp는
+    /// <see cref="FileMode.Create"/>로 덮어써도 되는 순수 작업용 파일로 취급하고,
+    /// <c>Flush(true)</c>로 디스크에 내린 뒤 검증하고, atomic move로 target을 만든다. 정상 예외든
+    /// 진짜 크래시든 target은 move가 끝나기 전까지 절대 만들어지지 않는다.
+    /// </remarks>
+    public static void CreateNewFile(BackupReader reader, PlannedNewRolloutFile planned, IRestoreFaultInjectionHook? faultInjection = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(planned);
+        faultInjection ??= NoOpRestoreFaultInjectionHook.Instance;
 
         string? targetDir = Path.GetDirectoryName(planned.TargetAbsolutePath);
         if (!string.IsNullOrEmpty(targetDir))
@@ -28,21 +37,46 @@ public static class RolloutRestoreService
         }
 
         string tempPath = planned.TargetAbsolutePath + ".cbm-restore-tmp";
-        using (Stream source = reader.OpenEntry(planned.SourceEntryPath)
-            ?? throw new InvalidDataException($"backup entry를 열 수 없습니다: {planned.OwningThreadId}"))
-        using (FileStream dest = new(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        {
-            source.CopyTo(dest);
-        }
 
-        (long length, string sha256) = HashFile(tempPath);
-        if (length != planned.ExpectedLength || !string.Equals(sha256, planned.ExpectedSha256Hex, StringComparison.Ordinal))
+        try
         {
-            File.Delete(tempPath);
-            throw new InvalidOperationException($"새 rollout 파일 검증 실패(thread={Redact(planned.OwningThreadId)}).");
-        }
+            using (Stream source = reader.OpenEntry(planned.SourceEntryPath)
+                ?? throw new InvalidDataException($"backup entry를 열 수 없습니다: {planned.OwningThreadId}"))
+            // FileMode.Create(덮어쓰기 허용): 이전 시도가 크래시로 temp를 남겼을 수 있는데, 그 잔재
+            // 때문에 재시도 자체가 막히면 안 된다 — append와 동일한 이유(temp는 순전히 작업용이다).
+            using (FileStream dest = new(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                source.CopyTo(dest);
+                faultInjection.Check(RestoreFaultInjectionPoint.DuringNewRolloutTempWrite);
+                dest.Flush(flushToDisk: true);
+            }
 
-        File.Move(tempPath, planned.TargetAbsolutePath, overwrite: false);
+            (long length, string sha256) = HashFile(tempPath);
+            if (length != planned.ExpectedLength || !string.Equals(sha256, planned.ExpectedSha256Hex, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"새 rollout 파일 검증 실패(thread={Redact(planned.OwningThreadId)}).");
+            }
+
+            faultInjection.Check(RestoreFaultInjectionPoint.BeforeNewRolloutMove);
+            File.Move(tempPath, planned.TargetAbsolutePath, overwrite: false);
+            faultInjection.Check(RestoreFaultInjectionPoint.AfterNewRolloutMove);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                try
+                {
+                    File.Delete(tempPath);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
     }
 
     /// <summary>

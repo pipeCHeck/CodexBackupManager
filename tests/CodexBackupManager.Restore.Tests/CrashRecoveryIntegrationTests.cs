@@ -205,6 +205,7 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        startInfo.ArgumentList.Add("apply");
         startInfo.ArgumentList.Add(codexHomePath);
         startInfo.ArgumentList.Add(backupFilePath);
         startInfo.ArgumentList.Add(crashPoint.ToString());
@@ -273,7 +274,7 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         // journal은 Applying으로 멈춰 있어야 한다 — Rollback이 전혀 실행되지 않았기 때문이다.
         IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot);
         Assert.Single(incomplete);
-        Assert.Equal(RestoreTransactionState.Applying, incomplete[0].Journal.State);
+        Assert.Equal(RestoreTransactionState.Applying, incomplete[0].Journal!.State);
 
         // "다음 실행"에서 사용자가 복구를 승인한다.
         RestoreResult recovery = IncompleteApplyRecoveryService.Recover(incomplete[0].SnapshotDirectory, () => []);
@@ -299,12 +300,163 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         // Applying으로 멈춰 있어야 한다.
         IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot);
         Assert.Single(incomplete);
-        Assert.Equal(RestoreTransactionState.Applying, incomplete[0].Journal.State);
+        Assert.Equal(RestoreTransactionState.Applying, incomplete[0].Journal!.State);
 
         RestoreResult recovery = IncompleteApplyRecoveryService.Recover(incomplete[0].SnapshotDirectory, () => []);
 
         Assert.Equal(RestoreOutcome.RolledBack, recovery.Outcome);
         Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
         Assert.Empty(IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot));
+    }
+
+    [Fact]
+    public void 크래시_시뮬레이션_New_rollout_temp_생성_후_target_이동_전_강제_종료되면_다음_실행에서_복구되고_재시도가_성공한다()
+    {
+        // Phase 07_03 요구사항 1 — New Import 시나리오. temp 검증까지 끝나고 target으로 옮기기
+        // 직전(BeforeNewRolloutMove)에서 실제로 프로세스를 죽인다("New rollout temp가 생긴 직후,
+        // target으로 move되기 전").
+        string threadId = NewId();
+        DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        string aFile = WriteRollout(_pcADir, threadId, ts, Line(1, "hello"));
+        CodexCatalog pcA = SourceCatalog(threadId, Ref(threadId, aFile, ts));
+        string backupPath = ExportToBackup(pcA, threadId, "crashsim-new-rollout-move.codexbackup");
+
+        RunAndKillAtCrashPoint(_pcBHome, backupPath, RestoreFaultInjectionPoint.BeforeNewRolloutMove, _snapshotRoot);
+
+        // 크래시 직후: target rollout/thread는 아직 전혀 만들어지지 않았어야 한다(temp 검증까지만
+        // 끝났다) — journal은 Applying으로 멈춰 있어야 한다.
+        Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+        IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot);
+        Assert.Single(incomplete);
+
+        RestoreResult recovery = IncompleteApplyRecoveryService.Recover(incomplete[0].SnapshotDirectory, () => []);
+        Assert.Equal(RestoreOutcome.RolledBack, recovery.Outcome);
+        Assert.Empty(IncompleteApplyRecoveryService.FindIncomplete(_snapshotRoot));
+
+        // "다음 실행"에서 같은 backup으로 다시 Apply한다 — 이전 시도가 남겼을 stale temp가 재시도
+        // 자체를 막으면 안 된다(요구사항 1의 핵심).
+        var detection = new CodexDetectionService().DetectFromUserSelection(_pcBHome);
+        Assert.NotNull(detection.Installation);
+        CodexCatalog freshCatalog = CodexCatalogBuilder.Build(detection.Installation!);
+        ImportPreview retryPreview = ImportPreviewBuilder.Build(backupPath, freshCatalog);
+        Assert.True(retryPreview.Success, string.Join(";", retryPreview.ValidationErrors));
+        ImportPlan? retryPlan = ImportPlanBuilder.Build(retryPreview, backupPath);
+        Assert.NotNull(retryPlan);
+
+        RestoreResult retryResult = RestoreExecutor.Apply(retryPlan!, _pcBHome, snapshotRoot: _snapshotRoot);
+
+        Assert.True(retryResult.Outcome == RestoreOutcome.Succeeded, $"{retryResult.Outcome}: {retryResult.Message}");
+        Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void 같은_Codex_Home에서_동시에_Apply를_시도하면_한쪽만_lock을_획득하고_다른_Home은_막히지_않는다()
+    {
+        // Phase 07_03 요구사항 4/5 — 진짜 두 프로세스로 RestoreProcessLock을 검증한다.
+        string exePath = FindOrBuildCrashSimExecutable();
+        string readySentinel = Path.Combine(Path.GetTempPath(), $"cbm-lockhold-ready-{Guid.NewGuid():N}.txt");
+        string releaseSignal = Path.Combine(Path.GetTempPath(), $"cbm-lockhold-release-{Guid.NewGuid():N}.txt");
+
+        var startInfo = new ProcessStartInfo(exePath)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("lock-hold");
+        startInfo.ArgumentList.Add(_pcBHome);
+        startInfo.ArgumentList.Add(readySentinel);
+        startInfo.ArgumentList.Add(releaseSignal);
+
+        using Process? holder = Process.Start(startInfo);
+        Assert.NotNull(holder);
+
+        string otherHome = Path.Combine(_root, "pcC-home");
+        TestCodexHomeBuilder.CreateEmpty(otherHome);
+
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (!File.Exists(readySentinel))
+            {
+                if (holder!.HasExited)
+                {
+                    Assert.Fail($"lock-hold 프로세스가 준비되기 전에 끝났습니다(exit={holder.ExitCode}): {holder.StandardError.ReadToEnd()}");
+                }
+
+                if (DateTime.UtcNow > deadline)
+                {
+                    Assert.Fail("lock-hold 프로세스가 제한 시간 안에 준비되지 않았습니다.");
+                }
+
+                Thread.Sleep(20);
+            }
+
+            Assert.Equal("acquired", File.ReadAllText(readySentinel));
+
+            // 같은 Home: 다른 프로세스가 이미 이 Home을 처리 중이므로 production RestoreExecutor.Apply가
+            // 즉시 NotReady를 돌려줘야 한다 — write 0건.
+            string threadId = NewId();
+            DateTimeOffset ts = new(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+            string aFile = WriteRollout(_pcADir, threadId, ts, Line(1, "hello"));
+            CodexCatalog pcA = SourceCatalog(threadId, Ref(threadId, aFile, ts));
+            string backupPath = ExportToBackup(pcA, threadId, "lock-same-home.codexbackup");
+
+            var detection = new CodexDetectionService().DetectFromUserSelection(_pcBHome);
+            Assert.NotNull(detection.Installation);
+            CodexCatalog pcBCatalog = CodexCatalogBuilder.Build(detection.Installation!);
+            ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBCatalog);
+            ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
+            Assert.NotNull(plan);
+
+            RestoreResult sameHomeResult = RestoreExecutor.Apply(plan!, _pcBHome, snapshotRoot: _snapshotRoot);
+            Assert.Equal(RestoreOutcome.NotReady, sameHomeResult.Outcome);
+            Assert.Contains("다른 Codex Backup Manager 인스턴스", sameHomeResult.Message);
+            Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+
+            // 다른 Home: 완전히 다른 이름의 lock이므로 동시에 획득할 수 있어야 한다.
+            string threadId2 = NewId();
+            string aFile2 = WriteRollout(_pcADir, threadId2, ts, Line(1, "hello-other-home"));
+            CodexCatalog pcA2 = SourceCatalog(threadId2, Ref(threadId2, aFile2, ts));
+            string backupPath2 = ExportToBackup(pcA2, threadId2, "lock-other-home.codexbackup");
+
+            var detectionOther = new CodexDetectionService().DetectFromUserSelection(otherHome);
+            Assert.NotNull(detectionOther.Installation);
+            CodexCatalog pcCCatalog = CodexCatalogBuilder.Build(detectionOther.Installation!);
+            ImportPreview previewOther = ImportPreviewBuilder.Build(backupPath2, pcCCatalog);
+            ImportPlan? planOther = ImportPlanBuilder.Build(previewOther, backupPath2);
+            Assert.NotNull(planOther);
+
+            RestoreResult otherHomeResult = RestoreExecutor.Apply(planOther!, otherHome, snapshotRoot: _snapshotRoot);
+            Assert.True(otherHomeResult.Outcome == RestoreOutcome.Succeeded, $"{otherHomeResult.Outcome}: {otherHomeResult.Message}");
+        }
+        finally
+        {
+            try
+            {
+                File.WriteAllText(releaseSignal, "release");
+            }
+            catch (IOException)
+            {
+            }
+
+            holder!.WaitForExit(10000);
+
+            try
+            {
+                File.Delete(readySentinel);
+            }
+            catch (IOException)
+            {
+            }
+
+            try
+            {
+                File.Delete(releaseSignal);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 }

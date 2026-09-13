@@ -108,6 +108,7 @@ public sealed class MainViewModel : ObservableObject
     // 같은 조건으로 새 Apply를 거부하므로(최종 판단자는 Core), 이건 UI가 미리 보여주는 안내일 뿐이다.
     private bool _hasIncompleteApply;
     private string? _incompleteApplySnapshotDirectory;
+    private string? _incompleteApplyCodexHomePath;
     private string? _incompleteApplyStatusText;
 
     /// <summary>생성자.</summary>
@@ -733,7 +734,7 @@ public sealed class MainViewModel : ObservableObject
         _lastHome = info.Home;
 
         IsConnected = true;
-        RefreshIncompleteApplyState();
+        RefreshIncompleteApplyState(info.HomeDisplayPath);
         StatusGlyph = "●";
         StatusText = info.Validation.Status == CodexHomeStatus.Valid
             ? "Codex 연결됨"
@@ -1292,19 +1293,22 @@ public sealed class MainViewModel : ObservableObject
     private void CancelApply() => _applyCancellation?.Cancel();
 
     /// <summary>
-    /// <see cref="IncompleteApplyRecoveryService.FindIncomplete"/>로 완료되지 못한 이전 Apply가
-    /// 있는지 다시 확인한다. 탐지 성공 시(=Codex Home이 정해질 때마다) 호출한다 — 여기서 아무것도
-    /// 찾지 못해도 <see cref="RestoreExecutor.Apply"/> 자신이 클릭 시점에 다시 한번 확인하므로,
-    /// 이 확인이 실패하거나(디스크 오류 등) 놓쳐도 실제 안전성에는 영향이 없다.
+    /// <see cref="IncompleteApplyRecoveryService.FindIncompleteForHome"/>로 <paramref name="codexHomePath"/>에
+    /// 대해 완료되지 못한 이전 Apply가 있는지 다시 확인한다. 탐지 성공 시(=Codex Home이 정해질
+    /// 때마다) 호출한다 — 다른 Home을 겨냥했던 미완료 Apply는 여기 배너에 나타나지 않는다(그
+    /// Home을 다시 선택하면 그때 나타난다, Phase 07_03 요구사항 2). 여기서 아무것도 찾지 못해도
+    /// <see cref="RestoreExecutor.Apply"/> 자신이 클릭 시점에 다시 한번 확인하므로, 이 확인이
+    /// 실패하거나(디스크 오류 등) 놓쳐도 실제 안전성에는 영향이 없다.
     /// </summary>
-    private void RefreshIncompleteApplyState()
+    private void RefreshIncompleteApplyState(string codexHomePath)
     {
         try
         {
-            IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncomplete(_snapshotRootProvider());
+            IReadOnlyList<IncompleteApply> incomplete = IncompleteApplyRecoveryService.FindIncompleteForHome(_snapshotRootProvider(), codexHomePath);
             if (incomplete.Count > 0)
             {
                 _incompleteApplySnapshotDirectory = incomplete[0].SnapshotDirectory;
+                _incompleteApplyCodexHomePath = codexHomePath;
                 HasIncompleteApply = true;
                 IncompleteApplyStatusText = "이전 복원 작업이 완료되지 않았습니다. Codex를 완전히 종료한 뒤 [이전 상태로 복구]를 눌러주세요.";
                 return;
@@ -1315,6 +1319,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         _incompleteApplySnapshotDirectory = null;
+        _incompleteApplyCodexHomePath = null;
         HasIncompleteApply = false;
         IncompleteApplyStatusText = null;
     }
@@ -1330,6 +1335,10 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        // RefreshIncompleteApplyState(codexHomePath)가 이 snapshot을 찾을 때 함께 기록해 둔 Home —
+        // Recover 자신도 다시 한번 이 Home과 일치하는지 확인한다(Phase 07_03 요구사항 3).
+        string? expectedHome = _incompleteApplyCodexHomePath;
+
         bool confirmed = _confirmDialog(
             "이전에 완료되지 못한 적용 작업이 있습니다.\nCodex가 완전히 종료되어 있어야 합니다.\n이전 상태로 복구하시겠습니까?",
             "이전 상태로 복구");
@@ -1342,7 +1351,8 @@ public sealed class MainViewModel : ObservableObject
 
         try
         {
-            RestoreResult result = await Task.Run(() => IncompleteApplyRecoveryService.Recover(snapshotDir)).ConfigureAwait(true);
+            RestoreResult result = await Task.Run(
+                () => IncompleteApplyRecoveryService.Recover(snapshotDir, expectedCodexHomePath: expectedHome)).ConfigureAwait(true);
             IncompleteApplyStatusText = DescribeApplyResult(result);
             _logger.Info($"이전 Apply 복구 시도. outcome={result.Outcome}");
         }
@@ -1352,7 +1362,10 @@ public sealed class MainViewModel : ObservableObject
             IncompleteApplyStatusText = $"복구 중 예기치 않은 오류가 발생했습니다: {ex.GetType().Name}";
         }
 
-        RefreshIncompleteApplyState();
+        if (expectedHome is not null)
+        {
+            RefreshIncompleteApplyState(expectedHome);
+        }
     }
 
     private static string DescribeApplyResult(RestoreResult result) => result.Outcome switch

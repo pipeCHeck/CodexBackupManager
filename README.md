@@ -5,11 +5,14 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 > **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
 > **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
 > **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
-> **Phase 07_01(Restore Hardening + Apply UI) 완료.**
-> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, Phase 07_01에서 GitHub 코드 리뷰로 발견된
-> 안전성 문제를 고친 뒤 **Apply 버튼(UI)을 처음으로 연결**했습니다 — New Import와 안전이 증명된
-> IncomingAhead fast-forward만 지원하고, Diverged 자동 merge 등 고위험 기능은 여전히 지원하지
-> 않습니다. 자세한 내용은 `docs/safe-restore-phase7.md` §10 참고.
+> **Phase 07_01(Restore Hardening + Apply UI) + Phase 07_02(Release Safety Gate) +**
+> **Phase 07_03(Final Restore Edge-Case Hardening) 완료.**
+> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, 07_01/07_02/07_03을 거치며 실제 원본
+> `.codex` clone으로 재현한 crash/동시성 edge case를 포함해 Restore 안전성을 반복적으로
+> 검증·강화했습니다 — New Import와 안전이 증명된 IncomingAhead fast-forward만 지원하고,
+> Diverged 자동 merge 등 고위험 기능은 여전히 지원하지 않습니다. Restore Core는 이제 기능 변경
+> 없이 Phase 8(Release/Packaging)로 넘어갑니다. 자세한 내용은 `docs/safe-restore-phase7.md` §10~11
+> 참고.
 
 ---
 
@@ -429,6 +432,7 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 7 | Restore Core — Snapshot → Apply(New/IncomingAhead fast-forward만) → 검증 → Rollback | **완료** |
 | 07_01 | Restore Hardening + Apply UI — 안전성/정합성 하드닝, Apply 버튼, 실제 `.codex` clone E2E | **완료** |
 | 07_02 | Release Safety Gate — atomic append, crash recovery journal, WAL/SHM-safe rollback, cwd remap, 실제 rollout IncomingAhead clone E2E | **완료** |
+| 07_03 | Final Restore Edge-Case Hardening — New rollout atomic/durability, Home별 incomplete-apply scope, Recover consistency gate, 프로세스 간 Restore lock | **완료** |
 | 8 | Release / self-contained EXE / final QA | 예정 |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
@@ -453,10 +457,16 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
 - Export가 `attachments\`(붙여넣기 텍스트)/`visualizations\`/`generated_images\` 폴더의 실제 파일은
   아직 포함하지 않는다 — 구조적으로 안전하게 참조를 추적할 방법을 찾지 못했다(`docs/codexbackup-format-v1.md` §2 참고).
   `local_image` 참조(스크린샷 등)는 포함한다.
-- **(Phase 07_01)** Import된 대화가 Codex Desktop 앱 사이드바에 올바른 프로젝트로 묶여 보이는지는
-  아직 검증하지 못했다 — Core/CLI의 project 배정 authority(`threads.project_id`)는 공식 소스로
-  확정했지만 Electron Desktop 소스는 조사하지 못했다. 실제 clone 기반 E2E도 New Import 계열만
-  수행했고 IncomingAhead(fast-forward)는 여전히 합성 데이터로만 검증했다(`docs/safe-restore-phase7.md` §10.6).
+- **(Phase 07_01/07_02)** Import된 대화가 Codex Desktop 앱 사이드바에 올바른 프로젝트로 묶여
+  보이는지는 아직 검증하지 못했다 — Core/CLI의 project 배정 authority(`threads.project_id`)는
+  공식 소스로 확정했지만 Electron Desktop 소스는 조사하지 못했고, `CODEX_HOME`을 통한 안전한
+  격리 실행도 CLI에서만 확인했다(`docs/safe-restore-phase7.md` §11.7).
+- **(Phase 07_02)** 실제 원본 `.codex` clone으로 New/IncomingAhead(단일 segment fast-forward) E2E는
+  직접 확인했지만, segment 전환이 포함된 IncomingAhead와 `Diverged`/`LocalAhead`의 실제 데이터
+  사례는 이 PC에 없어 여전히 합성 데이터로만 검증했다(`docs/safe-restore-phase7.md` §11.2/11.9).
+- **(Phase 07_03)** `RestoreProcessLock`은 named Mutex 기반이라 같은 Windows 로그인 세션 안에서만
+  유효하다 — 서로 다른 사용자 세션/원격 세션 간 잠금은 범위 밖이다(단일 사용자 데스크톱 앱
+  전제, `docs/safe-restore-phase7.md` §12.4).
 
 ---
 
