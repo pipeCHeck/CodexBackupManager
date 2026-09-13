@@ -11,7 +11,7 @@
       개발 중 dotnet build/run은 framework-dependent(SelfContained=false)로 빠르게 빌드한다.
       이 상태로 배포하면 대상 PC에 .NET 10 Desktop 런타임이 설치되어 있어야 한다.
 
-      CLAUDE.md §38이 확정한 최종 배포 형태(런타임 설치 불필요한 단일 exe)는
+      CLAUDE.md §38이 확정한 최종 배포 형태(런타임 설치 불필요)는
       publish 시점에만 self&#45;contained 옵션을 켜서 만든다. 정확한 명령은
       README "빌드 · 테스트 · 실행" 참고.
     -->
@@ -20,11 +20,13 @@
     <PlatformTarget>x64</PlatformTarget>
 
     <!--
-      Phase 8 — v0.1.0 배포 형태 확정(WPF이므로 trimming은 절대 켜지 않는다).
-      실제 self-contained/single-file publish는 여전히 publish 시점에만
-      `-p:SelfContained=true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true`
-      로 켠다(scripts/publish-release.ps1 참고) — 위 개발용 SelfContained=false는 그대로 유지해
-      dotnet build/run의 내부 루프 속도를 지킨다.
+      Phase 8 — 배포 형태 확정(WPF이므로 trimming은 절대 켜지 않는다).
+      Phase 8~08_05는 single-file publish(`-p:PublishSingleFile=true
+      -p:IncludeNativeLibrariesForSelfExtract=true`)였으나, Phase 08_07에서 폴더형
+      self-contained 배포(`-p:PublishSingleFile=false`, exe+dll+런타임 파일이 그대로 폴더에
+      존재)로 바꿨다 — 두 방식 모두 `-p:SelfContained=true`(scripts/publish-release.ps1 참고)는
+      publish 시점에만 켜고, 위 개발용 SelfContained=false는 그대로 유지해 dotnet build/run의
+      내부 루프 속도를 지킨다.
     -->
     <PublishTrimmed>false</PublishTrimmed>
 

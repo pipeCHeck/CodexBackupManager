@@ -1,4 +1,4 @@
-Codex Backup Manager 0.1.1
+Codex Backup Manager 0.1.2
 ==========================
 
 OpenAI Codex 로컬 프로젝트/대화 데이터를 조회, 선택, 내보내기(.codexbackup), 다른 PC로
@@ -6,10 +6,13 @@ OpenAI Codex 로컬 프로젝트/대화 데이터를 조회, 선택, 내보내�
 
 실행 방법
 ---------
-CodexBackupManager.exe를 더블클릭하면 바로 실행됩니다. 별도로 .NET 런타임을 설치할 필요가
-없습니다(self-contained, single-file 배포). 처음 실행 시 Windows SmartScreen이 "인식할 수 없는
-앱입니다" 경고를 띄울 수 있습니다 — [추가 정보] -> [실행]으로 진행할 수 있습니다(이 배포판은
-code-signing이 되어 있지 않습니다, 아래 알려진 제한 참고).
+이 폴더 전체가 하나의 프로그램입니다 — CodexBackupManager.exe만 따로 빼서 다른 위치로 옮기지
+마십시오. 같은 폴더 안의 DLL/런타임 파일들이 있어야 정상적으로 실행됩니다. 이 폴더를 통째로
+원하는 위치(바탕화면, Program Files 등)에 두고 그 안의 CodexBackupManager.exe를 더블클릭하면
+바로 실행됩니다. 별도로 .NET 런타임을 설치할 필요가 없습니다(self-contained 배포 — 이 폴더
+안에 필요한 런타임 파일이 전부 포함되어 있습니다). 처음 실행 시 Windows SmartScreen이 "인식할
+수 없는 앱입니다" 경고를 띄울 수 있습니다 — [추가 정보] -> [실행]으로 진행할 수 있습니다(이
+배포판은 code-signing이 되어 있지 않습니다, 아래 알려진 제한 참고).
 
 기본 흐름
 ---------
