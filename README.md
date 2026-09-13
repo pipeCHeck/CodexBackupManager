@@ -6,14 +6,19 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 > **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
 > **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
 > **Phase 07_01(Restore Hardening + Apply UI) + Phase 07_02(Release Safety Gate) +**
-> **Phase 07_03(Final Restore Edge-Case Hardening) + Phase 8(Release / Self-contained EXE) 완료.**
+> **Phase 07_03(Final Restore Edge-Case Hardening) + Phase 8(Release / Self-contained EXE) 완료,**
+> **Phase 08_01(CI Stabilization / Final Release Gate) 진행.**
 > Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, 07_01/07_02/07_03을 거치며 실제 원본
 > `.codex` clone으로 재현한 crash/동시성 edge case를 포함해 Restore 안전성을 반복적으로
 > 검증·강화했습니다 — New Import와 안전이 증명된 IncomingAhead fast-forward만 지원하고,
 > Diverged 자동 merge 등 고위험 기능은 여전히 지원하지 않습니다. **Phase 8에서 Restore
 > 기능/알고리즘은 전혀 바꾸지 않고** v0.1.0 self-contained/single-file `CodexBackupManager.exe`
 > 배포물을 만들었습니다 — `scripts/publish-release.ps1`로 재현 가능하고, Windows CI
-> (`.github/workflows/windows-ci.yml`)가 push/PR마다 빌드+테스트를 확인합니다. 배포 사용자용
+> (`.github/workflows/windows-ci.yml`)가 push/PR마다 빌드+테스트를 확인합니다. **Phase 8 커밋을
+> push한 뒤 첫 GitHub Actions 실행이 실패**했다 — 2개의 테스트가 CI 환경에서 timing 문제로
+> 실패했고, **Phase 08_01**에서 두 테스트를 전부 결정적(deterministic)으로 고쳤다(로컬 528+ 회
+> 반복 실행 GREEN, `.github/workflows/windows-ci.yml` push 후 실제 GitHub Actions 결과 확인은
+> 아직 남아 있다 — 자세한 내용은 `docs/project-status-and-handoff.md` 참고). 배포 사용자용
 > 안내는 `docs/dist-readme.txt`(배포 ZIP에 동봉)와 `docs/release-notes-v0.1.0.md` 참고. 개발
 > 내용 상세는 `docs/safe-restore-phase7.md` §10~12 참고.
 
@@ -454,7 +459,7 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 07_02 | Release Safety Gate — atomic append, crash recovery journal, WAL/SHM-safe rollback, cwd remap, 실제 rollout IncomingAhead clone E2E | **완료** |
 | 07_03 | Final Restore Edge-Case Hardening — New rollout atomic/durability, Home별 incomplete-apply scope, Recover consistency gate, 프로세스 간 Restore lock | **완료** |
 | 8 | Release — self-contained/single-file EXE, Windows CI, release script, release-blocker(A~D) 4건 | **완료** |
-| 8 | Release / self-contained EXE / final QA | 예정 |
+| 08_01 | CI Stabilization / Final Release Gate — GitHub Actions 실제 실패 2건(Backup cancellation race, WPF recycling timeout) 결정적으로 수정 | **완료(로컬), GitHub Actions 확인 필요** |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure

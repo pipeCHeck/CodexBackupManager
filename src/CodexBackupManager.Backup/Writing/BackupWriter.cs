@@ -66,10 +66,27 @@ public static class BackupWriter
         string destinationPath,
         bool overwrite = false,
         CancellationToken cancellationToken = default)
+        => Write(plan, manifestWithoutChecksums, destinationPath, overwrite, cancellationToken, OpenSourceFile);
+
+    /// <summary>
+    /// 테스트 전용 확장 진입점(<c>InternalsVisibleTo</c>로 Backup.Tests에만 노출). payload 파일을 열
+    /// 방법을 주입할 수 있다 — Phase 08_01 요구사항: "300MB 파일 + 30ms 뒤 취소"라는 wall-clock
+    /// race 대신, 특정 payload를 읽을 때 N번째 Read 이후 스스로 cancellationToken을 취소하는 wrapper
+    /// Stream을 주입해 실제 스트리밍 복사 도중 취소를 deterministic하게 재현한다. production
+    /// 코드는 항상 기본 오버로드(<see cref="OpenSourceFile"/>)만 쓴다.
+    /// </summary>
+    internal static WriteResult Write(
+        ExportPlan plan,
+        BackupManifest manifestWithoutChecksums,
+        string destinationPath,
+        bool overwrite,
+        CancellationToken cancellationToken,
+        Func<string, Stream> sourceFileOpener)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(manifestWithoutChecksums);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentNullException.ThrowIfNull(sourceFileOpener);
 
         // 선택한 대화 중 하나라도 완전하게 백업할 수 없으면(§ExportPlan.FatalErrors) 아예 temp 파일도
         // 만들지 않고 즉시 실패시킨다 — "부분 성공"을 성공으로 보여주지 않는다(Phase 05_01).
@@ -101,7 +118,7 @@ public static class BackupWriter
             List<ChecksumEntry> checksumEntries;
             try
             {
-                checksumEntries = WriteTempArchive(plan, manifestWithoutChecksums, tempPath, cancellationToken);
+                checksumEntries = WriteTempArchive(plan, manifestWithoutChecksums, tempPath, cancellationToken, sourceFileOpener);
             }
             catch (SourceChangedDuringExportException ex)
             {
@@ -130,11 +147,14 @@ public static class BackupWriter
         }
     }
 
+    private static Stream OpenSourceFile(string path) => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
     private static List<ChecksumEntry> WriteTempArchive(
         ExportPlan plan,
         BackupManifest manifestWithoutChecksums,
         string tempPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, Stream> sourceFileOpener)
     {
         var checksumEntries = new List<ChecksumEntry>();
 
@@ -144,13 +164,13 @@ public static class BackupWriter
             foreach (PlannedPayloadFile file in plan.RolloutFiles)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                checksumEntries.Add(CopyPayload(archive, file.SourceFullPath, file.EntryPath, cancellationToken));
+                checksumEntries.Add(CopyPayload(archive, file.SourceFullPath, file.EntryPath, cancellationToken, sourceFileOpener));
             }
 
             foreach (PlannedAttachment attachment in plan.Attachments)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                checksumEntries.Add(CopyPayload(archive, attachment.SourceFullPath, attachment.EntryPath, cancellationToken));
+                checksumEntries.Add(CopyPayload(archive, attachment.SourceFullPath, attachment.EntryPath, cancellationToken, sourceFileOpener));
             }
 
             // Phase 05_01: manifest.json도 accidental corruption을 탐지할 수 있게 체크섬을 남긴다.
@@ -174,7 +194,8 @@ public static class BackupWriter
         ZipArchive archive,
         string sourceFullPath,
         string entryPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, Stream> sourceFileOpener)
     {
         if (!ZipEntryPathSafety.IsSafe(entryPath))
         {
@@ -192,7 +213,7 @@ public static class BackupWriter
 
         ZipArchiveEntry entry = archive.CreateEntry(entryPath, ChooseCompressionLevel(entryPath));
         StreamingHashCopy.Result result;
-        using (FileStream source = new(sourceFullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (Stream source = sourceFileOpener(sourceFullPath))
         using (Stream destination = entry.Open())
         {
             result = StreamingHashCopy.CopyWithHash(source, destination, cancellationToken);

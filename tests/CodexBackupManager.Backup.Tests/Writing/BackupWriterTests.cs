@@ -120,37 +120,68 @@ public sealed class BackupWriterTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(_directory, ".*.tmp-*"));
     }
 
-    [Fact]
-    public async Task 대형_payload_복사_도중_취소해도_temp를_지우고_목적지를_만들지_않는다()
+    /// <summary>
+    /// <paramref name="cancelAfterReadCount"/>번째 <see cref="Read"/> 호출까지는 더미 바이트를
+    /// 돌려주고, 그 이후부터는(반환하기 직전) <paramref name="cts"/>를 취소한다 — 실제 스트리밍
+    /// 복사가 "진행 중일 때" 취소되는 상황을 wall-clock 없이 완전히 결정적으로 재현한다(Phase
+    /// 08_01 — 예전에는 "300MB 파일 + 30ms 뒤 취소"라는 race를 썼는데 GitHub Actions CI에서
+    /// 병렬 부하에 따라 타이밍이 어긋나 실패했다).
+    /// </summary>
+    private sealed class CancelAfterNReadsStream(CancellationTokenSource cts, int cancelAfterReadCount, long totalLength) : Stream
     {
-        // 300MB급 rollout에서도 실제로 "복사 도중" 취소가 걸리는지 확인한다(요구사항: Export UI
-        // Cancellation 완성). 시작 즉시 취소하는 것과 달리, 스트리밍 복사가 실제로 진행 중일 때
-        // CancellationToken이 걸리는 실제 레이스를 재현한다.
-        string source = Path.Combine(_directory, "huge-for-cancel.jsonl");
-        const long sizeBytes = 300L * 1024 * 1024;
-        using (FileStream fs = new(source, FileMode.Create, FileAccess.Write))
+        private long _position;
+        private int _readCount;
+
+        public override int Read(byte[] buffer, int offset, int count)
         {
-            byte[] chunk = new byte[1024 * 1024];
-            Array.Fill(chunk, (byte)'a');
-            for (long written = 0; written < sizeBytes; written += chunk.Length)
+            _readCount++;
+            if (_readCount > cancelAfterReadCount)
             {
-                fs.Write(chunk, 0, chunk.Length);
+                cts.Cancel();
             }
+
+            long remaining = totalLength - _position;
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+
+            int toRead = (int)Math.Min(count, remaining);
+            Array.Fill(buffer, (byte)'a', offset, toRead);
+            _position += toRead;
+            return toRead;
         }
 
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => totalLength;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void 스트리밍_복사_도중_취소되면_temp를_지우고_목적지를_만들지_않는다()
+    {
+        // source는 실제로 존재하기만 하면 된다(내용은 CopyPayload의 변경-감지용 FileInfo 확인에만
+        // 쓰인다) — 실제로 스트리밍되는 바이트는 아래 sourceFileOpener가 주입하는
+        // CancelAfterNReadsStream에서 나온다. 내부 테스트 전용 오버로드(BackupWriter.Write의
+        // sourceFileOpener 매개변수)로 파일 크기/실행 시간에 좌우되지 않는 결정적 취소를 만든다.
+        string source = WriteSourceFile("for-cancel.jsonl", "placeholder");
         string dest = Path.Combine(_directory, "out2.codexbackup");
-        ExportPlan plan = SinglePayloadPlan(source, "payload/attachments/0/huge.bin"); // JSONL 최소 parse 대상 아님.
+        ExportPlan plan = SinglePayloadPlan(source, "payload/attachments/0/huge.bin");
 
         using var cts = new CancellationTokenSource();
-        Task cancelSoon = Task.Run(async () =>
-        {
-            await Task.Delay(30);
-            cts.Cancel();
-        });
 
-        Assert.Throws<OperationCanceledException>(
-            () => BackupWriter.Write(plan, EmptyManifest(plan), dest, cancellationToken: cts.Token));
-        await cancelSoon;
+        Assert.Throws<OperationCanceledException>(() => BackupWriter.Write(
+            plan, EmptyManifest(plan), dest, overwrite: false, cancellationToken: cts.Token,
+            sourceFileOpener: _ => new CancelAfterNReadsStream(cts, cancelAfterReadCount: 3, totalLength: 50L * 1024 * 1024)));
 
         Assert.False(File.Exists(dest));
         Assert.Empty(Directory.EnumerateFiles(_directory, ".*.tmp-*"));
