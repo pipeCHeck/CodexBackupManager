@@ -1,4 +1,4 @@
-Codex Backup Manager 0.1.2
+Codex Backup Manager 0.1.3
 ==========================
 
 OpenAI Codex 로컬 프로젝트/대화 데이터를 조회, 선택, 내보내기(.codexbackup), 다른 PC로

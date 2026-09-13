@@ -4,14 +4,21 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
-마지막 갱신 기준: `Phase 08_05` 커밋(`363e39b`)까지 사용자가 커밋했다. `Phase 8` 커밋을 push한
+마지막 갱신 기준: `Phase 08_07` 커밋(`ce5a16b`)까지 사용자가 커밋했다. `Phase 8` 커밋을 push한
 뒤 실행된 첫 GitHub Actions Windows CI(run #1)는 Restore/Backup Format 자체의 문제가 아니라
 테스트 2건의 timing 문제로 FAIL했었지만(§2 Phase 08_01 행 참고), Phase 08_01이 두 테스트를
 전부 결정적(deterministic)으로 고쳤고 **그 뒤 GitHub Actions run #2가 Build & Test (Release) /
 self-contained single-file publish artifact job 모두 실제로 GREEN임을 확인했다.** 그 뒤 문서
 정리(Phase 08_02), UI 폴리싱(Phase 08_03/08_04), Versioning(Phase 08_05 — 버전을 `0.1.0`에서
-`0.1.1`로 patch bump, 아래 참고)을 거쳤다 — 전부 기능/Restore 알고리즘은 바꾸지 않았다.
-**`v0.1.1` Tag/GitHub Release를 만들어도 되는 상태다** — 실제 Tag/Release/Push는 여전히
+`0.1.1`로 patch bump), 문서 정합성 재정리(Phase 08_06), 배포 형태를 self-contained
+**단일 exe에서 폴더형으로 전환**(Phase 08_07 — 버전 `0.1.1`→`0.1.2`, 아래 참고)을 거쳤다 —
+전부 기능/Restore 알고리즘은 바꾸지 않았다. 그 위에 이번 **Phase 08_08(CI/문서 규격
+정합성)**에서 GitHub Actions workflow(`.github/workflows/windows-ci.yml`)가 여전히 Phase 08_07
+이전의 옛 single-file publish 옵션(`PublishSingleFile=true` + `IncludeNativeLibrariesForSelfExtract=true`)을
+쓰고 있던 것을 발견해 `scripts/publish-release.ps1`을 그대로 호출하는 `package-release` job으로
+교체했고, `CLAUDE.md` §38/README/이 문서에 남아 있던 "현재 확정 규격은 single-file"이라는 서술을
+폴더형으로 정리했으며, 버전을 `0.1.2`에서 **`0.1.3`**으로 patch bump했다(아래 참고).
+**`v0.1.3` Tag/GitHub Release를 만들어도 되는 상태다** — 실제 Tag/Release/Push는 여전히
 사용자가 직접 진행한다(이 문서를 갱신한 세션은 명시적 요청 없이 Tag/Release/Push를 만들지
 않는다). Import
 Preview/`RevisionRelation`/
@@ -71,7 +78,7 @@ publish하도록 강화, (D) `RestoreTransactionJournalStore.TryReadDetailed`가
 없음)를 직접 실행해 실제 사용자 `.codex`를 대상으로 한 Read-Only 탐지/카탈로그 생성이 정상
 동작함을 확인했고(SQLite native 의존성 로드 포함), 별도의 self-contained/single-file 스모크
 하네스로 같은 Restore/Backup/Codex 어셈블리 기준 New Import/IncomingAhead/Rollback을 합성 temp
-Codex Home에서 재확인했다. 상세 결과는 §2 표와 `docs/release-notes-v0.1.1.md` 참고.
+Codex Home에서 재확인했다. 상세 결과는 §2 표와 `docs/release-notes-v0.1.3.md` 참고.
 
 그 위에 **Phase 08_01(CI Stabilization / Final Release Gate)**을 진행했다. `Phase 8` 커밋을
 push한 뒤 GitHub Actions Windows CI 첫 실행(run #1)이 FAIL했고, 실패한 테스트는 정확히 2건이었다
@@ -121,8 +128,48 @@ timeout을 늘리거나 테스트를 skip하는 우회책 없이 실제 근본 �
 자체가 실패하도록 검증을 추가했다. 이 정리로 배포 ZIP 이름은 자동으로
 `CodexBackupManager-v0.1.1-win-x64.zip`이 되고, `docs/release-notes-v0.1.0.md`는
 `docs/release-notes-v0.1.1.md`로 정리됐다(아직 실제 공개 Release를 하지 않았으므로 새로 만든
-것이 아니라 그대로 이름만 바꿨다). **이 정리들 이후 첫 공개 배포 목표 버전은 `v0.1.1`로
-통일됐다 — v0.1.0으로 실제 Tag/GitHub Release를 만든 적은 없다.**
+것이 아니라 그대로 이름만 바꿨다). 이 시점에는 첫 공개 배포 목표 버전이 `v0.1.1`이었다(아래
+Phase 08_07/08_08에서 다시 바뀐다).
+
+**Phase 08_06(v0.1.1 기준 문서 정합성 정리)**는 README/이 문서에 남아 있던 자잘한 문구를
+v0.1.1 GREEN 상태에 맞춰 한 번 더 정리한 순수 문서 작업이다(기능/코드/테스트 변경 없음).
+
+**Phase 08_07(Folder-based Self-contained 전환)**은 배포 형태 자체를 바꿨다 — 사용자가 최종
+배포 형태를 "단일 EXE"가 아니라 "폴더형 self-contained"로 바꾸기로 결정했다. `dotnet publish`
+옵션을 `-p:PublishSingleFile=false`로 바꾸고(`-p:IncludeNativeLibrariesForSelfExtract=true`는
+single-file 전용이라 제거), `scripts/publish-release.ps1`을 폴더형 기준으로 다시 썼다 — 6단계
+감사가 더 이상 "exe 외 파일이 있으면 실패"가 아니라 "필수 앱 DLL/`.deps.json`/`.runtimeconfig.json`
+존재, self-contained 런타임 파일(`hostfxr.dll`/`hostpolicy.dll`/`coreclr.dll`/`clrjit.dll`)과
+`runtimeconfig.json`의 `includedFrameworks`로 실제 self-contained임을 확인, SQLite native
+(`e_sqlite3.dll`) 존재, PDB/테스트 DLL/소스 파일 부재"를 확인하도록 재작성됐고, 7단계 packaging도
+publish 폴더 전체를 `CodexBackupManager-v<버전>-win-x64\`로 복사한 뒤 그 폴더 자체를 ZIP으로
+묶도록(압축을 풀면 폴더 하나만 나온다) 바뀌었다. 이 작업 중 실제 버그 하나를 발견해 고쳤다 —
+PowerShell의 `-Include`는 `-LiteralPath`+`-Recurse`와 함께 쓰면 조용히 필터링이 안 되고 전체
+파일이 매치된 것처럼 동작하는 함정이 있어(소스 파일 검사가 오탐으로 전체 DLL 목록을 "소스
+파일"이라며 실패시켰다), `Where-Object`로 확장자를 직접 비교하도록 교체해 고쳤다(RED로 재현
+확인 후 GREEN). 버전은 `0.1.1`에서 **`0.1.2`**로 patch bump했다. Restore/Backup/Codex/Domain
+로직과 UI는 전혀 건드리지 않았다 — 이 Phase는 순수하게 release packaging 방식 변경이다.
+
+**Phase 08_08(CI/문서 규격 정합성)**은 Phase 08_07이 로컬 release script와 배포 형태는
+바꿨지만 GitHub Actions workflow(`.github/workflows/windows-ci.yml`)의 packaging job은
+여전히 옛 single-file 옵션(`PublishSingleFile=true`+`IncludeNativeLibrariesForSelfExtract=true`)을
+그대로 쓰고 있었고, `CLAUDE.md` §38(확정된 기술 스택)의 배포 항목도 여전히 "단일 exe"라고
+적혀 있던 것을 발견해 고쳤다. CI의 `publish-artifact` job을 `package-release`
+(`name: Package self-contained folder (win-x64)`)로 교체해 `dotnet publish` 옵션을 workflow에
+직접 하드코딩하지 않고 `scripts/publish-release.ps1 -SkipTests`를 그대로 호출하도록 만들었다
+— 이렇게 하면 로컬 release script와 CI가 서로 다른 옵션으로 어긋날 수 없다(-SkipTests는 직전
+`build-and-test` job이 이미 전체 솔루션 Release 테스트를 통과한 뒤에만 실행되므로 이 job에서만
+허용한다 — 로컬에서 최종 release를 만들 때는 여전히 `-SkipTests` 없이 실행해야 한다). CI
+아티팩트는 이제 `artifacts/release/*.zip` + `SHA256SUMS.txt`를 업로드한다(EXE 단독 업로드
+아님). `CLAUDE.md` §38의 배포 행을 "win-x64 self-contained 폴더형(`PublishSingleFile=false`),
+exe+앱 DLL+.NET 런타임+native dependency가 한 폴더에 그대로 존재, 대상 PC에 .NET Runtime
+설치 불필요, 폴더 전체를 프로그램 단위로 취급"으로 정정했다 — Phase 0 조사 문서처럼 "당시
+단일 EXE를 선택했다"는 과거 이력 서술은 그대로 두고, 현재 확정 규격을 말하는 부분만 고쳤다.
+README/이 문서에 남아 있던 "현재 확정 규격은 single-file"이라는 서술도 폴더형으로 정리했다.
+버전은 `0.1.2`에서 **`0.1.3`**으로 patch bump했다. **이 정리들 이후 첫 공개 배포 목표 버전은
+`v0.1.3`으로 통일됐다 — v0.1.0/v0.1.1/v0.1.2 어느 쪽으로도 실제 Tag/GitHub Release를 만든
+적은 없다.** Restore/Backup/Codex/Domain 기능 로직과 UI는 Phase 08_06~08_08 전부에서 전혀
+바뀌지 않았다.
 
 ---
 
@@ -222,6 +269,9 @@ IncomingAhead는 여전히 합성 데이터로만 검증)해 실제 스키마 �
 | `2577dc4` | Phase 08_03 | **UI 폴리싱.** Restore/Backup/Codex core 로직은 건드리지 않고 WPF UI만 최소 변경. 하단 "다시 확인" 버튼 문구를 "새로고침"으로 변경(command 그대로). 왼쪽 프로젝트/대화 트리(`TreeViewItem`)를 선택한 뒤 다른 창을 클릭해 앱이 비활성 상태가 되면 선택 배경/글자색이 Windows 기본 비활성 강조색(거의 흰 배경)으로 되돌아가 "선택은 됐는데 안 보이는" 문제가 있었다 — `App.xaml`에 `SystemColors.HighlightBrushKey`/`HighlightTextBrushKey`/`InactiveSelectionHighlightBrushKey`/`InactiveSelectionHighlightTextBrushKey`를 앱 다크 테마 색(`#FF3A6EA5`/흰색)으로 명시적으로 override해, 창 활성/비활성 상태와 무관하게 항상 같은 색으로 보이도록 고쳤다. 하단에 "Made by ProController · power0802m@naver.com" 문구를 footer로 추가했다. |
 | `b306f14` | Phase 08_04 | **하단 footer 레이아웃 수정.** `MainWindow.xaml`만 변경. 왼쪽 버튼 `StackPanel`에 있던 "Codex 원본 데이터는 읽기 전용으로만 접근합니다." 문구를 오른쪽 footer 영역으로 옮기고, 기존 "Made by" 문구와 함께 오른쪽 정렬 2줄(`FontSize=11`/`10`, 2px 간격)로 재배치했다 — 한 줄로 나란히 두면 창 폭이 좁을 때 왼쪽 버튼과 겹치던 문제를 별도 `Grid` 컬럼으로 분리해 해결했다. |
 | `363e39b` | Phase 08_05 | **Versioning 정리.** 버전을 `0.1.0`에서 `0.1.1`로 patch bump(`Directory.Build.props`의 `Version`/`AssemblyVersion`/`FileVersion` — 버전의 유일한 source of truth). `scripts/publish-release.ps1`이 더 이상 버전을 하드코딩하지 않고 `Directory.Build.props`에서 자동으로 읽으며(`-Version`으로 override 가능), 실제 빌드된 exe의 `FileVersion`이 그 버전과 다르면 스크립트 자체를 실패시키는 검증을 추가했다. 배포 ZIP 이름이 자동으로 `CodexBackupManager-v0.1.1-win-x64.zip`이 되고, `docs/dist-readme.txt`(배포 ZIP 동봉)도 버전을 갱신했으며, 아직 실제 공개 Release를 한 적이 없으므로 `docs/release-notes-v0.1.0.md`를 `docs/release-notes-v0.1.1.md`로 이름을 바꿔 정리했다(내용 자체는 버전 문구만 갱신). Restore/Backup 로직은 건드리지 않았다. |
+| `c910b81` | Phase 08_06 | **v0.1.1 기준 문서 정합성 정리.** README/이 문서에 남아 있던 자잘한 잔여 문구를 v0.1.1 GREEN 상태에 맞춰 재정리한 순수 문서 작업 — 기능/코드/테스트는 전혀 건드리지 않았다. |
+| `ce5a16b` | Phase 08_07 | **Folder-based Self-contained 전환.** 최종 배포 형태를 self-contained 단일 exe에서 폴더형으로 바꿨다 — `dotnet publish` 옵션에서 `PublishSingleFile=true`를 `false`로 바꾸고 single-file 전용인 `IncludeNativeLibrariesForSelfExtract`를 제거했다. `scripts/publish-release.ps1`을 재작성 — 6단계 감사가 "exe 외 파일이 있으면 실패" 대신 필수 앱 DLL/`.deps.json`/`.runtimeconfig.json` 존재, self-contained 런타임 파일(`hostfxr.dll`/`hostpolicy.dll`/`coreclr.dll`/`clrjit.dll`) + `runtimeconfig.json`의 `includedFrameworks`로 실제 self-contained 여부 확인, SQLite native(`e_sqlite3.dll`) 존재, PDB/테스트 DLL/소스 파일 부재를 확인하도록 바뀌었고, 7단계 packaging은 publish 폴더 전체를 `CodexBackupManager-v<버전>-win-x64\`로 복사한 뒤 그 폴더 자체를 ZIP으로 묶도록(압축 해제 시 폴더 하나만 나옴) 바뀌었다. 실제 버그 하나 발견·수정: PowerShell `-Include`가 `-LiteralPath`+`-Recurse`와 함께 쓰이면 조용히 필터링이 안 되는 함정이 있어 소스 파일 검사가 오탐으로 실패하던 것을 `Where-Object` 확장자 비교로 교체(RED→GREEN 확인). 버전을 `0.1.1`에서 `0.1.2`로 patch bump. Restore/Backup/Codex/Domain 로직과 UI는 건드리지 않았다. |
+| (미커밋) | Phase 08_08 | **CI/문서 규격 정합성.** GitHub Actions workflow(`.github/workflows/windows-ci.yml`)의 `publish-artifact` job이 Phase 08_07 이후에도 여전히 옛 single-file 옵션(`PublishSingleFile=true`+`IncludeNativeLibrariesForSelfExtract=true`)을 쓰고 있던 것과, `CLAUDE.md` §38의 배포 항목이 여전히 "단일 exe"라고 적혀 있던 것을 발견해 고쳤다. CI job을 `package-release`(`name: Package self-contained folder (win-x64)`)로 교체해 `dotnet publish` 옵션을 workflow에 직접 하드코딩하지 않고 `scripts/publish-release.ps1 -SkipTests`를 그대로 호출하도록 했다(직전 `build-and-test` job이 이미 전체 테스트를 통과했을 때만 실행되므로 이 job에서만 `-SkipTests`를 허용 — 로컬 release 생성 시에는 계속 `-SkipTests` 없이 실행). CI 아티팩트를 `artifacts/release/*.zip` + `SHA256SUMS.txt`로 교체(EXE 단독 업로드 아님). `CLAUDE.md` §38의 배포 행을 폴더형 규격으로 정정하고, README/이 문서에 남아 있던 "현재 확정 규격은 single-file" 서술도 폴더형으로 정리했다. 버전을 `0.1.2`에서 `0.1.3`으로 patch bump. Restore/Backup/Codex/Domain 로직과 UI는 건드리지 않았다. |
 
 **Phase 4는 사용자가 실제 GUI로 확인 후 최종 PASS로 확정했다. Phase 5(Export)는 커밋된 뒤 Phase 05_01
 hardening까지 마쳤다 — `docs/codexbackup-format-v1.md`가 이제 FROZEN 상태다. Phase 6(Import
@@ -637,26 +687,35 @@ Apply Core, 커밋 `a3de8e8`)과 Phase 07_01(Restore Hardening / Apply UI / Real
 
 Phase 7(`a3de8e8`), Phase 07_01(`ddfdc36`), Phase 07_02(`b298140`), Phase 07_03(`eca313f`), Phase
 8(`1481627`), Phase 08_01(`7b2a8df`), Phase 08_02(`1cd591e`), Phase 08_03(`2577dc4`), Phase
-08_04(`b306f14`), Phase 08_05(`363e39b`)까지 전부 완료·커밋됐다 — `docs/safe-restore-phase7.md`가
-Restore Core의 정식 스펙이다(§10이 Phase 07_01, §11이 Phase 07_02, §12가 Phase 07_03 addendum —
-**Phase 8/08_01~08_05는 이 문서를 건드리지 않았다**, Restore 알고리즘/Backup V1/`ImportPlan`
-semantics를 전혀 바꾸지 않았기 때문이다). v0.1.0 self-contained/single-file
-`CodexBackupManager.exe`를 실제로 발행해 직접 실행까지 확인했고,
-`.github/workflows/windows-ci.yml`/`scripts/publish-release.ps1`/`docs/release-notes-v0.1.1.md`
-(당시 파일명은 `docs/release-notes-v0.1.0.md`였다 — Phase 08_05에서 이름을 바꿨다)가 Phase
-8에서 새로 생겼다. `Phase 8` 커밋을 push한 뒤 첫 GitHub Actions Windows CI 실행(run
-#1)은 테스트 2건의 timing 문제로 FAIL했었지만, Phase 08_01이 결정적으로 고쳤고 **그 뒤 GitHub
-Actions run #2가 Build & Test (Release) / self-contained single-file publish artifact job
-모두 실제로 GREEN임을 확인했다.** 그 뒤 Phase 08_02(문서 정리)/08_03(UI 폴리싱)/08_04(footer
-레이아웃)/08_05(버전을 `0.1.0`→`0.1.1`로 patch bump)를 거쳤다. **`v0.1.1` Release 준비가 완료된
-상태다** — 실제 `v0.1.1` Tag/GitHub Release 생성, ZIP+SHA256SUMS 업로드는 여전히 사용자가 직접
+08_04(`b306f14`), Phase 08_05(`363e39b`), Phase 08_06(`c910b81`), Phase 08_07(`ce5a16b`)까지
+전부 완료·커밋됐다(Phase 08_08은 이 문서를 다루는 세션이 아직 커밋하지 않았다) —
+`docs/safe-restore-phase7.md`가 Restore Core의 정식 스펙이다(§10이 Phase 07_01, §11이 Phase
+07_02, §12가 Phase 07_03 addendum — **Phase 8/08_01~08_08은 이 문서를 건드리지 않았다**,
+Restore 알고리즘/Backup V1/`ImportPlan` semantics를 전혀 바꾸지 않았기 때문이다). Phase 8은
+v0.1.0 self-contained/single-file `CodexBackupManager.exe`를 실제로 발행해 직접 실행까지
+확인했고(당시 배포 형태 — **Phase 08_07부터 폴더형으로 바뀌었다**, 아래 참고),
+`.github/workflows/windows-ci.yml`/`scripts/publish-release.ps1`/`docs/release-notes-v0.1.3.md`
+(파일명이 `v0.1.0`→`v0.1.1`(Phase 08_05)→`v0.1.2`(Phase 08_07)→`v0.1.3`(Phase 08_08)로 바뀌어
+왔다 — 아직 실제 공개 Release는 한 적이 없다)가 Phase 8에서 새로 생겼다. `Phase 8` 커밋을
+push한 뒤 첫 GitHub Actions Windows CI 실행(run #1)은 테스트 2건의 timing 문제로 FAIL했었지만,
+Phase 08_01이 결정적으로 고쳤고 **그 뒤 GitHub Actions run #2가 Build & Test (Release) /
+self-contained single-file publish artifact job 모두 실제로 GREEN임을 확인했다**(당시는 아직
+single-file이었다). 그 뒤 Phase 08_02(문서 정리)/08_03(UI 폴리싱)/08_04(footer 레이아웃)/
+08_05(버전 `0.1.0`→`0.1.1`)/08_06(문서 재정리)을 거쳐, **Phase 08_07**에서 최종 배포 형태를
+폴더형으로 바꾸고(버전 `0.1.1`→`0.1.2`) `scripts/publish-release.ps1`을 그 기준으로 다시 썼다.
+이번 **Phase 08_08**에서는 그 전환이 GitHub Actions workflow와 `CLAUDE.md`/README/이 문서에
+아직 반영되지 않은 부분(옛 single-file CI job, `CLAUDE.md` §38의 "단일 exe" 서술)을 찾아
+폴더형으로 정리하고 버전을 `0.1.2`→`0.1.3`으로 bump했다. **`v0.1.3` Release 준비가 완료된
+상태다** — 실제 `v0.1.3` Tag/GitHub Release 생성, ZIP+SHA256SUMS 업로드는 여전히 사용자가 직접
 진행한다(이 문서를 다루는 세션은 명시적 요청 없이 Tag/Release/Push를 만들지 않는다). **다음
 세션이 이어받으면 먼저 확인할 것**:
 
-- Release 자체를 진행하는 세션이라면: (1) 사용자가 직접 `v0.1.1` Tag를 만들고, (2) GitHub
-  Release를 생성하며, (3) `artifacts/release/`의 ZIP(`CodexBackupManager-v0.1.1-win-x64.zip`)
-  +`SHA256SUMS.txt`(또는 release script로 새로 만든 산출물)를 업로드한다 — 이 작업들은 사용자가
-  명시적으로 요청할 때만 대신 수행할 것.
+- Release 자체를 진행하는 세션이라면: (1) 사용자가 직접 `v0.1.3` Tag를 만들고, (2) GitHub
+  Release를 생성하며, (3) `artifacts/release/`의 `CodexBackupManager-v0.1.3-win-x64\` 폴더 +
+  ZIP(`CodexBackupManager-v0.1.3-win-x64.zip`) + `SHA256SUMS.txt`(또는 release script로 새로
+  만든 산출물)를 업로드한다 — 이 작업들은 사용자가 명시적으로 요청할 때만 대신 수행할 것. **이전
+  버전(0.1.1/0.1.2)의 산출물을 재사용하지 말 것** — ProductVersion에 커밋 metadata가 박혀 있어
+  최신 코드 기준으로 다시 만들어야 한다.
 - `docs/project-status-and-handoff.md` §4 항목 23(알려진 한계, Phase 8)과
   `docs/safe-restore-phase7.md` §12.7(Phase 07_03 시점 한계, Phase 8이 바꾸지 않음)을 먼저 읽는다.
   특히 정직하게 남은 항목들: **.NET 미설치 clean Windows 환경 실기 검증 미수행**(Windows
@@ -682,12 +741,16 @@ Actions run #2가 Build & Test (Release) / self-contained single-file publish ar
   실제 원본 `.codex`에 write하지 말 것. Phase 8에서도 실제 발행한 EXE를 실행해 Read-Only 탐지까지
   했고, 매번 `Get-FileHash`로 원본 4개 파일(`state_5.sqlite`/`session_index.jsonl`/
   `.codex-global-state.json`/`config.toml`)의 불변을 재확인해 왔다 — 이 습관을 계속 유지할 것.
-- 실제 self-contained/single-file publish는 `-p:SelfContained=true -p:PublishSingleFile=true
-  -p:IncludeNativeLibrariesForSelfExtract=true -p:CbmReleasePublish=true`(마지막 것은 이
-  프로젝트만의 커스텀 속성 — PDB 억제용, `Directory.Build.props` 참고)로 확정했다.
-  `scripts/publish-release.ps1`을 실제로 실행해 재현성을 확인했다 — 새로 publish 관련 설정을
-  바꿀 일이 있으면 이 스크립트와 `Directory.Build.props`/`CodexBackupManager.App.csproj`를 같이
-  본다.
+- 실제 배포 형태는 **Phase 08_07부터 self-contained 폴더형**이다(단일 exe 아님) —
+  `-p:SelfContained=true -p:PublishSingleFile=false -p:PublishTrimmed=false
+  -p:CbmReleasePublish=true`(마지막 것은 이 프로젝트만의 커스텀 속성 — PDB 억제용,
+  `Directory.Build.props` 참고)로 확정했다. `IncludeNativeLibrariesForSelfExtract`는 single-file
+  전용 옵션이라 더 이상 쓰지 않는다. `scripts/publish-release.ps1`이 이 옵션들의 **유일한
+  기준**이다 — CI(`package-release` job, Phase 08_08)도 별도로 옵션을 하드코딩하지 않고 이
+  스크립트(`-SkipTests`)를 그대로 호출한다. 새로 publish 관련 설정을 바꿀 일이 있으면 이
+  스크립트와 `Directory.Build.props`/`CodexBackupManager.App.csproj`/
+  `.github/workflows/windows-ci.yml`을 같이 본다 — 셋 중 하나만 고치면 다시 어긋난다(Phase
+  08_08이 고친 문제가 바로 이것이었다).
 - `manifest.attachments[]`와 `BackupConversationMetadata`의 원본 38컬럼 필드가 여전히 Restore가
   쓸 수 있는 유일한 재료다 — `resolvedTitle` 같은 가공값을 원본 대신 쓰지 말 것.
 - `docs/codexbackup-format-v1.md`가 Backup V1의 정식 스펙이다(FROZEN) — `CLAUDE.md` §11~13은 이제 이

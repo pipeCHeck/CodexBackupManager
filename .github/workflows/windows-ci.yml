@@ -33,10 +33,15 @@ jobs:
       - name: dotnet test (Release)
         run: dotnet test CodexBackupManager.sln -c Release --no-build --logger "console;verbosity=normal"
 
-  # Phase 8 — 실제 배포 형태(self-contained/single-file)가 CI에서도 문제없이 만들어지는지 확인하는
-  # 별도 job. 이 job은 GitHub Release/Tag를 만들지 않는다 — 결과물을 워크플로 아티팩트로만 남긴다.
-  publish-artifact:
-    name: Publish self-contained single-file (win-x64)
+  # Phase 08_07/08_08 — 실제 배포 형태(self-contained **폴더형**, Phase 08_07부터 single-file이
+  # 아니다)가 CI에서도 문제없이 만들어지는지 확인하는 별도 job. 이 job은 GitHub Release/Tag를
+  # 만들지 않는다 — 결과물을 워크플로 아티팩트로만 남긴다. dotnet publish 옵션을 이 workflow에
+  # 직접 하드코딩하지 않고 scripts/publish-release.ps1(배포 규격의 single source of truth)을
+  # 그대로 호출한다 — 두 곳이 서로 다른 옵션으로 어긋나는 일을 막기 위함이다. -SkipTests는 직전
+  # build-and-test job이 이미 전체 솔루션 Release 테스트를 통과한 뒤에만 실행되므로(needs) 이
+  # job에서만 허용한다 — 로컬에서 최종 release를 만들 때는 -SkipTests 없이 실행해야 한다.
+  package-release:
+    name: Package self-contained folder (win-x64)
     needs: build-and-test
     runs-on: windows-latest
     steps:
@@ -48,20 +53,16 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: dotnet publish (self-contained, single-file)
-        run: >-
-          dotnet publish src/CodexBackupManager.App/CodexBackupManager.App.csproj
-          -c Release -r win-x64
-          -p:SelfContained=true
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:CbmReleasePublish=true
-          -o artifacts/ci-publish
+      - name: Run scripts/publish-release.ps1 (-SkipTests)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1 -SkipTests
 
-      - name: Upload published EXE as workflow artifact
+      - name: Upload release ZIP + SHA256SUMS as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: CodexBackupManager-win-x64
-          path: artifacts/ci-publish/CodexBackupManager.exe
+          path: |
+            artifacts/release/*.zip
+            artifacts/release/SHA256SUMS.txt
           retention-days: 14
           if-no-files-found: error

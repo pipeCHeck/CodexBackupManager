@@ -974,7 +974,7 @@ V1은 다음 시나리오가 성공하면 완성으로 본다.
 |---|---|
 | 언어 / 런타임 | **C# / .NET 10 (LTS)** — 라이브러리 `net10.0`, WPF `net10.0-windows` |
 | UI | **WPF (MVVM)**. 외부 MVVM 프레임워크 없음 |
-| 배포 | `win-x64` 단일 exe (`dotnet publish -r win-x64 --self-contained /p:PublishSingleFile=true`) |
+| 배포 | `win-x64` self-contained **폴더형**(단일 exe 아님, Phase 08_07부터 확정 — `dotnet publish -r win-x64 --self-contained /p:PublishSingleFile=false /p:PublishTrimmed=false`). exe + 앱 DLL + .NET 런타임 + native dependency(SQLite 등)가 한 폴더에 그대로 있고, 대상 PC에 .NET Runtime을 별도로 설치할 필요가 없다. 폴더 전체를 프로그램 단위로 취급한다 — exe만 따로 빼서 옮기지 않는다. |
 | SQLite | `Microsoft.Data.Sqlite` — `Mode=ReadOnly`, `Pooling=False` |
 | JSON | `System.Text.Json` (`Utf8JsonReader` 스트리밍) |
 | ZIP / SHA-256 | BCL (`System.IO.Compression`, `System.Security.Cryptography`) |
