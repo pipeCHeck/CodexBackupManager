@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Phase 8 — v0.1.0 Windows 배포물을 재현 가능하게 만든다.
+    Phase 8 — Windows 배포물을 재현 가능하게 만든다.
 
 .DESCRIPTION
     다음을 순서대로 수행한다.
@@ -21,7 +21,11 @@
     합성/temp Codex Home에서만 일어난다(dotnet test 4단계가 그 테스트들을 실행한다).
 
 .PARAMETER Version
-    배포 버전 문자열(파일 이름에 쓴다). 기본값은 Directory.Build.props의 Version과 맞춘 "0.1.0".
+    배포 버전 문자열(파일 이름에 쓴다). 기본값(생략 시)은 Directory.Build.props의 <Version>을
+    자동으로 읽어 쓴다 — 버전의 single source of truth는 Directory.Build.props이고, 이 스크립트가
+    별도 하드코딩 값을 갖지 않게 하기 위함이다. 명시적으로 넘기면 그 값으로 override한다(단, 실제
+    빌드 결과물의 AssemblyVersion과 다르면 6단계 감사에서 실패한다 — 버전 불일치를 조용히 지나치지
+    않기 위함).
 
 .PARAMETER SkipTests
     4단계(dotnet test)를 건너뛴다. 빠른 반복 작업용 — 실제 릴리스 산출물을 만들 때는 쓰지 말 것.
@@ -33,7 +37,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.1.0',
+    [string]$Version,
     [switch]$SkipTests
 )
 
@@ -44,8 +48,7 @@ $publishDir = Join-Path $repoRoot 'artifacts\publish'
 $releaseDir = Join-Path $repoRoot 'artifacts\release'
 $stageDir = Join-Path $repoRoot 'artifacts\stage'
 $appProject = Join-Path $repoRoot 'src\CodexBackupManager.App\CodexBackupManager.App.csproj'
-$zipName = "CodexBackupManager-v$Version-$rid.zip"
-$zipPath = Join-Path $releaseDir $zipName
+$propsPath = Join-Path $repoRoot 'Directory.Build.props'
 
 function Write-Section($title) {
     Write-Host ''
@@ -54,8 +57,27 @@ function Write-Section($title) {
     Write-Host ('=' * 72) -ForegroundColor DarkGray
 }
 
+# Directory.Build.props가 버전의 single source of truth다 — 이 스크립트가 별도로 버전을
+# 하드코딩하면(예: 예전 '0.1.0' 기본값) 실제 프로젝트 버전을 올렸을 때 파일 이름만 예전 버전으로
+# 남는 문제가 생긴다. -Version을 명시하지 않으면 항상 여기서 읽는다.
+function Get-ProjectVersion([string]$PropsPath) {
+    [xml]$props = Get-Content -LiteralPath $PropsPath -Raw
+    $versionNode = $props.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    if (-not $versionNode) {
+        throw "Directory.Build.props에서 <Version>을 찾지 못했습니다: $PropsPath"
+    }
+    return $versionNode.Trim()
+}
+
+if (-not $PSBoundParameters.ContainsKey('Version')) {
+    $Version = Get-ProjectVersion -PropsPath $propsPath
+}
+$zipName = "CodexBackupManager-v$Version-$rid.zip"
+$zipPath = Join-Path $releaseDir $zipName
+
 Push-Location $repoRoot
 try {
+    Write-Host "  버전: $Version" -ForegroundColor Cyan
     # ────────────────────────────────────────────────────────── 1. clean
     Write-Section '1. clean release output'
     foreach ($dir in @($publishDir, $releaseDir, $stageDir)) {
@@ -105,6 +127,16 @@ try {
     if (-not (Test-Path -LiteralPath $exePath)) {
         throw "CodexBackupManager.exe가 publish 결과물에 없습니다: $publishDir"
     }
+
+    # 파일 이름(ZIP)에 쓰는 $Version과 실제로 빌드된 exe의 FileVersion이 어긋나면(예: -Version을
+    # Directory.Build.props와 다르게 override했거나, props를 고치고 재빌드를 깜빡한 경우) 조용히
+    # 잘못된 이름의 ZIP을 만들지 않고 여기서 바로 실패시킨다.
+    $builtFileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exePath).FileVersion
+    $builtShortVersion = ([System.Version]$builtFileVersion).ToString(3)
+    if ($builtShortVersion -ne $Version) {
+        throw "버전 불일치: ZIP 이름에 쓸 버전은 '$Version'인데, 실제 빌드된 exe의 FileVersion은 '$builtFileVersion'(단축: '$builtShortVersion')입니다. Directory.Build.props와 -Version 인자를 확인하세요."
+    }
+    Write-Host "  [OK] 버전 일치 확인 (exe FileVersion: $builtFileVersion)" -ForegroundColor Green
 
     $unexpected = $publishedFiles | Where-Object { $_.Name -ne 'CodexBackupManager.exe' }
     if ($unexpected) {

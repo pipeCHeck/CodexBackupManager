@@ -1,6 +1,6 @@
-# Codex Backup Manager 0.1.0
+# Codex Backup Manager 0.1.1
 
-첫 공개 배포(v0.1.0) 릴리스 노트입니다. 이 문서는 GitHub Release 본문으로 그대로 쓸 수 있도록
+첫 공개 배포(v0.1.1) 릴리스 노트입니다. 이 문서는 GitHub Release 본문으로 그대로 쓸 수 있도록
 작성했습니다 — 실제 Tag/Release 업로드는 사용자가 이 작업 트리를 검토·커밋한 뒤 직접 진행합니다.
 
 ## 이게 무엇인가요
@@ -43,7 +43,7 @@ OpenAI Codex(CLI/Desktop)의 로컬 프로젝트·대화 데이터를 조회하�
   (정전, 강제 종료 등) 다음 실행이 "완료되지 못한 이전 작업"을 감지해 사용자에게 복구를
   안내합니다 — 사용자 모르게 자동으로 덮어쓰지 않습니다.
 - 지원하지 않는(안전을 증명할 수 없는) 대화는 적용 자체를 전체 차단합니다: 서로 다른 두 PC에서
-  각각 앞서간 대화(Diverged)의 자동 병합, 압축 rollout(`.jsonl.zst`)의 갱신 등은 v0.1.0에서
+  각각 앞서간 대화(Diverged)의 자동 병합, 압축 rollout(`.jsonl.zst`)의 갱신 등은 v0.1.1에서
   지원하지 않습니다.
 - 같은 프로그램을 두 번 실행해도 같은 Codex Home에 동시에 적용을 시도할 수 없습니다(프로세스 간
   잠금).
@@ -88,7 +88,7 @@ OpenAI Codex(CLI/Desktop)의 로컬 프로젝트·대화 데이터를 조회하�
 배포 ZIP과 같은 폴더의 `SHA256SUMS.txt`에 해시가 있습니다. PowerShell에서 다음처럼 비교하세요.
 
 ```powershell
-Get-FileHash .\CodexBackupManager-v0.1.0-win-x64.zip -Algorithm SHA256
+Get-FileHash .\CodexBackupManager-v0.1.1-win-x64.zip -Algorithm SHA256
 ```
 
 출력된 해시가 `SHA256SUMS.txt`에 적힌 값과 정확히 같아야 합니다.
