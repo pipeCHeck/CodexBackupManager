@@ -243,7 +243,8 @@ public static class ImportPlanPreflightValidator
 
     private static Result? CheckLinkTargetFolder(ImportPlanProject project)
     {
-        if (project.ResolvedTarget is not { Kind: ProjectTargetKind.LinkExisting, FolderPath: { } folder } ||
+        // Phase 9_5 — 새 프로젝트 루트로 쓸 폴더도 지금 있어야 한다(없는 폴더로 프로젝트를 만들지 않는다).
+        if (project.ResolvedTarget is not { Kind: ProjectTargetKind.LinkExisting or ProjectTargetKind.CreateNew, FolderPath: { } folder } ||
             Directory.Exists(folder))
         {
             return null;

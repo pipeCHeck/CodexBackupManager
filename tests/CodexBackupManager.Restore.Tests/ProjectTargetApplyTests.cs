@@ -14,6 +14,7 @@ using CodexBackupManager.Domain.Codex.Sessions;
 using CodexBackupManager.Domain.Codex.Threads;
 using CodexBackupManager.Domain.Codex.Titles;
 using CodexBackupManager.Restore.Tests.TestSupport;
+using CodexBackupManager.Domain.Paths;
 using Xunit;
 
 namespace CodexBackupManager.Restore.Tests;
@@ -201,7 +202,7 @@ public sealed class ProjectTargetApplyTests : IDisposable
     // ── 9_1-T4 (결함 B) 미등록 폴더 ───────────────────────────────────────────
 
     [Fact]
-    public void T4_미등록_폴더를_수동_지정하면_기타_대화로_들어가고_cwd는_원본이다()
+    public void T4_미등록_폴더를_수동_지정해도_선택_없는_이전_방식_Plan은_기타_대화로_들어가고_cwd는_원본이다()
     {
         string folder = NewFolder("unregistered");
         string threadId = NewId();
@@ -209,7 +210,9 @@ public sealed class ProjectTargetApplyTests : IDisposable
 
         ImportPreview preview = ImportPreviewBuilder.ApplyManualProjectPathOverride(Preview(backupPath), SourceProjectId, folder);
         Assert.Equal(ProjectTargetReason.UserSelectedUnregistered, TargetOf(preview).Reason);
+        Assert.Equal(ProjectTargetKind.CreateNew, TargetOf(preview).Kind); // 9_5: 미리보기 제안은 새 프로젝트
         Assert.Equal(ProjectPathMappingStatus.ManuallyLinked, Assert.Single(preview.Projects).PathMapping.Status);
+        // 설계 §8-9: 선택 없는 이전 방식 Plan은 0.1.3과 같다(새 프로젝트를 만들지 않는다).
         RestoreResult result = Apply(Plan(preview, backupPath));
 
         AssertSucceeded(result);
@@ -244,7 +247,7 @@ public sealed class ProjectTargetApplyTests : IDisposable
     }
 
     [Fact]
-    public void T5b_레거시_전용_프로젝트_폴더로_지정해도_외래키_위반_없이_기타_대화로_들어간다()
+    public void T5b_레거시_전용_프로젝트_폴더로_지정해도_이전_방식_Plan은_외래키_위반_없이_기타_대화로_들어간다()
     {
         string folder = NewFolder("legacy-only");
         string localThread = NewId();
@@ -257,7 +260,7 @@ public sealed class ProjectTargetApplyTests : IDisposable
         string threadId = NewId();
         string backupPath = ExportProjectConversation(threadId, MissingFolder("orig"));
         ImportPreview preview = ImportPreviewBuilder.ApplyManualProjectPathOverride(Preview(backupPath), SourceProjectId, folder);
-        Assert.Equal(ProjectTargetKind.Uncategorized, TargetOf(preview).Kind);
+        Assert.Equal(ProjectTargetKind.CreateNew, TargetOf(preview).Kind); // 9_5: 레거시 전용은 새 프로젝트 제안
         Assert.Equal(ProjectTargetReason.LegacyOnlyProject, TargetOf(preview).Reason);
         RestoreResult result = Apply(Plan(preview, backupPath));
 
@@ -324,14 +327,16 @@ public sealed class ProjectTargetApplyTests : IDisposable
     // ── 9_1-T4 원본 폴더 실존·미등록 / 원본 없음 (Apply까지) ──────────────────────
 
     [Fact]
-    public void T4_원본_폴더가_실존하지만_미등록이면_기타_대화로_들어간다()
+    public void T4_원본_폴더가_실존하지만_미등록이면_새_프로젝트_제안이고_이전_방식_Plan은_기타_대화로_들어간다()
     {
         string root = NewFolder("orig-unregistered");
         string threadId = NewId();
         string backupPath = ExportProjectConversation(threadId, root);
 
         ImportPreview preview = Preview(backupPath);
-        Assert.Equal(ProjectTarget.Uncategorized(ProjectTargetReason.OriginalRootExistsUnregistered, root), TargetOf(preview));
+        Assert.Equal(
+            ProjectTarget.Create(ProjectTargetReason.OriginalRootExistsUnregistered, CanonicalPath.Create(root).Display, Path.GetFileName(root)),
+            TargetOf(preview));
         Assert.Equal(ProjectPathMappingStatus.NotFound, Assert.Single(preview.Projects).PathMapping.Status);
         RestoreResult result = Apply(Plan(preview, backupPath));
 

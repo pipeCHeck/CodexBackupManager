@@ -23,6 +23,155 @@ namespace CodexBackupManager.Restore;
 /// </remarks>
 public static class StateDatabaseWriter
 {
+    /// <summary>(Phase 9_5-02) <see cref="CreateProject"/> 결과.</summary>
+    /// <param name="ProjectId">실제로 쓴(또는 재사용한) <c>projects.id</c>.</param>
+    /// <param name="Reused">같은 idempotency key로 이미 만든 프로젝트를 재사용했는지(이때는 키를 다시 쓰지 않는다).</param>
+    public sealed record ProjectCreateResult(string ProjectId, bool Reused);
+
+    /// <summary>
+    /// (Phase 9_5-02) 새 Codex 프로젝트를 만든다. 공식 <c>codex-rs/state</c> <c>create_project</c>와 같은 순서 중 thread INSERT 전 단계다
+    /// (호출자가 이어서 thread INSERT → <see cref="RecordProjectIdempotencyKey"/> → 커밋한다). 같은 트랜잭션 안에서만 동작한다.
+    /// </summary>
+    /// <remarks>
+    /// <list type="number">
+    ///   <item><c>project_idempotency_keys</c>에서 키를 찾는다. 있으면 그 프로젝트 행과 루트가 실제로 있고 canonical 루트가 같을 때만
+    ///     재사용한다. 아니면 예외(→ Rollback).</item>
+    ///   <item>없으면 <c>project_roots</c> 전체를 읽어 canonical로 같은 루트가 이미 있는지 다시 확인한다. 있으면 예외(중복 생성 금지).</item>
+    ///   <item><c>INSERT INTO projects</c>(metadata <c>'{}'</c>, position = <c>COALESCE(MAX(position), -1) + 1</c>, created = updated = 지금 ms).</item>
+    ///   <item><c>INSERT INTO project_roots</c>(position 0).</item>
+    /// </list>
+    /// 스키마 게이트(<see cref="SchemaCompatibilityChecker.CheckProjectCreation"/>)는 호출자가 먼저 확인한다.
+    /// </remarks>
+    public static ProjectCreateResult CreateProject(
+        SqliteConnection connection, SqliteTransaction transaction, PlannedProjectCreate create, long nowMs)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(create);
+        if (string.IsNullOrWhiteSpace(create.Name) || !string.Equals(create.Name, create.Name.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("새 프로젝트 이름이 비었거나 앞뒤 공백이 있습니다(계획 단계에서 걸러졌어야 합니다).");
+        }
+
+        if (!CodexBackupManager.Domain.Paths.CanonicalPath.TryCreate(create.RootPathDisplay, out var root, out _) ||
+            !CodexBackupManager.Backup.Import.ProjectTargetResolver.IsAbsolute(root!))
+        {
+            throw new InvalidOperationException("새 프로젝트 루트가 절대 경로가 아닙니다.");
+        }
+
+        // 1) 멱등성 키.
+        string? existingId;
+        using (SqliteCommand find = connection.CreateCommand())
+        {
+            find.Transaction = transaction;
+            find.CommandText = "SELECT project_id FROM project_idempotency_keys WHERE key = $key";
+            find.Parameters.AddWithValue("$key", create.IdempotencyKey);
+            existingId = find.ExecuteScalar() as string;
+        }
+
+        if (existingId is not null)
+        {
+            bool projectExists;
+            using (SqliteCommand project = connection.CreateCommand())
+            {
+                project.Transaction = transaction;
+                project.CommandText = "SELECT COUNT(*) FROM projects WHERE id = $id";
+                project.Parameters.AddWithValue("$id", existingId);
+                projectExists = Convert.ToInt64(project.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) == 1;
+            }
+
+            bool rootMatches = ReadRootPaths(connection, transaction, existingId).Exists(path =>
+                CodexBackupManager.Domain.Paths.CanonicalPath.TryCreate(path, out var existingRoot, out _) && existingRoot!.Equals(root));
+            if (!projectExists || !rootMatches)
+            {
+                throw new InvalidOperationException("같은 멱등성 키의 프로젝트가 없거나 루트가 다릅니다.");
+            }
+
+            return new ProjectCreateResult(existingId, Reused: true);
+        }
+
+        // 2) 트랜잭션 안에서 루트 충돌 재확인(canonical 비교 — 대소문자/\\?\ 접두사/끝 구분자 차이를 같은 루트로 본다).
+        foreach (string path in ReadRootPaths(connection, transaction, projectId: null))
+        {
+            if (CodexBackupManager.Domain.Paths.CanonicalPath.TryCreate(path, out var existingRoot, out _) && existingRoot!.Equals(root))
+            {
+                throw new InvalidOperationException("같은 루트의 프로젝트가 이미 있어 새로 만들지 않습니다.");
+            }
+        }
+
+        // 3) projects.
+        using (SqliteCommand insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO projects (id, name, metadata, position, created_at_ms, updated_at_ms)
+                VALUES ($id, $name, '{}', (SELECT COALESCE(MAX(position), -1) + 1 FROM projects), $now, $now)
+                """;
+            insert.Parameters.AddWithValue("$id", create.NewProjectId);
+            insert.Parameters.AddWithValue("$name", create.Name);
+            insert.Parameters.AddWithValue("$now", nowMs);
+            insert.ExecuteNonQuery();
+        }
+
+        // 4) project_roots(position 0).
+        using (SqliteCommand insertRoot = connection.CreateCommand())
+        {
+            insertRoot.Transaction = transaction;
+            insertRoot.CommandText = "INSERT INTO project_roots (project_id, position, path) VALUES ($id, 0, $path)";
+            insertRoot.Parameters.AddWithValue("$id", create.NewProjectId);
+            insertRoot.Parameters.AddWithValue("$path", create.RootPathDisplay);
+            insertRoot.ExecuteNonQuery();
+        }
+
+        return new ProjectCreateResult(create.NewProjectId, Reused: false);
+    }
+
+    /// <summary>
+    /// (Phase 9_5-02) 공식 순서의 마지막 단계: 새로 만든 프로젝트의 idempotency key를 기록한다(thread INSERT 뒤, 커밋 전).
+    /// 재사용한 프로젝트(<see cref="ProjectCreateResult.Reused"/>)에는 부르지 않는다.
+    /// </summary>
+    public static void RecordProjectIdempotencyKey(
+        SqliteConnection connection, SqliteTransaction transaction, PlannedProjectCreate create, string projectId, long nowMs)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(create);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "INSERT INTO project_idempotency_keys (key, project_id, created_at_ms) VALUES ($key, $id, $now)";
+        cmd.Parameters.AddWithValue("$key", create.IdempotencyKey);
+        cmd.Parameters.AddWithValue("$id", projectId);
+        cmd.Parameters.AddWithValue("$now", nowMs);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static List<string> ReadRootPaths(SqliteConnection connection, SqliteTransaction transaction, string? projectId)
+    {
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = projectId is null
+            ? "SELECT path FROM project_roots"
+            : "SELECT path FROM project_roots WHERE project_id = $id";
+        if (projectId is not null)
+        {
+            cmd.Parameters.AddWithValue("$id", projectId);
+        }
+
+        var paths = new List<string>();
+        using SqliteDataReader reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (!reader.IsDBNull(0))
+            {
+                paths.Add(reader.GetString(0));
+            }
+        }
+
+        return paths;
+    }
+
     /// <summary>New thread 하나를 INSERT한다.</summary>
     public static void InsertThread(SqliteConnection connection, SqliteTransaction transaction, PlannedThreadInsert insert)
     {

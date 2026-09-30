@@ -228,8 +228,51 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
 
     /// <summary>작업 폴더 상태 문구(ProjectTarget.Reason 기준).</summary>
     public string TargetStatusText => _project is { } p
-        ? ImportTexts.TargetStatus(p.Target, _owner.LocalProjects, p.Preview.PathMapping.OriginalRootPaths)
+        ? ImportTexts.TargetStatus(p.Target, _owner.LocalProjects, p.Preview.PathMapping.OriginalRootPaths, IsCreationDeclined)
         : "선택한 대화에 필요한 원본 대화입니다. 기타 대화로 함께 들어갑니다.";
+
+    /// <summary>(Phase 9_5-05) 목적지가 새 프로젝트 만들기인지(이름 칸을 보여준다).</summary>
+    public bool IsCreatingProject => Target?.Kind == ProjectTargetKind.CreateNew;
+
+    /// <summary>
+    /// (Phase 9_5-05) 이 폴더로 새 프로젝트를 만들 수 있는 상태인지(지금 만들기로 되어 있거나, 사용자가 "만들지 않기"를 골랐거나).
+    /// "새 프로젝트를 만들지 않고 기타 대화로 가져오기" 선택을 보여준다.
+    /// </summary>
+    public bool IsCreationOffered => _project is { } p && _owner.IsCreationOffered(p.ProjectKey);
+
+    /// <summary>(Phase 9_5-05) 사용자가 "새 프로젝트를 만들지 않고 기타 대화로"를 골랐는지.</summary>
+    public bool IsCreationDeclined => _project is { } p && !_owner.DecisionFor(p.ProjectKey).CreateProject && IsCreationOffered;
+
+    /// <summary>"새 프로젝트를 만들지 않고 기타 대화로 가져오기" 체크(양방향).</summary>
+    public bool DeclineCreation
+    {
+        get => IsCreationDeclined;
+        set
+        {
+            if (_project is { } p && value != IsCreationDeclined)
+            {
+                _owner.SetCreateProject(p.ProjectKey, !value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// (Phase 9_5-05) 새 프로젝트 이름 칸(양방향). 입력 중인 값(빈 값 포함)을 그대로 보여주고, 입력이 없으면 기본값(폴더 이름)이다.
+    /// 빈 이름은 <see cref="DecisionError"/>로 드러나고 가져오기가 꺼진다.
+    /// </summary>
+    public string NewProjectName
+    {
+        get => _project is { } p
+            ? _owner.DecisionFor(p.ProjectKey).NewProjectName ?? Target?.NewProjectName ?? string.Empty
+            : string.Empty;
+        set
+        {
+            if (_project is { } p && !string.Equals(value, NewProjectName, StringComparison.Ordinal))
+            {
+                _owner.SetNewProjectName(p.ProjectKey, value ?? string.Empty);
+            }
+        }
+    }
 
     /// <summary>등록 프로젝트에 연결되는지(초록 표시).</summary>
     public bool IsLinked => Target is { } t && ImportTexts.IsLinked(t);
@@ -237,17 +280,26 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
     /// <summary>결정 오류(예: 없는 폴더). 없으면 <c>null</c>.</summary>
     public string? DecisionError => _project?.Resolution.Error;
 
-    /// <summary>작업 폴더를 바꿀 수 있는 프로젝트인지("기타 대화" 그룹과 조상 그룹은 불가).</summary>
-    public bool IsFolderEditable => _project is { } p && p.Preview.PathMapping.CanManuallyOverride;
+    /// <summary>
+    /// 작업 폴더를 바꿀 수 있는 프로젝트인지. 조상 그룹만 불가다(Phase 9_5-05 — 백업의 "기타 대화" 그룹에도 폴더를 지정할 수 있다).
+    /// </summary>
+    public bool IsFolderEditable => _project is not null;
 
     /// <summary>사용자가 폴더를 직접 골랐는지([원래대로] 표시).</summary>
     public bool IsFolderUserSelected => _project is { } p && _owner.IsFolderDecision(p.ProjectKey);
 
     /// <summary>폴더 버튼 문구([폴더 선택…] / [다른 폴더…]).</summary>
-    public string ChooseFolderText => Target?.Reason == ProjectTargetReason.OriginalRootMissing ? "폴더 선택…" : "다른 폴더…";
+    public string ChooseFolderText => Target?.Reason is ProjectTargetReason.OriginalRootMissing or ProjectTargetReason.NotApplicable
+        ? "폴더 선택…"
+        : "다른 폴더…";
 
-    /// <summary>[새로고침] 안내가 필요한 상태인지(미등록 폴더).</summary>
-    public bool ShowRefreshHint => Target?.Reason is ProjectTargetReason.UserSelectedUnregistered or ProjectTargetReason.OriginalRootExistsUnregistered;
+    /// <summary>
+    /// [새로고침] 안내가 필요한 상태인지: 미등록 폴더인데 새 프로젝트를 만들 수 없을 때만(기능 스위치 꺼짐, 9_2까지의 A안).
+    /// 새 프로젝트를 만들 수 있으면(또는 사용자가 만들지 않기로 골랐으면) 보여주지 않는다.
+    /// </summary>
+    public bool ShowRefreshHint => Target is { Kind: ProjectTargetKind.Uncategorized } t &&
+                                   t.Reason is ProjectTargetReason.UserSelectedUnregistered or ProjectTargetReason.OriginalRootExistsUnregistered &&
+                                   !IsCreationOffered;
 
     private bool CanChangeFolder => IsFolderEditable && _owner.CanEditSelection;
 

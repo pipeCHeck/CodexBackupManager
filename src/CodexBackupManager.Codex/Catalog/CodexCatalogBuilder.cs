@@ -137,6 +137,7 @@ public static class CodexCatalogBuilder
         // Phase 9_1-11 — 비정상 데이터로 프로젝트 목록을 만들지 못해도 카탈로그 전체는 실패시키지 않는다.
         // 충돌 항목은 Builder가 제외하고 경고를 남긴다. 그래도 실패하면(예상 밖) 빈 목록 + 경고다.
         ProjectDirectory projectDirectory;
+        bool directoryBuilt = true;
         try
         {
             projectDirectory = ProjectDirectoryBuilder.Build(
@@ -146,7 +147,18 @@ public static class CodexCatalogBuilder
         catch (ArgumentException)
         {
             projectDirectory = ProjectDirectory.Empty;
+            directoryBuilt = false;
             warnings.Add("프로젝트 목록을 만들 수 없어 프로젝트 연결 정보 없이 계속합니다.");
+        }
+
+        // Phase 9_5-03 — 새 프로젝트를 만들 수 있는 스키마인지(읽기 전용 PRAGMA). 목록을 만들지 못했으면(위 경고) 만들지 않는다.
+        if (directoryBuilt)
+        {
+            ProjectCreationSchemaGate.Result gate = ProjectCreationSchemaGate.Check(database);
+            projectDirectory = new ProjectDirectory(projectDirectory.Projects)
+            {
+                ProjectCreation = ProjectCreationSchemaGate.ToSupport(gate),
+            };
         }
 
         List<ProjectEntry> projects = BuildProjectGroups(allConversations, rootCandidates, stateProjectNames, projectGraph, projectDirectory);

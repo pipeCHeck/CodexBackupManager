@@ -59,7 +59,7 @@ public static class ImportPlanBuilder
             string? targetPath = project.PathMapping.ResolvedLocalPath;
             projects.Add(new ImportPlanProject(project.ProjectId, project.DisplayName, project.PathMapping.Status, targetPath)
             {
-                ResolvedTarget = project.SuggestedTarget,
+                ResolvedTarget = WithoutCreation(project.SuggestedTarget),
             });
 
             foreach (ImportConversationPreview conversation in project.Conversations)
@@ -94,7 +94,9 @@ public static class ImportPlanBuilder
     ///     골랐으면 ManuallyLinked, 아니면 Preview의 자동 판정 상태다. <see cref="ImportPlanProject.TargetProjectPath"/>와 대화의
     ///     <see cref="ImportPlanConversation.TargetProjectPath"/>는 LinkExisting이면 연결 루트, 아니면 <c>null</c>이다.</item>
     ///   <item><see cref="ImportPlan.HasBlockingIssues"/>/<see cref="ImportPlan.HasUnresolvedDivergence"/>는 closure 기준이다.</item>
-    ///   <item>결정 오류(예: 아직 지원하지 않는 새 프로젝트 이름, 없는 폴더)가 있으면 Plan을 만들지 않는다(<c>null</c>).</item>
+    ///   <item>결정 오류(예: 빈 새 프로젝트 이름, 없는 폴더)가 있으면 Plan을 만들지 않는다(<c>null</c>).</item>
+    ///   <item>(Phase 9_5) 새 프로젝트 목적지(<see cref="ProjectTargetKind.CreateNew"/>)는 <see cref="ImportPlanProject.ResolvedTarget"/>에 이름과 함께
+    ///     freeze된다. <see cref="ImportPlanProject.TargetProjectPath"/>는 연결 루트 전용이라 <c>null</c>이다. 실제 생성 계획은 Restore Planner가 만든다.</item>
     /// </list>
     /// </remarks>
     public static ImportPlan? Build(
@@ -151,6 +153,15 @@ public static class ImportPlanBuilder
             UserChoices = choices,
         };
     }
+
+    /// <summary>
+    /// (Phase 9_5, 설계 §8-9) 선택 없는 이전 방식 Plan은 0.1.3과 같은 결과여야 한다 — 새 프로젝트 제안은 만들지 않고
+    /// 기타 대화(같은 사유와 폴더)로 둔다. 새 프로젝트는 사용자 선택 Plan에서만 만든다.
+    /// </summary>
+    private static ProjectTarget? WithoutCreation(ProjectTarget? target)
+        => target is { Kind: ProjectTargetKind.CreateNew }
+            ? ProjectTarget.Uncategorized(target.Reason, target.FolderPath)
+            : target;
 
     private static ImportPlanConversation BuildPlanConversation(ImportConversationPreview conversation, string? targetProjectPath)
     {

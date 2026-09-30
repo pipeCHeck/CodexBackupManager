@@ -65,7 +65,8 @@ public sealed class ImportResultViewModel
         switch (result.Outcome)
         {
             case RestoreOutcome.Succeeded:
-                CountsText = $"새로 가져옴 {imported} · 이어받음 {updated} · 건너뜀 {skipped}";
+                CountsText = $"새로 가져옴 {imported} · 이어받음 {updated} · 건너뜀 {skipped}" +
+                             (summary.NewProjects.Count > 0 ? $" · 새 프로젝트 {summary.NewProjects.Count}" : string.Empty);
                 groups.AddRange(BuildSucceededGroups(plan, titles, localProjects));
                 ImportedThreadIds = plan.Conversations
                     .Where(c => c.IsSelected && c.PlannedAction is ImportPlannedAction.Import or ImportPlannedAction.Update)
@@ -122,6 +123,11 @@ public sealed class ImportResultViewModel
     private static IEnumerable<ImportResultGroup> BuildSucceededGroups(
         ImportPlan plan, IReadOnlyDictionary<string, string> titles, ProjectDirectory localProjects)
     {
+        // Phase 9_5-05 — 새로 만든 프로젝트는 합쳐진 이름(같은 루트면 첫 번째)으로 보여준다(Planner와 같은 규칙).
+        IReadOnlyList<NewProjectGroup> created = NewProjectGrouping.Group(plan.Projects
+            .Where(p => p.ResolvedTarget is { Kind: ProjectTargetKind.CreateNew } && plan.UsesProjectTarget(p))
+            .Select(p => (ImportUserChoices.ProjectKeyOf(p.ProjectId), p.ResolvedTarget!)));
+
         foreach (IGrouping<string?, ImportPlanConversation> group in plan.Conversations
                      .Where(c => c.PlannedAction is ImportPlannedAction.Import or ImportPlannedAction.Update)
                      .GroupBy(c => c.TargetProjectKey))
@@ -130,9 +136,12 @@ public sealed class ImportResultViewModel
                 ? null
                 : plan.Projects.FirstOrDefault(p => ImportUserChoices.ProjectKeyOf(p.ProjectId) == group.Key);
             string header = project?.DisplayName ?? "필요한 원본 대화";
-            string destination = project?.ResolvedTarget is { Kind: ProjectTargetKind.LinkExisting } target
-                ? $"→ '{localProjects.FindById(target.LinkDbProjectId)?.DisplayName ?? project.DisplayName}' 프로젝트 ({(target.FolderPath is { } folder ? ImportTexts.DisplayPath(folder) : string.Empty)})"
-                : "→ 기타 대화";
+            NewProjectGroup? newProject = group.Key is { } key ? created.FirstOrDefault(g => g.ProjectKeys.Contains(key)) : null;
+            string destination = newProject is not null
+                ? $"→ 새로 만든 프로젝트 {ImportTexts.NewProjectLabel(newProject)}"
+                : project?.ResolvedTarget is { Kind: ProjectTargetKind.LinkExisting } target
+                    ? $"→ '{localProjects.FindById(target.LinkDbProjectId)?.DisplayName ?? project.DisplayName}' 프로젝트 ({(target.FolderPath is { } folder ? ImportTexts.DisplayPath(folder) : string.Empty)})"
+                    : "→ 기타 대화";
 
             var items = group
                 .Select(c => new ImportResultItem(

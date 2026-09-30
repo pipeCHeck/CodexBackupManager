@@ -107,6 +107,19 @@ public sealed record PlannedThreadMetadataUpdate(
     string? CliVersionIfLocalMissing);
 
 /// <summary>
+/// (Phase 9_5-01) 같은 SQLite 트랜잭션 안에서 thread INSERT보다 먼저 만들 Codex 프로젝트 하나(공식 <c>create_project</c>와 같은 행).
+/// </summary>
+/// <param name="NewProjectId">새 <c>projects.id</c>(UUIDv7, 소문자 하이픈 형식). 같은 idempotency key가 이미 있으면 실행 때 그 프로젝트를 재사용한다.</param>
+/// <param name="Name">프로젝트 이름(앞뒤 공백 제거, 비어 있지 않음).</param>
+/// <param name="RootPathDisplay">루트 0번 경로 = 연결 대화의 <c>cwd</c>. 절대 경로, <c>\\?\</c>와 끝 구분자 없음(공식 <c>validate_roots</c>).</param>
+/// <param name="IdempotencyKey"><c>codex-backup-manager:import:v1:&lt;backup SHA-256&gt;:&lt;canonical 루트의 SHA-256&gt;</c>(소문자 hex, 160자).</param>
+public sealed record PlannedProjectCreate(
+    string NewProjectId,
+    string Name,
+    string RootPathDisplay,
+    string IdempotencyKey);
+
+/// <summary>
 /// frozen <c>ImportPlan</c> + fresh 로컬 상태로부터 계산한, 실제로 실행할 구체적 file/DB 연산
 /// 목록(요구사항 8). <see cref="RestoreOperationPlanner"/>만 이 값을 만든다 — relation/PlannedAction을
 /// 다시 판단하지 않는다.
@@ -123,11 +136,47 @@ public sealed record RestoreOperationPlan(
     IReadOnlyList<PlannedThreadRolloutPathUpdate> ThreadRolloutPathUpdates,
     IReadOnlyList<PlannedThreadMetadataUpdate> ThreadMetadataUpdates)
 {
+    /// <summary>
+    /// (Phase 9_5-01) 새로 만들 프로젝트. 이 프로젝트로 가는 <see cref="ThreadInserts"/>의 <see cref="PlannedThreadInsert.ResolvedProjectId"/>는
+    /// <see cref="PlannedProjectCreate.NewProjectId"/>이고 cwd는 <see cref="PlannedProjectCreate.RootPathDisplay"/>다.
+    /// </summary>
+    public IReadOnlyList<PlannedProjectCreate> ProjectCreates { get; init; } = [];
+
+    /// <summary>SQL 쓰기가 하나라도 있는지(Snapshot 대상 판단용).</summary>
+    public bool HasSqlWrite =>
+        ProjectCreates.Count > 0 || ThreadInserts.Count > 0 || ThreadRolloutPathUpdates.Count > 0 || ThreadMetadataUpdates.Count > 0;
+
     /// <summary>아무 write도 필요 없는(전부 NoOp/Skip인) 계획인지.</summary>
     public bool IsEmpty =>
-        NewRolloutFiles.Count == 0 && RolloutAppends.Count == 0 &&
-        ThreadInserts.Count == 0 && ThreadRolloutPathUpdates.Count == 0 &&
-        ThreadMetadataUpdates.Count == 0;
+        NewRolloutFiles.Count == 0 && RolloutAppends.Count == 0 && !HasSqlWrite;
+
+    /// <summary>
+    /// (Phase 9_5-02) 실행 중 idempotency key로 기존 프로젝트를 재사용했을 때, 계획의 새 ID를 실제로 쓴 ID로 바꾼 계획(사후 검증용).
+    /// </summary>
+    /// <param name="effectiveProjectIds">계획의 <see cref="PlannedProjectCreate.NewProjectId"/> → 실제로 쓴 <c>projects.id</c>.</param>
+    public RestoreOperationPlan WithEffectiveProjectIds(IReadOnlyDictionary<string, string> effectiveProjectIds)
+    {
+        System.ArgumentNullException.ThrowIfNull(effectiveProjectIds);
+        if (effectiveProjectIds.Count == 0)
+        {
+            return this;
+        }
+
+        string Map(string id) => effectiveProjectIds.TryGetValue(id, out string? effective) ? effective : id;
+        var creates = new List<PlannedProjectCreate>(ProjectCreates.Count);
+        foreach (PlannedProjectCreate create in ProjectCreates)
+        {
+            creates.Add(create with { NewProjectId = Map(create.NewProjectId) });
+        }
+
+        var inserts = new List<PlannedThreadInsert>(ThreadInserts.Count);
+        foreach (PlannedThreadInsert insert in ThreadInserts)
+        {
+            inserts.Add(insert.ResolvedProjectId is { } id ? insert with { ResolvedProjectId = Map(id) } : insert);
+        }
+
+        return this with { ThreadInserts = inserts, ProjectCreates = creates };
+    }
 }
 
 /// <summary>

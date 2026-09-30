@@ -24,18 +24,30 @@ namespace CodexBackupManager.Backup.Import;
 ///     <see cref="ProjectTargetReason.LegacyOnlyProject"/>, Ambiguous → Uncategorized / <see cref="ProjectTargetReason.AmbiguousRoot"/>,
 ///     None → Uncategorized / <c>*Unregistered</c>.
 ///   </item>
+///   <item>
+///     (Phase 9_5-01) None과 레거시 전용은 <see cref="ProjectDirectory.ProjectCreation"/>에 따라 바뀐다:
+///     Supported → <see cref="ProjectTargetKind.CreateNew"/>(같은 사유, 이름 기본값 = 폴더 이름),
+///     SchemaUnsupported → Uncategorized / <see cref="ProjectTargetReason.CreationUnsupported"/>,
+///     Disabled → 위와 같은 Uncategorized(9_2까지의 동작). 절대 경로가 아닌 폴더로는 만들지 않는다.
+///   </item>
 /// </list>
-/// <para>9_1에서는 <see cref="ProjectTargetKind.CreateNew"/>를 만들지 않는다. 파일 I/O는 <see cref="Directory.Exists(string?)"/>뿐이다.</para>
+/// <para>파일 I/O는 <see cref="Directory.Exists(string?)"/>뿐이다.</para>
 /// </remarks>
 public static class ProjectTargetResolver
 {
     /// <summary>
-    /// 백업 프로젝트의 목적지를 판정한다. 백업의 "기타 대화" 그룹이나 원본 루트가 없는 그룹은
-    /// <see cref="ProjectTargetReason.NotApplicable"/>이다.
+    /// 백업 프로젝트의 목적지를 판정한다. 백업의 "기타 대화" 그룹이나 원본 루트가 없는 그룹은 사용자가 폴더를 고르지 않았으면
+    /// <see cref="ProjectTargetReason.NotApplicable"/>이다(Phase 9_5 — 폴더를 고르면 그 폴더로 판정한다).
     /// </summary>
     public static ProjectTarget Resolve(BackupProjectMetadata backupProject, string? userSelectedFolder, ProjectDirectory directory)
     {
         ArgumentNullException.ThrowIfNull(backupProject);
+        ArgumentNullException.ThrowIfNull(directory);
+        if (!string.IsNullOrWhiteSpace(userSelectedFolder))
+        {
+            return ResolveFolder(userSelectedFolder, userSelected: true, directory);
+        }
+
         if (backupProject.IsUncategorized || backupProject.OriginalRootPaths.Count == 0)
         {
             return ProjectTarget.Uncategorized(ProjectTargetReason.NotApplicable, null);
@@ -101,14 +113,46 @@ public static class ProjectTargetResolver
                     dbProjectId);
 
             case ProjectLookupKind.Found:
-                return ProjectTarget.Uncategorized(ProjectTargetReason.LegacyOnlyProject, folderPath);
+                return Unlinked(ProjectTargetReason.LegacyOnlyProject, folderPath, canonical!, directory);
 
             case ProjectLookupKind.Ambiguous:
+                // 9_2-22 보류: 어느 프로젝트로 연결할지 모르므로 연결하지도, 새로 만들지도 않는다.
                 return ProjectTarget.Uncategorized(ProjectTargetReason.AmbiguousRoot, folderPath);
 
             default:
-                return ProjectTarget.Uncategorized(unregistered, folderPath);
+                return Unlinked(unregistered, folderPath, canonical!, directory);
         }
+    }
+
+    /// <summary>
+    /// (Phase 9_5-01) 연결할 DB 프로젝트가 없는 폴더. 이 PC가 생성을 지원하면 새 프로젝트(폴더 표기 = canonical Display, 절대 경로만),
+    /// 스키마가 다르면 CreationUnsupported, 스위치가 꺼졌으면 지금까지처럼 기타 대화다.
+    /// </summary>
+    private static ProjectTarget Unlinked(ProjectTargetReason reason, string folderPath, CanonicalPath canonical, ProjectDirectory directory)
+    {
+        switch (directory.ProjectCreation)
+        {
+            case ProjectCreationSupport.Supported when IsAbsolute(canonical):
+                return ProjectTarget.Create(reason, canonical.Display, DefaultProjectName(canonical));
+            case ProjectCreationSupport.SchemaUnsupported:
+                return ProjectTarget.Uncategorized(ProjectTargetReason.CreationUnsupported, folderPath);
+            default:
+                return ProjectTarget.Uncategorized(reason, folderPath);
+        }
+    }
+
+    /// <summary>공식 <c>validate_roots</c>처럼 절대 경로(드라이브 루트 또는 UNC)만 프로젝트 루트로 쓴다.</summary>
+    public static bool IsAbsolute(CanonicalPath path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return path.RootKind is PathRootKind.DriveRooted or PathRootKind.Unc;
+    }
+
+    /// <summary>새 프로젝트 이름 기본값: 폴더 이름(마지막 경로 요소). 드라이브 루트처럼 요소가 없으면 표시 경로 그대로.</summary>
+    public static string DefaultProjectName(CanonicalPath folder)
+    {
+        ArgumentNullException.ThrowIfNull(folder);
+        return folder.Segments.Count > 0 ? folder.Segments[^1] : folder.Display;
     }
 
     private static string? RegisteredRootDisplay(KnownProject project, CanonicalPath canonical)

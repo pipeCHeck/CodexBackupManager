@@ -224,6 +224,37 @@ public static class TestCodexHomeBuilder
         File.WriteAllText(Path.Combine(codexHome, ".codex-global-state.json"), JsonSerializer.Serialize(root));
     }
 
+    /// <summary>(Phase 9_5) state DB에 SQL을 실행해 모든 행을 돌려준다(테스트 확인용).</summary>
+    public static List<object?[]> Query(string codexHome, string sql)
+    {
+        using SqliteConnection connection = OpenReadWrite(codexHome);
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        using SqliteDataReader reader = cmd.ExecuteReader();
+        var rows = new List<object?[]>();
+        while (reader.Read())
+        {
+            var row = new object?[reader.FieldCount];
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    /// <summary>(Phase 9_5) state DB에 SQL을 실행한다(스키마를 일부러 바꾸는 테스트용).</summary>
+    public static void Execute(string codexHome, string sql)
+    {
+        using SqliteConnection connection = OpenReadWrite(codexHome);
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
     private static SqliteConnection OpenReadWrite(string codexHome)
     {
         var builder = new SqliteConnectionStringBuilder { DataSource = FindStateDbPath(codexHome), Mode = SqliteOpenMode.ReadWrite, Pooling = false };

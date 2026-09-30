@@ -274,18 +274,20 @@ public sealed class ImportSelectionTests : IDisposable
     // ── 프로젝트 결정 ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void NewProjectName이_있으면_적용_불가다()
+    public void 새_프로젝트가_아닌_목적지에서는_NewProjectName을_쓰지_않는다()
     {
+        // Phase 9_5-01: NewProjectName은 이제 정상 값이다(9_2까지는 "적용 불가"였다). 목적지가 새 프로젝트가 아니면 무시한다.
         ImportPreview preview = Preview([Project("p", Missing, Conv("n", RevisionRelation.New))]);
         var choices = new ImportUserChoices(
             new HashSet<string> { "n" },
-            new Dictionary<string, ProjectTargetDecision> { ["p"] = new(null, "새 프로젝트", UseSuggestion: false) });
+            new Dictionary<string, ProjectTargetDecision> { ["p"] = new(null, "새 프로젝트", UseSuggestion: true) });
 
         ImportSelectionSummary summary = ImportSelection.Compute(preview, choices);
 
-        Assert.False(summary.CanApply);
-        Assert.Contains(summary.BlockingReasons, r => r.Contains("새 프로젝트"));
-        Assert.Equal(Missing, summary.Projects[0].Target); // 오류면 제안 목적지 그대로
+        Assert.True(summary.CanApply);
+        Assert.Empty(summary.BlockingReasons);
+        Assert.Equal(Missing, summary.Projects[0].Target);
+        Assert.Empty(summary.NewProjects);
     }
 
     [Fact]
@@ -324,7 +326,7 @@ public sealed class ImportSelectionTests : IDisposable
     }
 
     [Fact]
-    public void 없는_폴더나_기타_대화_그룹의_폴더_지정은_결정_오류다()
+    public void 없는_폴더_지정은_결정_오류이고_기타_대화_그룹에는_폴더를_지정할_수_있다()
     {
         ImportProjectPreview project = Project("p", Missing, Conv("n", RevisionRelation.New));
         ImportProjectPreview uncategorized = Project(null, NotApplicable, Conv("u", RevisionRelation.New));
@@ -333,6 +335,10 @@ public sealed class ImportSelectionTests : IDisposable
 
         Assert.NotNull(ImportSelection.ResolveTarget(project, ProjectTargetDecision.Folder(Path.Combine(_root, "nope")), ProjectDirectory.Empty).Error);
         Assert.NotNull(ImportSelection.ResolveTarget(project, new ProjectTargetDecision(null, null, UseSuggestion: false), ProjectDirectory.Empty).Error);
-        Assert.NotNull(ImportSelection.ResolveTarget(uncategorized, ProjectTargetDecision.Folder(existing), ProjectDirectory.Empty).Error);
+        // Phase 9_5-01: 백업의 "기타 대화" 그룹도 폴더를 지정할 수 있다(9_2까지는 결정 오류였다).
+        ProjectTargetResolution toFolder = ImportSelection.ResolveTarget(uncategorized, ProjectTargetDecision.Folder(existing), ProjectDirectory.Empty);
+        Assert.Null(toFolder.Error);
+        Assert.Equal(ProjectTargetReason.UserSelectedUnregistered, toFolder.Target.Reason);
+        Assert.Equal(ProjectPathMappingStatus.ManuallyLinked, toFolder.PathStatus);
     }
 }

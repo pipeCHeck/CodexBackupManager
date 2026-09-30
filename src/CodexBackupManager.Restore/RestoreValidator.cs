@@ -186,7 +186,110 @@ public static class RestoreValidator
             }
         }
 
+        // Phase 9_5-04 — 새로 만든 프로젝트: 행·루트·키가 계획대로 있고, fresh 카탈로그의 프로젝트 목록에 그 ID와 루트로 나타나는지.
+        if (executedPlan.ProjectCreates.Count > 0)
+        {
+            Result? projectResult = ValidateProjectCreates(executedPlan, codexHomePath, catalog);
+            if (projectResult is not null)
+            {
+                return projectResult;
+            }
+        }
+
         return new Result(true, null);
+    }
+
+    private static Result? ValidateProjectCreates(RestoreOperationPlan executedPlan, string codexHomePath, CodexCatalog catalog)
+    {
+        IReadOnlyList<string> stateDbNames = CodexBackupManager.Codex.Locating.CodexHomeLayout.FindStateDatabaseFileNames(codexHomePath);
+        if (stateDbNames.Count == 0)
+        {
+            return new Result(false, "복원 후 state DB를 찾을 수 없습니다.");
+        }
+
+        var builder = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(codexHomePath, stateDbNames[0]),
+            Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+            Pooling = false,
+            Cache = Microsoft.Data.Sqlite.SqliteCacheMode.Private,
+        };
+
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(builder.ConnectionString);
+        connection.Open();
+
+        foreach (PlannedProjectCreate create in executedPlan.ProjectCreates)
+        {
+            string label = Redact(create.NewProjectId);
+
+            using (Microsoft.Data.Sqlite.SqliteCommand project = connection.CreateCommand())
+            {
+                project.CommandText = "SELECT name FROM projects WHERE id = $id";
+                project.Parameters.AddWithValue("$id", create.NewProjectId);
+                if (project.ExecuteScalar() is not string name || !string.Equals(name, create.Name, StringComparison.Ordinal))
+                {
+                    return new Result(false, $"{label}: 새 프로젝트 행이 없거나 이름이 다릅니다.");
+                }
+            }
+
+            using (Microsoft.Data.Sqlite.SqliteCommand root = connection.CreateCommand())
+            {
+                root.CommandText = "SELECT path FROM project_roots WHERE project_id = $id AND position = 0";
+                root.Parameters.AddWithValue("$id", create.NewProjectId);
+                if (root.ExecuteScalar() is not string path || !string.Equals(path, create.RootPathDisplay, StringComparison.Ordinal))
+                {
+                    return new Result(false, $"{label}: 새 프로젝트 루트 행이 없거나 경로가 다릅니다.");
+                }
+            }
+
+            using (Microsoft.Data.Sqlite.SqliteCommand key = connection.CreateCommand())
+            {
+                key.CommandText = "SELECT project_id FROM project_idempotency_keys WHERE key = $key";
+                key.Parameters.AddWithValue("$key", create.IdempotencyKey);
+                if (key.ExecuteScalar() is not string keyProjectId || !string.Equals(keyProjectId, create.NewProjectId, StringComparison.Ordinal))
+                {
+                    return new Result(false, $"{label}: 새 프로젝트 멱등성 키 행이 없거나 다른 프로젝트를 가리킵니다.");
+                }
+            }
+
+            KnownProjectMatch match = MatchInDirectory(catalog, create);
+            if (match != KnownProjectMatch.Found)
+            {
+                return new Result(false, $"{label}: 새 프로젝트가 프로젝트 목록에 그 루트로 나타나지 않습니다({match}).");
+            }
+        }
+
+        return null;
+    }
+
+    private enum KnownProjectMatch
+    {
+        Found,
+        MissingById,
+        RootNotFound,
+        RootPointsElsewhere,
+    }
+
+    private static KnownProjectMatch MatchInDirectory(CodexCatalog catalog, PlannedProjectCreate create)
+    {
+        Domain.Codex.Projects.KnownProject? known = catalog.ProjectDirectory.FindById(create.NewProjectId);
+        if (known is null || !string.Equals(known.DbProjectId, create.NewProjectId, StringComparison.Ordinal))
+        {
+            return KnownProjectMatch.MissingById;
+        }
+
+        if (!Domain.Paths.CanonicalPath.TryCreate(create.RootPathDisplay, out Domain.Paths.CanonicalPath? root, out _))
+        {
+            return KnownProjectMatch.RootNotFound;
+        }
+
+        Domain.Codex.Projects.ProjectLookupResult lookup = catalog.ProjectDirectory.FindByRoot(root!);
+        return lookup.Kind switch
+        {
+            Domain.Codex.Projects.ProjectLookupKind.Found when ReferenceEquals(lookup.Project, known) => KnownProjectMatch.Found,
+            Domain.Codex.Projects.ProjectLookupKind.None => KnownProjectMatch.RootNotFound,
+            _ => KnownProjectMatch.RootPointsElsewhere,
+        };
     }
 
     /// <summary>

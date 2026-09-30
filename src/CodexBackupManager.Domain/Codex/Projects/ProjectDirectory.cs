@@ -35,6 +35,22 @@ public sealed record ProjectLookupResult(
     public static ProjectLookupResult None { get; } = new(ProjectLookupKind.None, null, []);
 }
 
+/// <summary>(Phase 9_5) 이 PC에서 새 Codex 프로젝트를 만들 수 있는지.</summary>
+public enum ProjectCreationSupport
+{
+    /// <summary>
+    /// 만들지 않는다(기본값). 기능 스위치가 꺼졌거나 판정하지 않은 목록이다 — 미등록 폴더는 기타 대화로 들어가고
+    /// "Codex에서 폴더를 연 뒤 새로고침" 안내를 한다(9_2까지의 동작).
+    /// </summary>
+    Disabled = 0,
+
+    /// <summary>state DB 프로젝트 스키마가 확인한 형태와 정확히 같다 — 미등록 폴더는 새 프로젝트를 만들어 연결할 수 있다.</summary>
+    Supported = 1,
+
+    /// <summary>기능은 켜져 있지만 state DB 프로젝트 스키마가 다르다 — 만들지 않는다(CreationUnsupported, 기타 대화).</summary>
+    SchemaUnsupported = 2,
+}
+
 /// <summary>
 /// 이 PC에 등록된 프로젝트(<see cref="KnownProject"/>) 목록과 조회 인덱스(Phase 9_1, 설계 §4.2).
 /// </summary>
@@ -95,6 +111,12 @@ public sealed class ProjectDirectory
 
     /// <summary>프로젝트가 하나도 없는 디렉터리.</summary>
     public static ProjectDirectory Empty { get; } = new([]);
+
+    /// <summary>
+    /// (Phase 9_5) 이 PC에서 새 프로젝트를 만들 수 있는지. 카탈로그를 만들 때 state DB 스키마 게이트와 기능 스위치로 정한다
+    /// (<c>CodexBackupManager.Codex.Inspection.ProjectCreationSchemaGate</c>). 직접 만든 목록의 기본값은 <see cref="ProjectCreationSupport.Disabled"/>다.
+    /// </summary>
+    public ProjectCreationSupport ProjectCreation { get; init; }
 
     /// <summary>전체 프로젝트(대화가 0개인 프로젝트 포함).</summary>
     public IReadOnlyList<KnownProject> Projects { get; }

@@ -845,6 +845,56 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     internal bool IsFolderDecision(string projectKey)
         => _choices is not null && _choices.ProjectDecisions.TryGetValue(projectKey, out ProjectTargetDecision? d) && !d.UseSuggestion;
 
+    /// <summary>프로젝트의 현재 결정(없으면 제안 그대로).</summary>
+    internal ProjectTargetDecision DecisionFor(string projectKey)
+        => _choices?.DecisionFor(projectKey) ?? ProjectTargetDecision.Suggested;
+
+    /// <summary>
+    /// (Phase 9_5-05) 지금 결정(폴더)으로 새 프로젝트를 만들 수 있는지 — "만들지 않기"와 이름은 빼고 판정한다(메모리 연산).
+    /// </summary>
+    internal bool IsCreationOffered(string projectKey)
+    {
+        if (_summary?.Projects.FirstOrDefault(p => p.ProjectKey == projectKey) is not { } project)
+        {
+            return false;
+        }
+
+        ProjectTargetDecision probe = DecisionFor(projectKey) with { NewProjectName = null, CreateProject = true };
+        return ImportSelection.ResolveTarget(project.Preview, probe, LocalProjects).Target.Kind == ProjectTargetKind.CreateNew;
+    }
+
+    /// <summary>(Phase 9_5-05) 새 프로젝트 이름을 바꾼다(폴더 결정은 그대로). 빈 이름은 결정 오류가 되어 가져오기가 꺼진다.</summary>
+    internal void SetNewProjectName(string projectKey, string name)
+    {
+        if (!CanEditSelection || _choices is null)
+        {
+            return;
+        }
+
+        UpdateDecision(projectKey, DecisionFor(projectKey) with { NewProjectName = name });
+    }
+
+    /// <summary>(Phase 9_5-05) "새 프로젝트를 만들지 않고 기타 대화로 가져오기"(<paramref name="create"/> = <c>false</c>)를 바꾼다.</summary>
+    internal void SetCreateProject(string projectKey, bool create)
+    {
+        if (!CanEditSelection || _choices is null)
+        {
+            return;
+        }
+
+        UpdateDecision(projectKey, DecisionFor(projectKey) with { CreateProject = create });
+        _logger.Info($"가져오기: 새 프로젝트 만들기 {(create ? "켬" : "끔")}.");
+    }
+
+    private void UpdateDecision(string projectKey, ProjectTargetDecision decision)
+    {
+        var decisions = new Dictionary<string, ProjectTargetDecision>(_choices!.ProjectDecisions, StringComparer.Ordinal)
+        {
+            [projectKey] = decision,
+        };
+        UpdateChoices(_choices with { ProjectDecisions = decisions });
+    }
+
     /// <summary>[다른 폴더…]: 폴더를 고르고 즉시 다시 판정한다(Plan은 만들지 않는다).</summary>
     internal void ChooseFolder(ImportProjectNodeViewModel node)
     {
@@ -1128,7 +1178,8 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
         _logger.Info(
             $"가져오기 적용 결과. outcome={result.Outcome} preflight={result.PreflightStatus?.ToString() ?? "-"} " +
-            $"imports={_summary.ImportCount} updates={_summary.UpdateCount} uncategorized={_summary.UncategorizedImportCount}");
+            $"imports={_summary.ImportCount} updates={_summary.UpdateCount} uncategorized={_summary.UncategorizedImportCount} " +
+            $"newProjects={_summary.NewProjects.Count}"); // 프로젝트 이름·경로는 남기지 않는다
         ShowResult(result, plan);
     }
 

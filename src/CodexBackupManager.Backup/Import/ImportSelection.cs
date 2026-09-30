@@ -122,6 +122,11 @@ public sealed record ImportSelectionSummary(
     bool HasBlockingIssues,
     bool HasUnresolvedDivergence)
 {
+    /// <summary>
+    /// (Phase 9_5-01) 이번 가져오기로 새로 만들 프로젝트(같은 canonical 루트는 하나). 새로 가져올 대화가 들어가는 목적지만 센다.
+    /// </summary>
+    public IReadOnlyList<NewProjectGroup> NewProjects { get; init; } = [];
+
     /// <summary>쓸 것(Import + Update)이 0개인지.</summary>
     public bool HasNothingToWrite => NothingToWriteReason != ImportNothingToWriteReason.None;
 
@@ -280,9 +285,30 @@ public static class ImportSelection
             ? ImportNothingToWriteReason.None
             : DescribeNothingToWrite(results, included.Count);
 
+        // 7) (Phase 9_5-01) 새로 만들 프로젝트: 새로 가져올 대화가 실제로 들어가는 CreateNew 목적지만, 같은 루트는 하나로.
+        var importingKeys = new HashSet<string>(
+            results.Where(r => r.FinalAction == ImportPlannedAction.Import && r.ProjectKey is not null).Select(r => r.ProjectKey!),
+            StringComparer.Ordinal);
+        IReadOnlyList<NewProjectGroup> newProjects = NewProjectGrouping.Group(
+            projects.Where(p => importingKeys.Contains(p.ProjectKey) && p.Resolution.Error is null).Select(p => (p.ProjectKey, p.Target)));
+        // Phase 9_5-T4 — 스키마 게이트 실패로 새 프로젝트를 만들 수 없는 목적지가 이번 가져오기에 쓰이면 알린다(Apply는 막지 않는다).
+        int unsupported = projects.Count(p => importingKeys.Contains(p.ProjectKey) && p.Target.Reason == ProjectTargetReason.CreationUnsupported);
+        if (unsupported > 0)
+        {
+            warnings.Add($"이 PC Codex의 프로젝트 저장 형식이 확인한 형태와 달라 새 프로젝트를 만들지 않습니다. 프로젝트 {unsupported}개의 대화는 기타 대화로 들어갑니다.");
+        }
+
+        foreach (NewProjectGroup group in newProjects.Where(g => g.HasConflictingNames))
+        {
+            warnings.Add($"같은 폴더를 쓰는 프로젝트 {group.ProjectKeys.Count}개를 새 프로젝트 하나('{group.Name}')로 합칩니다.");
+        }
+
         return new ImportSelectionSummary(
             projects, results, importCount, updateCount, noOpCount, skipCount, autoAncestors.Count, uncategorizedImports,
-            blocking, warnings, nothingReason, hasBlockedInClosure, hasDivergedInClosure);
+            blocking, warnings, nothingReason, hasBlockedInClosure, hasDivergedInClosure)
+        {
+            NewProjects = newProjects,
+        };
     }
 
     /// <summary>
@@ -323,21 +349,12 @@ public static class ImportSelection
         ProjectTarget suggested = project.SuggestedTarget ?? SuggestionFromMapping(project, directory);
         ProjectTargetResolution Suggestion(string? error) => new(suggested, project.PathMapping.Status, error);
 
-        if (decision.NewProjectName is not null)
-        {
-            return Suggestion("새 프로젝트 만들기는 아직 지원하지 않습니다.");
-        }
-
         if (decision.UseSuggestion)
         {
-            return Suggestion(null);
+            return ApplyCreationDecision(suggested, project.PathMapping.Status, decision);
         }
 
-        if (!project.PathMapping.CanManuallyOverride)
-        {
-            return Suggestion("기타 대화 그룹은 폴더를 지정할 수 없습니다.");
-        }
-
+        // Phase 9_5-01 — 백업의 "기타 대화" 그룹(원본 루트 없음)에도 폴더를 지정할 수 있다(설계 §3.7).
         if (string.IsNullOrWhiteSpace(decision.FolderPath))
         {
             return Suggestion("폴더가 지정되지 않았습니다.");
@@ -348,11 +365,41 @@ public static class ImportSelection
             return Suggestion("지정한 폴더가 없습니다.");
         }
 
-        return new ProjectTargetResolution(
+        return ApplyCreationDecision(
             ProjectTargetResolver.ResolveFolder(decision.FolderPath, userSelected: true, directory),
             ProjectPathMappingStatus.ManuallyLinked,
-            null);
+            decision);
     }
+
+    /// <summary>
+    /// (Phase 9_5-01) 새 프로젝트 목적지에 사용자 결정(이름, 만들지 않기)을 적용한다. 새 프로젝트가 아니면 그대로다.
+    /// </summary>
+    private static ProjectTargetResolution ApplyCreationDecision(ProjectTarget target, ProjectPathMappingStatus status, ProjectTargetDecision decision)
+    {
+        if (target.Kind != ProjectTargetKind.CreateNew)
+        {
+            return new ProjectTargetResolution(target, status, null);
+        }
+
+        if (!decision.CreateProject)
+        {
+            // "새 프로젝트를 만들지 않고 기타 대화로" — 폴더와 사유는 남겨 화면이 무엇을 끈 것인지 보여줄 수 있게 한다.
+            return new ProjectTargetResolution(ProjectTarget.Uncategorized(target.Reason, target.FolderPath), status, null);
+        }
+
+        if (decision.NewProjectName is null)
+        {
+            return new ProjectTargetResolution(target, status, null);
+        }
+
+        string name = decision.NewProjectName.Trim();
+        return name.Length == 0
+            ? new ProjectTargetResolution(target, status, EmptyProjectNameError)
+            : new ProjectTargetResolution(target with { NewProjectName = name }, status, null);
+    }
+
+    /// <summary>새 프로젝트 이름이 비었을 때의 결정 오류.</summary>
+    public const string EmptyProjectNameError = "새 프로젝트 이름을 입력해 주세요.";
 
     private static ProjectTarget SuggestionFromMapping(ImportProjectPreview project, ProjectDirectory directory)
         => project.PathMapping.Status == ProjectPathMappingStatus.NotApplicable

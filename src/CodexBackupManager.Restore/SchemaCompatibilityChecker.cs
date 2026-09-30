@@ -80,6 +80,61 @@ public static class SchemaCompatibilityChecker
     }
 
     /// <summary>
+    /// (Phase 9_5-03) 새 프로젝트를 만들어도 되는 스키마인지 PRAGMA로 확인한다(projects/project_roots/project_idempotency_keys의
+    /// 컬럼·타입·NOT NULL·PK, project_roots와 threads.project_id의 외래키). 규칙은 카탈로그와 같은
+    /// <see cref="CodexBackupManager.Codex.Inspection.ProjectCreationSchemaGate"/>다. 쓰기 트랜잭션 안에서도 부를 수 있다.
+    /// </summary>
+    public static CodexBackupManager.Codex.Inspection.ProjectCreationSchemaGate.Result CheckProjectCreation(
+        SqliteConnection connection, SqliteTransaction? transaction = null)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        return CodexBackupManager.Codex.Inspection.ProjectCreationSchemaGate.Check(sql =>
+        {
+            using SqliteCommand cmd = connection.CreateCommand();
+            cmd.Transaction = transaction;
+            cmd.CommandText = sql;
+            using SqliteDataReader reader = cmd.ExecuteReader();
+            var rows = new List<object?[]>();
+            while (reader.Read())
+            {
+                var row = new object?[reader.FieldCount];
+                for (int i = 0; i < reader.FieldCount; i++)
+                {
+                    row[i] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                }
+
+                rows.Add(row);
+            }
+
+            return rows;
+        });
+    }
+
+    /// <summary>(Phase 9_5-03) 파일 경로로 read-only 연결을 열어 <see cref="CheckProjectCreation"/>을 확인한다. 열 수 없으면 지원 안 함.</summary>
+    public static CodexBackupManager.Codex.Inspection.ProjectCreationSchemaGate.Result CheckProjectCreationFile(string stateDbPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stateDbPath);
+        var builder = new SqliteConnectionStringBuilder
+        {
+            DataSource = stateDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+            Cache = SqliteCacheMode.Private,
+        };
+
+        try
+        {
+            using var connection = new SqliteConnection(builder.ConnectionString);
+            connection.Open();
+            return CheckProjectCreation(connection);
+        }
+        catch (SqliteException)
+        {
+            return new CodexBackupManager.Codex.Inspection.ProjectCreationSchemaGate.Result(false, ["state DB를 열 수 없습니다."]);
+        }
+    }
+
+    /// <summary>
     /// 파일 경로로 read-only 연결을 열어 확인한다. 파일을 열 수 없으면(존재하지 않음 등)
     /// 호환되지 않는 것으로 취급한다.
     /// </summary>

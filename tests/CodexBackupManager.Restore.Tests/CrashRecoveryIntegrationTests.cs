@@ -198,10 +198,55 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         => RestoreExecutor.Apply(plan, codexHomePath, () => [], RestoreExecutor.BuildFreshCatalog, _snapshotRoot);
 
     /// <summary>
+    /// (Phase 9_1-17) 자식 프로세스가 남기는 sentinel 파일을 조건 대기로 읽는다. 파일이 있고, 읽기가 성공하고(쓰는 중이면
+    /// sharing violation), 내용이 비어 있지 않을 때 그 내용을 돌려준다. 자식이 먼저 끝나거나 상한을 넘으면 경과 시간과 함께 실패한다.
+    /// </summary>
+    private static string WaitForSentinelContent(string path, Process child, TimeSpan timeout, string what)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        string? lastError = null;
+        while (true)
+        {
+            if (File.Exists(path))
+            {
+                try
+                {
+                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var reader = new StreamReader(stream);
+                    string content = reader.ReadToEnd();
+                    if (content.Length > 0)
+                    {
+                        return content;
+                    }
+
+                    lastError = "empty";
+                }
+                catch (IOException ex)
+                {
+                    lastError = ex.GetType().Name; // 자식이 아직 쓰는 중(sharing violation) — 다시 시도한다.
+                }
+            }
+
+            if (child.HasExited && !File.Exists(path))
+            {
+                Assert.Fail($"{what}: 자식 프로세스가 sentinel을 남기기 전에 끝났습니다(pid={child.Id} exit={child.ExitCode} elapsedMs={stopwatch.ElapsedMilliseconds}): {child.StandardError.ReadToEnd()}");
+            }
+
+            if (stopwatch.Elapsed > timeout)
+            {
+                Assert.Fail($"{what}: 제한 시간 안에 sentinel 내용을 읽지 못했습니다(pid={child.Id} elapsedMs={stopwatch.ElapsedMilliseconds} last={lastError ?? "missing"}).");
+            }
+
+            Thread.Sleep(20);
+        }
+    }
+
+    /// <summary>
     /// CrashSim을 자식 프로세스로 띄우고, 지정된 지점에 도달했다는 sentinel 파일이 나타나면 실제로
     /// <see cref="Process.Kill(bool)"/>로 강제 종료한다.
     /// </summary>
-    private static void RunAndKillAtCrashPoint(string codexHomePath, string backupFilePath, RestoreFaultInjectionPoint crashPoint, string snapshotRoot)
+    internal static void RunAndKillAtCrashPoint(
+        string codexHomePath, string backupFilePath, RestoreFaultInjectionPoint crashPoint, string snapshotRoot, bool withChoices = false)
     {
         string exePath = FindOrBuildCrashSimExecutable();
         string sentinelPath = Path.Combine(Path.GetTempPath(), $"cbm-crashsim-sentinel-{Guid.NewGuid():N}.txt");
@@ -220,6 +265,10 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         startInfo.ArgumentList.Add(snapshotRoot);
         // Phase 9_1-01 — 호스트에서 Codex가 실행 중이어도 자식 프로세스가 크래시 지점까지 가도록 한다.
         startInfo.ArgumentList.Add("--process-guard=none");
+        if (withChoices)
+        {
+            startInfo.ArgumentList.Add("--with-choices"); // Phase 9_5-T3 — 기본 사용자 선택 Plan(새 프로젝트 만들기 포함)
+        }
 
         using Process? process = Process.Start(startInfo);
         Assert.NotNull(process);
@@ -445,23 +494,9 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
 
         try
         {
-            var deadline = DateTime.UtcNow.AddSeconds(10);
-            while (!File.Exists(readySentinel))
-            {
-                if (holder!.HasExited)
-                {
-                    Assert.Fail($"lock-hold 프로세스가 준비되기 전에 끝났습니다(exit={holder.ExitCode}): {holder.StandardError.ReadToEnd()}");
-                }
-
-                if (DateTime.UtcNow > deadline)
-                {
-                    Assert.Fail("lock-hold 프로세스가 제한 시간 안에 준비되지 않았습니다.");
-                }
-
-                Thread.Sleep(20);
-            }
-
-            Assert.Equal("acquired", File.ReadAllText(readySentinel));
+            // Phase 9_1-17 — 파일이 "보이는 것"만으로 끝내지 않는다. 자식이 아직 쓰는 중이면 읽기가 sharing violation으로
+            // 실패하거나 내용이 비어 있을 수 있으므로, 읽기가 성공하고 내용이 채워질 때까지 기다린다(상한 10초).
+            Assert.Equal("acquired", WaitForSentinelContent(readySentinel, holder!, TimeSpan.FromSeconds(10), "lock-hold 준비"));
 
             // 같은 Home: 다른 프로세스가 이미 이 Home을 처리 중이므로 production RestoreExecutor.Apply가
             // 즉시 NotReady를 돌려줘야 한다 — write 0건.

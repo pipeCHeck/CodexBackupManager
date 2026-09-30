@@ -33,12 +33,21 @@ internal sealed class ImportWorkspaceHarness : IDisposable
     /// <summary>fixture의 사용자 대화 3(보관됨, 기타 대화).</summary>
     public const string Thread3 = "01a00000-0000-7000-8000-000000000003";
 
-    public ImportWorkspaceHarness()
+    /// <param name="realProjectSchema">
+    /// (Phase 9_5) <c>true</c>(기본)면 대상 PC 복사본의 프로젝트 스키마를 실측 형태(project_idempotency_keys 테이블,
+    /// threads.project_id 외래키)로 맞춰 새 프로젝트 만들기를 쓸 수 있게 한다. <c>false</c>면 공유 fixture 그대로(스키마 게이트 실패 → CreationUnsupported).
+    /// </param>
+    public ImportWorkspaceHarness(bool realProjectSchema = true)
     {
         SourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
         TargetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
         MakeRolloutPathsAbsolute(SourceHome);
         MakeRolloutPathsAbsolute(TargetHome);
+        if (realProjectSchema)
+        {
+            UpgradeToRealProjectSchema(TargetHome);
+        }
+
         TestDir = Path.Combine(Path.GetTempPath(), "cbm-app-import-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TestDir);
         SnapshotRoot = Path.Combine(TestDir, "snapshots");
@@ -308,6 +317,36 @@ internal sealed class ImportWorkspaceHarness : IDisposable
             update.Parameters.AddWithValue("$id", id);
             update.ExecuteNonQuery();
         }
+    }
+
+    /// <summary>
+    /// (Phase 9_5) 복사본(temp)만 실측 스키마로 맞춘다: <c>project_idempotency_keys</c>를 만들고, <c>threads</c>를 같은 컬럼으로 다시 만들며
+    /// <c>project_id</c>에 <c>REFERENCES projects(id) ON DELETE SET NULL</c>을 붙인다(SQLite는 기존 컬럼에 외래키를 추가할 수 없다).
+    /// 공유 fixture 원본은 바꾸지 않는다.
+    /// </summary>
+    private static void UpgradeToRealProjectSchema(string home)
+    {
+        using SqliteConnection connection = Open(home);
+        string threadsSql;
+        using (SqliteCommand read = connection.CreateCommand())
+        {
+            read.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'threads'";
+            threadsSql = (string)read.ExecuteScalar()!;
+        }
+
+        Assert.Contains("project_id TEXT", threadsSql);
+        string rebuilt = threadsSql.Replace("project_id TEXT", "project_id TEXT REFERENCES projects(id) ON DELETE SET NULL", StringComparison.Ordinal);
+
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText =
+            "PRAGMA foreign_keys = OFF;" +
+            "CREATE TABLE IF NOT EXISTS project_idempotency_keys (key TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at_ms INTEGER NOT NULL);" +
+            "ALTER TABLE threads RENAME TO threads_before_fk;" +
+            rebuilt + ";" +
+            "INSERT INTO threads SELECT * FROM threads_before_fk;" +
+            "DROP TABLE threads_before_fk;" +
+            "PRAGMA foreign_keys = ON;";
+        cmd.ExecuteNonQuery();
     }
 
     /// <summary>대화의 rollout 파일(첫 번째) 경로.</summary>

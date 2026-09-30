@@ -74,6 +74,10 @@
         <DataTrigger Binding="{Binding IsLinked}" Value="True">
           <Setter Property="Foreground" Value="{StaticResource Ok}" />
         </DataTrigger>
+        <!-- Phase 9_5-05 — 새 프로젝트를 만들어 연결한다(정상 상태라 경고색이 아니다). -->
+        <DataTrigger Binding="{Binding IsCreatingProject}" Value="True">
+          <Setter Property="Foreground" Value="{StaticResource Info}" />
+        </DataTrigger>
       </Style.Triggers>
     </Style>
 
@@ -305,6 +309,21 @@
                           <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LocalPathText}" Style="{StaticResource PathText}" Margin="0,2,0,0" ToolTip="{Binding LocalPathRaw}" />
                         </Grid>
                         <TextBlock Text="{Binding TargetStatusText}" Style="{StaticResource TargetStatusText}" Margin="0,5,0,0" />
+                        <!-- Phase 9_5-05 — 새 프로젝트 이름(기본값 폴더 이름). 빈 이름이면 아래 오류 줄이 보이고 가져오기가 꺼진다. -->
+                        <Grid Margin="0,5,0,0" Visibility="{Binding IsCreatingProject, Converter={StaticResource BoolToVisibility}}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="새 프로젝트 이름" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                          <TextBox Grid.Column="1" Text="{Binding NewProjectName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                   AutomationProperties.Name="새 프로젝트 이름"
+                                   IsEnabled="{Binding DataContext.CanEditSelection, ElementName=Root}" />
+                        </Grid>
+                        <CheckBox Content="새 프로젝트를 만들지 않고 기타 대화로 가져오기" IsChecked="{Binding DeclineCreation, Mode=TwoWay}"
+                                  FontSize="11" Margin="0,5,0,0"
+                                  IsEnabled="{Binding DataContext.CanEditSelection, ElementName=Root}"
+                                  Visibility="{Binding IsCreationOffered, Converter={StaticResource BoolToVisibility}}" />
                         <TextBlock Text="{Binding DecisionError}" Foreground="{StaticResource Bad}" FontSize="11" TextWrapping="Wrap"
                                    Visibility="{Binding DecisionError, Converter={StaticResource NullToCollapsed}}" />
                         <WrapPanel Margin="0,6,0,0" Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}">

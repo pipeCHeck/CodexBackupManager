@@ -10,8 +10,9 @@ public enum ProjectTargetKind
     LinkExisting = 1,
 
     /// <summary>
-    /// 새 프로젝트를 만들어 연결한다(Phase 9_5). 9_1에서는 이 값을 만들지 않는다 — 미등록/레거시 전용은
-    /// <see cref="Uncategorized"/> + 해당 <see cref="ProjectTargetReason"/>이다.
+    /// (Phase 9_5) <see cref="ProjectTarget.FolderPath"/>를 루트로 하는 Codex 프로젝트를 새로 만들어 연결한다. 사유는
+    /// <c>*Unregistered</c> 또는 <see cref="ProjectTargetReason.LegacyOnlyProject"/>다. 이 PC가 프로젝트 생성을 지원할 때만
+    /// (<see cref="Projects.ProjectDirectory.ProjectCreation"/> = Supported) 만들어진다.
     /// </summary>
     CreateNew = 2,
 }
@@ -40,7 +41,9 @@ public enum ProjectTargetReason
     /// <summary>레거시(Desktop 이전 형식) 프로젝트로만 등록돼 있고 DB 프로젝트가 없다 — 연결할 ID가 없다.</summary>
     LegacyOnlyProject = 6,
 
-    /// <summary>(Phase 9_5) 프로젝트 생성을 지원하지 않는 스키마다. 9_1에서는 쓰지 않는다.</summary>
+    /// <summary>
+    /// (Phase 9_5) 새 프로젝트를 만들어야 하는 폴더지만 이 PC state DB 스키마가 확인한 형태와 달라 만들지 않는다(기타 대화).
+    /// </summary>
     CreationUnsupported = 7,
 
     /// <summary>백업의 "기타 대화" 그룹(또는 원본 루트가 없는 그룹) — 목적지 판정 대상이 아니다.</summary>
@@ -58,7 +61,10 @@ public enum ProjectTargetReason
 /// <see cref="ProjectTargetKind.LinkExisting"/>이면 cwd remap에 쓰는 대상 루트다.
 /// </param>
 /// <param name="LinkDbProjectId"><see cref="ProjectTargetKind.LinkExisting"/>일 때만: 실존 <c>projects.id</c>.</param>
-/// <param name="NewProjectName"><see cref="ProjectTargetKind.CreateNew"/>일 때만(9_5). 9_1에서는 항상 <c>null</c>.</param>
+/// <param name="NewProjectName">
+/// <see cref="ProjectTargetKind.CreateNew"/>일 때만: 만들 프로젝트 이름(기본값은 폴더 이름). 그 밖에는 <c>null</c>.
+/// <see cref="ProjectTargetKind.CreateNew"/>이면 <see cref="FolderPath"/>는 <c>\\?\</c>와 끝 구분자가 없는 절대 경로(표시 표기)다.
+/// </param>
 public sealed record ProjectTarget(
     ProjectTargetKind Kind,
     ProjectTargetReason Reason,
@@ -73,6 +79,10 @@ public sealed record ProjectTarget(
     /// <summary>등록 DB 프로젝트에 연결하는 목적지를 만든다.</summary>
     public static ProjectTarget Link(ProjectTargetReason reason, string folderPath, string dbProjectId)
         => new(ProjectTargetKind.LinkExisting, reason, folderPath, dbProjectId, null);
+
+    /// <summary>(Phase 9_5) 폴더를 루트로 하는 새 프로젝트를 만드는 목적지를 만든다.</summary>
+    public static ProjectTarget Create(ProjectTargetReason reason, string folderPath, string newProjectName)
+        => new(ProjectTargetKind.CreateNew, reason, folderPath, null, newProjectName);
 
     /// <summary>
     /// 두 목적지가 실제 적용 결과로 같은지(<see cref="Kind"/>와 <see cref="LinkDbProjectId"/>만 비교). Plan에 freeze된

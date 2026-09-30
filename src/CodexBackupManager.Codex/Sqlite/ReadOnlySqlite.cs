@@ -142,6 +142,8 @@ public sealed class ReadOnlyDatabase : IDisposable
         "SELECT ",
         "PRAGMA TABLE_INFO",
         "PRAGMA TABLE_LIST",
+        // Phase 9_5-03 — 프로젝트 생성 스키마 게이트가 외래키를 확인한다(인자를 받는 조회 전용 PRAGMA, 값을 바꾸는 foreign_keys와 다르다).
+        "PRAGMA FOREIGN_KEY_LIST(",
         "PRAGMA DATABASE_LIST",
         "PRAGMA USER_VERSION;",
         "PRAGMA USER_VERSION",

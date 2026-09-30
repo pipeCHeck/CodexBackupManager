@@ -245,10 +245,13 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
 
         alpha.ChooseFolderCommand.Execute(null);
         Assert.Equal(ProjectTargetReason.UserSelectedUnregistered, alpha.Target!.Reason);
-        Assert.Contains("Codex에 등록되지 않은 폴더입니다. 지금은 기타 대화로 들어갑니다", alpha.TargetStatusText);
-        Assert.True(alpha.ShowRefreshHint);
+        // Phase 9_5: 미등록 폴더는 새 프로젝트를 만들어 연결한다(9_2까지는 "기타 대화 + 새로고침 안내"였다).
+        Assert.Equal(ProjectTargetKind.CreateNew, alpha.Target!.Kind);
+        Assert.Contains("✨ 이 폴더로 새 프로젝트", alpha.TargetStatusText);
+        Assert.False(alpha.ShowRefreshHint);
         Assert.True(alpha.IsFolderUserSelected);
-        Assert.Equal(1, ws.Summary!.UncategorizedImportCount);
+        Assert.Equal(0, ws.Summary!.UncategorizedImportCount);
+        Assert.Single(ws.Summary!.NewProjects);
 
         pick = registered;
         alpha.ChooseFolderCommand.Execute(null);

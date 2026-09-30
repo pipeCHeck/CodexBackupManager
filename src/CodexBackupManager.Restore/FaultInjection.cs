@@ -45,6 +45,12 @@ public enum RestoreFaultInjectionPoint
 
     /// <summary>post-apply validation 직전.</summary>
     BeforePostValidation,
+
+    /// <summary>(Phase 9_5-T3) 같은 트랜잭션 안에서 새 프로젝트 행(projects/project_roots)을 INSERT한 직후, thread INSERT 전.</summary>
+    AfterProjectInsert,
+
+    /// <summary>(Phase 9_5-T3) 같은 트랜잭션 안에서 thread INSERT를 마친 직후, idempotency 키 INSERT·커밋 전.</summary>
+    AfterThreadInsert,
 }
 
 /// <summary>fault injection 훅. 테스트 전용 — 운영 코드는 <see cref="NoOpRestoreFaultInjectionHook"/>을 쓴다.</summary>

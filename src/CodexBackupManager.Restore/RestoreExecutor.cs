@@ -268,12 +268,15 @@ public static class RestoreExecutor
                 new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
 
             onStatusChanged("적용 중");
-            ExecuteMutations(codexHomePath, opPlan, pinnedBackup, faultInjection, cancellationToken);
+            IReadOnlyDictionary<string, string> effectiveProjectIds =
+                ExecuteMutations(codexHomePath, opPlan, pinnedBackup, faultInjection, cancellationToken);
 
             onStatusChanged("검증 중");
             faultInjection.Check(RestoreFaultInjectionPoint.BeforePostValidation);
             cancellationToken.ThrowIfCancellationRequested();
-            RestoreValidator.Result validation = RestoreValidator.Validate(plan, opPlan, codexHomePath, cancellationToken);
+            // Phase 9_5-02 — idempotency key로 기존 프로젝트를 재사용했으면 실제로 쓴 ID로 검증한다.
+            RestoreValidator.Result validation = RestoreValidator.Validate(
+                plan, opPlan.WithEffectiveProjectIds(effectiveProjectIds), codexHomePath, cancellationToken);
             if (!validation.Success)
             {
                 throw new InvalidOperationException(validation.FailureReason ?? "post-apply validation 실패");
@@ -343,7 +346,7 @@ public static class RestoreExecutor
         return CodexCatalogBuilder.Build(installation);
     }
 
-    private static void ExecuteMutations(
+    private static IReadOnlyDictionary<string, string> ExecuteMutations(
         string codexHomePath,
         RestoreOperationPlan opPlan,
         PinnedBackupSource pinnedBackup,
@@ -373,9 +376,10 @@ public static class RestoreExecutor
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        if (opPlan.ThreadInserts.Count == 0 && opPlan.ThreadRolloutPathUpdates.Count == 0 && opPlan.ThreadMetadataUpdates.Count == 0)
+        var effectiveProjectIds = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!opPlan.HasSqlWrite)
         {
-            return;
+            return effectiveProjectIds;
         }
 
         faultInjection.Check(RestoreFaultInjectionPoint.BeforeSqliteTransaction);
@@ -400,10 +404,45 @@ public static class RestoreExecutor
             pragma.ExecuteNonQuery();
         }
 
+        // Microsoft.Data.Sqlite의 기본 BeginTransaction은 BEGIN IMMEDIATE다(공식 create_project와 같은 잠금).
         using SqliteTransaction transaction = connection.BeginTransaction();
+
+        // Phase 9_5-02 — 새 프로젝트는 thread INSERT보다 먼저(공식 create_project 순서). 트랜잭션 안에서 스키마 게이트를 한 번 더 본다.
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var reusedProjectIds = new HashSet<string>(StringComparer.Ordinal);
+        if (opPlan.ProjectCreates.Count > 0)
+        {
+            var gate = SchemaCompatibilityChecker.CheckProjectCreation(connection, transaction);
+            if (!gate.IsSupported)
+            {
+                throw new InvalidOperationException("state DB 프로젝트 스키마가 확인한 형태와 달라 새 프로젝트를 만들지 않습니다.");
+            }
+
+            foreach (PlannedProjectCreate create in opPlan.ProjectCreates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                StateDatabaseWriter.ProjectCreateResult created = StateDatabaseWriter.CreateProject(connection, transaction, create, nowMs);
+                effectiveProjectIds[create.NewProjectId] = created.ProjectId;
+                if (created.Reused)
+                {
+                    reusedProjectIds.Add(create.NewProjectId);
+                }
+            }
+
+            faultInjection.Check(RestoreFaultInjectionPoint.AfterProjectInsert);
+        }
+
         foreach (PlannedThreadInsert insert in opPlan.ThreadInserts)
         {
-            StateDatabaseWriter.InsertThread(connection, transaction, insert);
+            PlannedThreadInsert effective = insert.ResolvedProjectId is { } planned && effectiveProjectIds.TryGetValue(planned, out string? actual)
+                ? insert with { ResolvedProjectId = actual }
+                : insert;
+            StateDatabaseWriter.InsertThread(connection, transaction, effective);
+        }
+
+        if (opPlan.ProjectCreates.Count > 0)
+        {
+            faultInjection.Check(RestoreFaultInjectionPoint.AfterThreadInsert);
         }
 
         foreach (PlannedThreadRolloutPathUpdate update in opPlan.ThreadRolloutPathUpdates)
@@ -416,9 +455,18 @@ public static class RestoreExecutor
             StateDatabaseWriter.UpdateMetadata(connection, transaction, metadataUpdate);
         }
 
+        foreach (PlannedProjectCreate create in opPlan.ProjectCreates)
+        {
+            if (!reusedProjectIds.Contains(create.NewProjectId))
+            {
+                StateDatabaseWriter.RecordProjectIdempotencyKey(connection, transaction, create, effectiveProjectIds[create.NewProjectId], nowMs);
+            }
+        }
+
         transaction.Commit();
         faultInjection.Check(RestoreFaultInjectionPoint.AfterSqliteCommit);
         cancellationToken.ThrowIfCancellationRequested();
+        return effectiveProjectIds;
     }
 
     private static IReadOnlyList<(string Label, string AbsolutePath)> ComputeSnapshotTargets(
@@ -426,7 +474,7 @@ public static class RestoreExecutor
     {
         var targets = new List<(string Label, string AbsolutePath)>();
 
-        bool hasSqlWrite = opPlan.ThreadInserts.Count > 0 || opPlan.ThreadRolloutPathUpdates.Count > 0 || opPlan.ThreadMetadataUpdates.Count > 0;
+        bool hasSqlWrite = opPlan.HasSqlWrite;
         IReadOnlyList<string> stateDbNames = CodexHomeLayout.FindStateDatabaseFileNames(codexHomePath);
         if (stateDbNames.Count > 0 && hasSqlWrite)
         {

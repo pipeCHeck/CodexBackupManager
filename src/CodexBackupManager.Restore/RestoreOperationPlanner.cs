@@ -84,6 +84,21 @@ public static class RestoreOperationPlanner
             return Reject(ProjectTargetChangedMessage);
         }
 
+        // Phase 9_5-01 — 새 프로젝트 계획. 위의 fresh 재판정을 통과했으므로 계획한 CreateNew 루트는 지금도 미등록이고
+        // 이 PC가 생성을 지원한다(그 사이 등록됐거나 스키마가 바뀌었으면 이미 거부됐다 — 중복 생성 금지).
+        var createRejections = new List<string>();
+        (IReadOnlyList<PlannedProjectCreate> projectCreates, Dictionary<string, PlannedProjectCreate> createByProjectKey) =
+            PlanProjectCreates(plan, createRejections);
+        if (createRejections.Count > 0)
+        {
+            return new RestoreOperationPlanResult(null, createRejections);
+        }
+
+        if (projectCreates.Count > 0 && !SchemaCompatibilityChecker.CheckProjectCreationFile(stateDbPath).IsSupported)
+        {
+            return Reject("현재 state DB 프로젝트 스키마가 확인한 형태와 달라 새 프로젝트를 만들 수 없습니다.");
+        }
+
         BackupReader reader = pinnedBackup.Reader;
         BackupManifest manifest = reader.ReadManifest();
         BackupCatalogReader.Result backupCatalog = BackupCatalogReader.Build(reader, cancellationToken);
@@ -118,7 +133,7 @@ public static class RestoreOperationPlanner
                 case ImportPlannedAction.Import:
                     PlanNewImport(
                         conversation, metadataByThreadId, actionByThreadId, reader, codexHomePath,
-                        newRolloutFiles, threadInserts, copiedEntryPaths, freshLocalCatalog, rejections);
+                        newRolloutFiles, threadInserts, copiedEntryPaths, freshLocalCatalog, createByProjectKey, rejections);
                     break;
 
                 case ImportPlannedAction.Update:
@@ -147,7 +162,10 @@ public static class RestoreOperationPlanner
         }
 
         var restorePlan = new RestoreOperationPlan(
-            newRolloutFiles, rolloutAppends, threadInserts, rolloutPathUpdates, threadMetadataUpdates);
+            newRolloutFiles, rolloutAppends, threadInserts, rolloutPathUpdates, threadMetadataUpdates)
+        {
+            ProjectCreates = projectCreates,
+        };
         return new RestoreOperationPlanResult(restorePlan, []);
     }
 
@@ -161,6 +179,7 @@ public static class RestoreOperationPlanner
         List<PlannedThreadInsert> threadInserts,
         HashSet<string> copiedEntryPaths,
         CodexCatalog freshLocalCatalog,
+        Dictionary<string, PlannedProjectCreate> createByProjectKey,
         List<string> rejections)
     {
         if (!metadataByThreadId.TryGetValue(conversation.ThreadId, out BackupConversationMetadata? metadata))
@@ -248,6 +267,13 @@ public static class RestoreOperationPlanner
         if (leafTargetPath is null)
         {
             rejections.Add($"{Redact(conversation.ThreadId)}: leaf rollout entry를 확정할 수 없습니다.");
+            return;
+        }
+
+        // Phase 9_5-01 — 새로 만들 프로젝트로 가는 대화: project_id = 새 ID, cwd = 새 루트(같은 트랜잭션에서 먼저 만든다).
+        if (conversation.TargetProjectKey is { } projectKey && createByProjectKey.TryGetValue(projectKey, out PlannedProjectCreate? create))
+        {
+            threadInserts.Add(new PlannedThreadInsert(metadata, leafTargetPath, create.NewProjectId, create.RootPathDisplay));
             return;
         }
 
@@ -478,6 +504,66 @@ public static class RestoreOperationPlanner
             ts.Year.ToString("D4"), ts.Month.ToString("D2"), ts.Day.ToString("D2"));
     }
 
+    /// <summary>idempotency key 앞부분(형식 버전 포함). 전체 = 접두 + backup SHA-256 + ":" + canonical 루트 SHA-256(소문자 hex).</summary>
+    internal const string IdempotencyKeyPrefix = "codex-backup-manager:import:v1:";
+
+    /// <summary>공식 <c>validate_idempotency_key</c> 상한(바이트).</summary>
+    internal const int MaxIdempotencyKeyBytes = 512;
+
+    /// <summary>
+    /// (Phase 9_5-01) 새 프로젝트 계획. 새로 가져올 대화가 들어가는 CreateNew 목적지만, 같은 canonical 루트는 하나로 합친다
+    /// (이름이 다르면 Plan 순서의 첫 번째). 이름(앞뒤 공백 제거 후 비어 있지 않음), 절대 경로, 키 길이를 확인한다.
+    /// 선택 없는 이전 방식 Plan은 프로젝트를 만들지 않는다(0.1.3과 같은 결과).
+    /// </summary>
+    internal static (IReadOnlyList<PlannedProjectCreate> Creates, Dictionary<string, PlannedProjectCreate> ByProjectKey) PlanProjectCreates(
+        ImportPlan plan, List<string> rejections)
+    {
+        var byKey = new Dictionary<string, PlannedProjectCreate>(StringComparer.Ordinal);
+        var creates = new List<PlannedProjectCreate>();
+        if (plan.UserChoices is null)
+        {
+            return (creates, byKey);
+        }
+
+        IEnumerable<(string, ProjectTarget)> targets = plan.Projects
+            .Where(p => p.ResolvedTarget is { Kind: ProjectTargetKind.CreateNew } && plan.UsesProjectTarget(p))
+            .Select(p => (ImportUserChoices.ProjectKeyOf(p.ProjectId), p.ResolvedTarget!));
+
+        foreach (NewProjectGroup group in NewProjectGrouping.Group(targets))
+        {
+            if (group.Name.Length == 0)
+            {
+                rejections.Add("새 프로젝트 이름이 비어 있습니다.");
+                continue;
+            }
+
+            if (!ProjectTargetResolver.IsAbsolute(group.Root))
+            {
+                rejections.Add("새 프로젝트 루트가 절대 경로가 아닙니다.");
+                continue;
+            }
+
+            string key = IdempotencyKeyPrefix + plan.Backup.BackupFileSha256.ToLowerInvariant() + ":" + Sha256Hex(group.Root.Value);
+            if (System.Text.Encoding.UTF8.GetByteCount(key) > MaxIdempotencyKeyBytes)
+            {
+                rejections.Add("새 프로젝트 멱등성 키가 너무 깁니다.");
+                continue;
+            }
+
+            var create = new PlannedProjectCreate(Guid.CreateVersion7().ToString("D"), group.Name, group.FolderPath, key);
+            creates.Add(create);
+            foreach (string projectKey in group.ProjectKeys)
+            {
+                byKey[projectKey] = create;
+            }
+        }
+
+        return (creates, byKey);
+    }
+
+    private static string Sha256Hex(string value)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
     /// <summary>Plan 목적지와 fresh 판정이 다를 때의 거부 사유(사용자 원문 없음).</summary>
     internal const string ProjectTargetChangedMessage = "미리보기 이후 이 PC의 프로젝트 구성이 바뀌었습니다.";
 
@@ -504,6 +590,15 @@ public static class RestoreOperationPlanner
 
             ProjectTarget fresh = ProjectTargetResolver.ResolveFolder(
                 folder, project.PathStatus == ProjectPathMappingStatus.ManuallyLinked, freshLocalCatalog.ProjectDirectory);
+
+            // Phase 9_5 — 미등록 폴더를 "만들지 않고 기타 대화로"(사용자 선택 또는 선택 없는 이전 방식 Plan) freeze했다면, fresh 판정이
+            // 새 프로젝트 제안이어도 "여전히 미등록"이라는 같은 상태다. 반대로 CreateNew로 freeze했는데 그 사이 등록됐거나(LinkExisting)
+            // 생성을 지원하지 않게 됐으면(Uncategorized) 다르다 → 거부(중복 생성 금지).
+            if (frozen.Kind == ProjectTargetKind.Uncategorized && fresh.Kind == ProjectTargetKind.CreateNew)
+            {
+                fresh = ProjectTarget.Uncategorized(fresh.Reason, fresh.FolderPath);
+            }
+
             if (!fresh.SameOutcomeAs(frozen))
             {
                 return project;

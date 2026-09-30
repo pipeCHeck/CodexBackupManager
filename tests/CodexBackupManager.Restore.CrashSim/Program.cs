@@ -15,6 +15,12 @@ const string NoProcessGuardArgument = "--process-guard=none";
 bool noProcessGuard = Array.IndexOf(args, NoProcessGuardArgument) >= 0;
 args = Array.FindAll(args, a => !string.Equals(a, NoProcessGuardArgument, StringComparison.Ordinal));
 
+// Phase 9_5-T3 — 테스트 전용 인자. 선택 없는 이전 방식 Plan 대신 기본 사용자 선택(ImportUserChoices.CreateDefault)으로 Plan을 만든다
+// (미등록 원본 폴더 → 새 프로젝트 만들기 경로를 크래시 시험하기 위함).
+const string WithChoicesArgument = "--with-choices";
+bool withChoices = Array.IndexOf(args, WithChoicesArgument) >= 0;
+args = Array.FindAll(args, a => !string.Equals(a, WithChoicesArgument, StringComparison.Ordinal));
+
 if (args.Length < 1)
 {
     Console.Error.WriteLine("usage: CrashSim apply|lock-hold ... [--process-guard=none]");
@@ -23,7 +29,7 @@ if (args.Length < 1)
 
 return args[0] switch
 {
-    "apply" => RunApply(args, noProcessGuard),
+    "apply" => RunApply(args, noProcessGuard, withChoices),
     "lock-hold" => RunLockHold(args),
     _ => Unknown(args[0]),
 };
@@ -34,7 +40,7 @@ static int Unknown(string command)
     return 2;
 }
 
-static int RunApply(string[] args, bool noProcessGuard)
+static int RunApply(string[] args, bool noProcessGuard, bool withChoices)
 {
     if (args.Length < 5)
     {
@@ -63,7 +69,9 @@ static int RunApply(string[] args, bool noProcessGuard)
         return 4;
     }
 
-    ImportPlan? plan = ImportPlanBuilder.Build(preview, backupFilePath);
+    ImportPlan? plan = withChoices
+        ? ImportPlanBuilder.Build(preview, backupFilePath, ImportUserChoices.CreateDefault(preview))
+        : ImportPlanBuilder.Build(preview, backupFilePath);
     if (plan is null)
     {
         Console.Error.WriteLine("ImportPlan을 만들 수 없습니다.");
@@ -106,7 +114,7 @@ static int RunLockHold(string[] args)
     string releaseSignalPath = args[3];
 
     RestoreProcessLock.AcquireResult lockResult = RestoreProcessLock.TryAcquire(codexHomePath, TimeSpan.Zero);
-    File.WriteAllText(readySentinelPath, lockResult.Acquired ? "acquired" : "not-acquired");
+    SentinelFile.WriteAtomically(readySentinelPath, lockResult.Acquired ? "acquired" : "not-acquired");
 
     if (!lockResult.Acquired)
     {
@@ -143,7 +151,20 @@ sealed class CrashAtPointHook(RestoreFaultInjectionPoint crashAt, string sentine
             return;
         }
 
-        File.WriteAllText(sentinelFilePath, "ready");
+        SentinelFile.WriteAtomically(sentinelFilePath, "ready");
         Thread.Sleep(Timeout.Infinite);
+    }
+}
+
+/// <summary>
+/// (Phase 9_1-17) 부모가 sentinel 파일을 "보였을 때" 이미 내용이 다 써져 있도록 temp에 쓴 뒤 같은 폴더 안에서 이동한다.
+/// </summary>
+static class SentinelFile
+{
+    public static void WriteAtomically(string path, string content)
+    {
+        string temp = path + ".tmp-" + Environment.ProcessId;
+        File.WriteAllText(temp, content);
+        File.Move(temp, path, overwrite: true);
     }
 }

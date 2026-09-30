@@ -11,10 +11,22 @@ namespace CodexBackupManager.Backup.Import;
 /// 사용자가 고른 폴더. <paramref name="UseSuggestion"/>이 <c>false</c>일 때만 쓴다.
 /// <see cref="ProjectTargetResolver.ResolveFolder"/>(userSelected: true)로 판정한다.
 /// </param>
-/// <param name="NewProjectName">새 프로젝트 이름(Phase 9_5용). 지금은 값이 있으면 선택 오류(적용 불가)다.</param>
-/// <param name="UseSuggestion"><c>true</c>면 <see cref="ImportProjectPreview.SuggestedTarget"/>을 그대로 쓴다.</param>
+/// <param name="NewProjectName">
+/// (Phase 9_5) 목적지가 새 프로젝트(<see cref="ProjectTargetKind.CreateNew"/>)일 때 쓸 이름. <c>null</c>이면 기본값(폴더 이름)이다.
+/// 앞뒤 공백은 지우고, 지운 뒤 비어 있으면 선택 오류(적용 불가)다(공식 <c>validate_name</c>). 목적지가 새 프로젝트가 아니면 쓰지 않는다.
+/// </param>
+/// <param name="UseSuggestion">
+/// <c>true</c>면 폴더는 <see cref="ImportProjectPreview.SuggestedTarget"/>의 것을 그대로 쓴다. 이름과 <see cref="CreateProject"/>는
+/// 제안이든 사용자 폴더든 결과가 새 프로젝트일 때 똑같이 적용된다.
+/// </param>
 public sealed record ProjectTargetDecision(string? FolderPath, string? NewProjectName, bool UseSuggestion)
 {
+    /// <summary>
+    /// (Phase 9_5) 목적지가 새 프로젝트일 때 실제로 만들지. <c>false</c>면 "새 프로젝트를 만들지 않고 기타 대화로" —
+    /// 목적지는 Uncategorized(같은 사유, 폴더 유지)가 된다. 기본값 <c>true</c>. 새 프로젝트가 아닌 목적지에는 영향이 없다.
+    /// </summary>
+    public bool CreateProject { get; init; } = true;
+
     /// <summary>제안된 목적지를 그대로 쓰는 결정.</summary>
     public static ProjectTargetDecision Suggested { get; } = new(null, null, UseSuggestion: true);
 

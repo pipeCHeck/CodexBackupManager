@@ -66,6 +66,34 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
     }
 
     [Fact]
+    public async Task 새_프로젝트_만들기_상태를_이름_칸과_함께_바인딩_오류_없이_그린다()
+    {
+        // Phase 9_5-05 — CreateNew 문구, 이름 칸(기본값 폴더 이름), "만들지 않기" 선택. 이름 칸 입력은 VM 결정으로 간다.
+        _h.RemoveFromTarget(ImportWorkspaceHarness.Thread1);
+        string folder = _h.NewFolder("render-create");
+        string backup = await _h.ExportAsync();
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup, folderPicker: () => folder);
+        ImportProjectNodeViewModel alpha = ws.Projects.First(p => p.Conversations.Any(c => c.ThreadId == ImportWorkspaceHarness.Thread1));
+        alpha.ChooseFolderCommand.Execute(null);
+        ws.SelectNode(alpha);
+        Assert.True(alpha.IsCreatingProject);
+
+        AssertRendersWithoutBindingErrors(ws, window =>
+        {
+            System.Windows.Controls.TextBox name = Descendants<System.Windows.Controls.TextBox>(window)
+                .Single(t => AutomationNameOf(t) == "새 프로젝트 이름" && ReferenceEquals(t.DataContext, alpha));
+            Assert.Equal(System.IO.Path.GetFileName(folder), name.Text);
+            System.Windows.Controls.CheckBox decline = Descendants<System.Windows.Controls.CheckBox>(window)
+                .Single(c => Equals(c.Content, "새 프로젝트를 만들지 않고 기타 대화로 가져오기") && ReferenceEquals(c.DataContext, alpha));
+            Assert.Equal(Visibility.Visible, decline.Visibility);
+
+            name.Text = "화면에서 바꾼 이름";
+            Pump();
+            Assert.Equal("화면에서 바꾼 이름", alpha.Target!.NewProjectName);
+        });
+    }
+
+    [Fact]
     public async Task Codex_대기와_실패_화면을_바인딩_오류_없이_그린다()
     {
         string backup = await _h.ExportAsync();

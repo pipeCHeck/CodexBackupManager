@@ -152,8 +152,20 @@ public static class ImportTexts
     /// <param name="target">목적지.</param>
     /// <param name="directory">이 PC 프로젝트 목록(연결 대상 이름, 폴더 없는 등록 프로젝트 판정에 쓴다).</param>
     /// <param name="originalRootPaths">백업의 원본 루트(OriginalRootMissing 보충 문구 판정용).</param>
-    public static string TargetStatus(ProjectTarget target, ProjectDirectory directory, IReadOnlyList<string> originalRootPaths)
+    /// <param name="creationDeclined">(Phase 9_5) 사용자가 "새 프로젝트를 만들지 않고 기타 대화로"를 골랐는지.</param>
+    public static string TargetStatus(
+        ProjectTarget target, ProjectDirectory directory, IReadOnlyList<string> originalRootPaths, bool creationDeclined = false)
     {
+        if (target.Kind == ProjectTargetKind.CreateNew)
+        {
+            return $"✨ 이 폴더로 새 프로젝트 '{target.NewProjectName}'을(를) 만들어 연결합니다.";
+        }
+
+        if (creationDeclined && target.Kind == ProjectTargetKind.Uncategorized)
+        {
+            return "새 프로젝트를 만들지 않고 기타 대화로 가져옵니다.";
+        }
+
         string projectName = target.LinkDbProjectId is { } id && directory.FindById(id) is { } known
             ? known.DisplayName
             : "등록된";
@@ -185,6 +197,22 @@ public static class ImportTexts
     /// <summary>목적지가 등록 프로젝트 연결인지(초록 표시용).</summary>
     public static bool IsLinked(ProjectTarget target) => target.Kind == ProjectTargetKind.LinkExisting;
 
+    /// <summary>(Phase 9_5) 새 프로젝트 하나의 표기: "'이름'(폴더)".</summary>
+    public static string NewProjectLabel(NewProjectGroup project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        return $"'{project.Name}'({DisplayPath(project.FolderPath)})";
+    }
+
+    /// <summary>(Phase 9_5-05) "새로 만들 프로젝트 N개: '이름'(폴더), …". 없으면 <c>null</c>.</summary>
+    public static string? NewProjectsLine(ImportSelectionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        return summary.NewProjects.Count == 0
+            ? null
+            : $"새로 만들 프로젝트 {summary.NewProjects.Count}개: {string.Join(", ", summary.NewProjects.Select(NewProjectLabel))}";
+    }
+
     /// <summary>
     /// 원본 루트 중 이 PC Codex에 등록돼 있지만 폴더가 없는 것이 있는지. 등록 여부와 실존 여부는
     /// <see cref="KnownProjectRoot.ExistsOnDisk"/>(카탈로그 생성 시 <c>Directory.Exists</c>)로만 판단한다.
@@ -206,7 +234,8 @@ public static class ImportTexts
 
     /// <summary>하단 요약 첫 줄.</summary>
     public static string SummaryLine(ImportSelectionSummary summary)
-        => $"가져오기: 새 대화 {summary.ImportCount} · 이어받기 {summary.UpdateCount} · 기타 대화로 {summary.UncategorizedImportCount}";
+        => $"가져오기: 새 대화 {summary.ImportCount} · 이어받기 {summary.UpdateCount} · 기타 대화로 {summary.UncategorizedImportCount}" +
+           (summary.NewProjects.Count > 0 ? $" · 새 프로젝트 {summary.NewProjects.Count}" : string.Empty);
 
     /// <summary>
     /// 하단 요약 둘째 줄(안내 또는 적용 불가 사유 한 줄). 차단 사유의 thread ID는 대화 제목으로 바꾼다.
@@ -229,9 +258,11 @@ public static class ImportTexts
                 return "이 백업에는 지금 가져올 수 있는 대화가 없습니다.";
         }
 
-        return summary.UncategorizedImportCount > 0
+        string? uncategorized = summary.UncategorizedImportCount > 0
             ? $"선택한 대화 중 \"기타 대화\"로 들어가는 것이 {summary.UncategorizedImportCount}개 있습니다."
             : null;
+        string? newProjects = NewProjectsLine(summary);
+        return newProjects is null ? uncategorized : uncategorized is null ? newProjects : $"{newProjects} · {uncategorized}";
     }
 
     /// <summary>문장 안의 thread ID를 '제목'으로 바꾼다(없으면 짧은 대체 표기).</summary>
@@ -255,6 +286,9 @@ public static class ImportTexts
         => "다음 내용을 Codex에 적용합니다." + Environment.NewLine + Environment.NewLine +
            $"  새로 가져올 대화   {summary.ImportCount}개" + Environment.NewLine +
            $"  이어받을 대화      {summary.UpdateCount}개" + Environment.NewLine +
+           (summary.NewProjects.Count > 0
+               ? $"  새로 만들 프로젝트 {summary.NewProjects.Count}개: {string.Join(", ", summary.NewProjects.Select(NewProjectLabel))}" + Environment.NewLine
+               : string.Empty) +
            $"  기타 대화로 들어갈 대화 {summary.UncategorizedImportCount}개" + Environment.NewLine + Environment.NewLine +
            "적용 전에 현재 상태의 복구 지점(Snapshot)을 만듭니다." + Environment.NewLine +
            "실패하면 자동으로 되돌립니다. Codex가 완전히 종료되어 있어야 합니다.";
