@@ -5,6 +5,7 @@ using System.Linq;
 using CodexBackupManager.App.Services;
 using CodexBackupManager.App.Tests.TestSupport;
 using CodexBackupManager.App.ViewModels;
+using CodexBackupManager.App.ViewModels.Import;
 using CodexBackupManager.Codex;
 using CodexBackupManager.Restore;
 using Xunit;
@@ -12,19 +13,15 @@ using Xunit;
 namespace CodexBackupManager.App.Tests.ViewModels;
 
 /// <summary>
-/// Phase 07_01 — <see cref="MainViewModel.ApplyCommand"/>가 frozen <see cref="Backup.Import.ImportPlan"/>을
-/// 실제 production 진입점(<see cref="Restore.RestoreExecutor.Apply(Backup.Import.ImportPlan,string,string?,Restore.IRestoreFaultInjectionHook?,Action{string}?,System.Threading.CancellationToken)"/>)에
-/// 그대로 넘기는지 확인한다. 여기서는 안전성 판단(Preflight/backup pin/Operation Plan 재검증)을
-/// 다시 테스트하지 않는다 — 그건 Restore.Tests의 책임이다. 이 테스트는 오직 ViewModel 배선(확인
-/// 대화상자 → RestoreExecutor 호출 → 상태 문구/커맨드 활성화 반영)만 확인한다. 실제 사용자
-/// <c>.codex</c>는 전혀 건드리지 않는다 — 항상 커밋된 fixture를 임시 폴더로 복사해서 쓴다.
+/// 메인 화면에 남은 적용 관련 동작: 완료되지 못한 이전 적용 배너와 [이전 상태로 복구](Phase 07_02/07_03), 내보내기 전
+/// Codex 실행 안내(9_2-20). 가져오기 화면(분석·선택·적용·결과)은 <c>ImportWorkspaceViewModelTests</c>가 검증한다(9_2-08에서 이관).
+/// 실제 사용자 <c>.codex</c>는 전혀 건드리지 않는다 — 항상 커밋된 fixture를 임시 폴더로 복사해서 쓴다.
 /// </summary>
 public sealed class MainViewModelApplyTests : IAsyncLifetime
 {
     private string? _sourceHome;
     private string? _targetHome;
     private string? _testDir;
-    private string? _backupPath;
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -72,20 +69,17 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
     /// <summary>호스트에서 실제로 실행 중인 프로세스와 무관한 "Codex 없음" 목록(Phase 9_1-01).</summary>
     private static readonly CodexProcessGuard.RunningProcessLister NoCodexRunning = () => [];
 
-    /// <summary>가드가 실제로 막는지 확인할 때 쓰는 가짜 "Codex 실행 중" 목록.</summary>
+    /// <summary>가짜 "Codex 실행 중" 목록.</summary>
     private static readonly CodexProcessGuard.RunningProcessLister FakeCodexRunning =
         () => [new RunningProcessInfo("Codex", null)];
 
     /// <summary>
-    /// Phase 9_1-01 — ViewModel이 쓰는 Restore 호출(Apply/Recover)에 프로세스 목록만 주입한다. fresh
-    /// catalog 생성 등 나머지는 production과 같은 경로(<see cref="RestoreExecutor.BuildFreshCatalog"/>)다.
+    /// Phase 9_1-01/9_2-2 — ViewModel이 쓰는 프로세스 목록(복구, 내보내기 안내, 가져오기 화면)을 주입한다.
     /// </summary>
     private static void UseProcessLister(MainViewModel viewModel, CodexProcessGuard.RunningProcessLister lister)
     {
-        viewModel.RestoreApply = (plan, codexHomePath, snapshotRoot, onStatusChanged, cancellationToken) => RestoreExecutor.Apply(
-            plan, codexHomePath, lister, RestoreExecutor.BuildFreshCatalog,
-            snapshotRoot: snapshotRoot, onStatusChanged: onStatusChanged, cancellationToken: cancellationToken);
-        viewModel.RecoveryProcessLister = lister;
+        viewModel.ProcessLister = lister;
+        viewModel.ImportWorkspace.ProcessLister = lister;
     }
 
     private MainViewModel CreateViewModel(
@@ -111,176 +105,56 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         return viewModel;
     }
 
-    /// <summary>
-    /// 같은 fixture를 복사한 source/target Codex Home 사이에서 Export → Import Preview까지 실행해
-    /// frozen <see cref="MainViewModel.CurrentImportPlan"/>이 준비된 importer를 돌려준다. Export/target
-    /// 쪽 backup 경로/폴더는 인스턴스 필드(<see cref="_sourceHome"/> 등)에 캐시해 두므로, 같은 테스트
-    /// 안에서 confirmDialog만 다른 두 번째 importer가 필요하면 <see cref="CreateImporterForFrozenBackup"/>을
-    /// 다시 부르면 된다(백업 파일을 다시 만들지 않는다).
-    /// </summary>
-    private async Task<MainViewModel> BuildImporterWithFrozenPlanAsync(
-        Func<string, string, bool>? confirmDialog = null,
-        CodexProcessGuard.RunningProcessLister? processLister = null)
+    [Fact]
+    public async Task 내보내기_전에_Codex가_실행_중이면_안내만_하고_내보내기는_계속한다()
     {
-        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
-        _targetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        // Phase 9_2-20 — 차단하지 않는다.
         _testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_testDir);
-        _backupPath = Path.Combine(_testDir, "apply.codexbackup");
+        _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        string backupPath = Path.Combine(_testDir, "notice.codexbackup");
+        MainViewModel viewModel = CreateViewModel(_sourceHome, exportFilePicker: _ => backupPath, processLister: FakeCodexRunning);
+        viewModel.ChangeFolderCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsBusy, "탐지");
+        await WaitUntilFalse(() => viewModel.IsCatalogLoading, "카탈로그 로딩");
+        viewModel.SelectAllConversationsCommand.Execute(null);
 
-        MainViewModel exporter = CreateViewModel(_sourceHome, exportFilePicker: _ => _backupPath);
-        exporter.ChangeFolderCommand.Execute(null);
-        await WaitUntilFalse(() => exporter.IsBusy, "탐지");
-        await WaitUntilFalse(() => exporter.IsCatalogLoading, "카탈로그 로딩");
-        exporter.SelectAllConversationsCommand.Execute(null);
-        exporter.ExportCommand.Execute(null);
-        await WaitUntilFalse(() => exporter.IsExporting, "Export");
-        Assert.True(File.Exists(_backupPath));
+        viewModel.ExportCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsExporting, "Export");
 
-        return await CreateImporterForFrozenBackupAsync(confirmDialog, processLister);
-    }
+        Assert.Contains("Codex에서 사용 중인 대화는 내보내기 도중 바뀌면 실패할 수 있습니다", viewModel.ExportNoticeText);
+        Assert.True(File.Exists(backupPath));
 
-    /// <summary>
-    /// 이미 만들어진 <see cref="_backupPath"/>를 대상으로 새 importer의 Preview를 만든다. fixture의
-    /// 프로젝트 경로(<c>C:\Fixture\Projects\...</c>류의 고정 문자열)는 실제로는 이 테스트 머신에
-    /// 존재하지 않으므로, Apply의 fresh preflight(<see cref="ImportPlanPreflightValidator"/>)가
-    /// <c>TargetPathUnavailable</c>로 정확히 막는다(이건 버그가 아니라 Phase 06_02에서 이미 확인한
-    /// 실제 데이터 특성이다) — 그래서 여기서 실제로 존재하는 임시 폴더로 수동 재지정까지 마친 뒤
-    /// 돌려준다.
-    /// </summary>
-    private async Task<MainViewModel> CreateImporterForFrozenBackupAsync(
-        Func<string, string, bool>? confirmDialog = null,
-        CodexProcessGuard.RunningProcessLister? processLister = null)
-    {
-        string overrideFolder = Path.Combine(_testDir!, $"project-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(overrideFolder);
-
-        MainViewModel importer = CreateViewModel(
-            _targetHome!, importFilePicker: () => _backupPath, projectPathPicker: () => overrideFolder,
-            confirmDialog: confirmDialog, processLister: processLister);
-        importer.ChangeFolderCommand.Execute(null);
-        await WaitUntilFalse(() => importer.IsBusy, "탐지");
-        await WaitUntilFalse(() => importer.IsCatalogLoading, "카탈로그 로딩");
-
-        importer.ImportPreviewCommand.Execute(null);
-        await WaitUntilFalse(() => importer.IsImportPreviewLoading, "Import Preview");
-        Assert.NotNull(importer.CurrentImportPreview);
-
-        foreach (ImportProjectRowViewModel project in importer.CurrentImportPreview!.Projects.Where(p => p.CanOverridePath))
-        {
-            project.OverridePathCommand!.Execute(null);
-        }
-
-        Assert.NotNull(importer.CurrentImportPlan);
-        Assert.True(importer.CurrentImportPlan!.IsApplyReady);
-
-        return importer;
+        UseProcessLister(viewModel, NoCodexRunning);
+        viewModel.ExportCommand.Execute(null);
+        await WaitUntilFalse(() => viewModel.IsExporting, "Export");
+        Assert.Null(viewModel.ExportNoticeText);
     }
 
     [Fact]
-    public async Task Preview_직후에는_ApplyCommand를_실행할_수_있고_Plan이_없으면_실행할_수_없다()
+    public async Task 완료되지_못한_이전_Apply가_있으면_가져오기_화면에서_가져오기가_막힌다()
     {
-        MainViewModel importer = await BuildImporterWithFrozenPlanAsync();
-
-        // Preview/override 전(생성 직후)에는 frozen Plan이 없으므로 CanExecute도 항상 false였다 —
-        // 이 시점엔 이미 Preview가 끝나 있으니 대신 CloseImportPreview 이후 다시 false로 돌아오는지로
-        // "Plan이 없으면 실행할 수 없다"를 확인한다.
-        Assert.True(importer.ApplyCommand.CanExecute(null));
-
-        importer.CloseImportPreviewCommand.Execute(null);
-        Assert.False(importer.ApplyCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public async Task 확인_대화상자에서_취소하면_아무것도_적용하지_않는다()
-    {
-        string? shownMessage = null;
-        string? shownTitle = null;
-        MainViewModel importer = await BuildImporterWithFrozenPlanAsync((message, title) =>
-        {
-            shownMessage = message;
-            shownTitle = title;
-            return false;
-        });
-
-        importer.ApplyCommand.Execute(null);
-        await WaitUntilFalse(() => importer.IsApplying, "Apply");
-
-        Assert.NotNull(shownMessage);
-        Assert.Contains("Snapshot을 생성합니다", shownMessage);
-        Assert.Contains("Codex가 완전히 종료되어 있어야 합니다", shownMessage);
-        Assert.Equal("적용 확인", shownTitle);
-        Assert.False(importer.IsApplying);
-        Assert.Null(importer.ApplyStatusText);
-        // 취소는 Apply를 아예 시작하지 않는다 — Plan은 여전히 살아있다.
-        Assert.NotNull(importer.CurrentImportPlan);
-    }
-
-    [Fact]
-    public async Task 완전히_동일한_대상에_Apply하면_NothingToDo로_끝나고_Plan을_무효화한다()
-    {
-        // 같은 fixture를 그대로 복사한 두 Codex Home 사이의 Apply이므로 opPlan은 항상 비어 있다
-        // (전부 Identical/NoOp) — Snapshot조차 만들지 않는 가장 안전한 경로다. Phase 9_1-01부터
-        // 프로세스 목록만 "Codex 없음"으로 주입한다(호스트에서 Codex가 실행 중이어도 이 배선 테스트가
-        // 흔들리지 않게). 나머지 Restore 경로는 production과 같다.
-        MainViewModel importer = await BuildImporterWithFrozenPlanAsync((_, _) => true);
-
-        Assert.True(importer.ApplyCommand.CanExecute(null));
-        importer.ApplyCommand.Execute(null);
-        await WaitUntilFalse(() => importer.IsApplying, "Apply");
-
-        Assert.Contains("변경 사항이 없", importer.ApplyStatusText);
-        Assert.Null(importer.CurrentImportPlan);
-        Assert.False(importer.ApplyCommand.CanExecute(null));
-    }
-
-    [Fact]
-    public async Task Codex가_실행_중이면_Apply가_막히고_Plan은_그대로_남는다()
-    {
-        // Phase 9_1-01 — 테스트 격리 뒤에도 "Codex가 실행 중이면 적용이 막힌다"를 ViewModel 경로에서
-        // 확인한다. 가짜 Codex 프로세스 목록을 주입한다(실제 가드 판정 로직은 CodexProcessGuardTests).
-        MainViewModel importer = await BuildImporterWithFrozenPlanAsync((_, _) => true, FakeCodexRunning);
-        string snapshotRoot = Path.Combine(_testDir!, "snapshots");
-
-        importer.ApplyCommand.Execute(null);
-        await WaitUntilFalse(() => importer.IsApplying, "Apply");
-
-        Assert.Contains("실행 중", importer.ApplyStatusText);
-        Assert.NotNull(importer.CurrentImportPlan);
-        Assert.False(Directory.Exists(snapshotRoot) && Directory.EnumerateFileSystemEntries(snapshotRoot).Any());
-    }
-
-    [Fact]
-    public void KnownLimitationsText는_항상_비어있지_않다()
-    {
-        Assert.False(string.IsNullOrWhiteSpace(MainViewModel.KnownLimitationsText));
-    }
-
-    [Fact]
-    public async Task 완료되지_못한_이전_Apply가_있으면_ApplyCommand가_비활성화된다()
-    {
-        // Phase 07_02 요구사항 7 — RestoreExecutor.Apply 자신도 같은 조건으로 새 Apply를 거부하지만,
-        // UI도 미리 알아채고 버튼을 눌러도 소용없게 막아야 한다.
-        MainViewModel importer = await BuildImporterWithFrozenPlanAsync();
-        Assert.True(importer.ApplyCommand.CanExecute(null));
-
-        string snapshotRoot = Path.Combine(_testDir!, "snapshots");
-        string staleSnapshotDir = Path.Combine(snapshotRoot, "stale");
+        // Phase 07_02 요구사항 7 → 9_2-08: 배너와 [이전 상태로 복구]는 메인에 남고, 가져오기 버튼은 화면에서 막힌다.
+        using var harness = new ImportWorkspaceHarness();
+        harness.RemoveFromTarget(ImportWorkspaceHarness.Thread2);
+        string backup = await harness.ExportAsync();
+        string staleSnapshotDir = Path.Combine(harness.SnapshotRoot, "stale");
         Directory.CreateDirectory(staleSnapshotDir);
         RestoreTransactionJournalStore.Write(
-            staleSnapshotDir, new RestoreTransactionJournal("stale", _targetHome!, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
+            staleSnapshotDir, new RestoreTransactionJournal("stale", harness.TargetHome, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
 
-        // 다시 탐지하면(Codex Home이 갱신될 때마다 확인한다) 이제 완료되지 못한 Apply를 찾아야
-        // 한다. RefreshCommand(자동 탐지)가 아니라 ChangeFolderCommand를 쓴다 — Phase 07_03에서
-        // 미완료 Apply가 Home별로 scope되므로, 이 테스트 머신에 실제로 다른 .codex가 있어도(자동
-        // 탐지가 그쪽을 찾아버릴 수 있다) importer가 원래 가리키던 바로 그 _targetHome을 다시
-        // 확인해야 한다.
-        importer.ChangeFolderCommand.Execute(null);
-        await WaitUntilFalse(() => importer.IsBusy, "탐지");
+        MainViewModel main = harness.CreateMainViewModel(harness.TargetHome, importFilePicker: () => backup);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+        Assert.True(main.HasIncompleteApply);
+        Assert.True(main.RecoverIncompleteApplyCommand.CanExecute(null));
 
-        Assert.True(importer.HasIncompleteApply);
-        Assert.False(importer.ApplyCommand.CanExecute(null));
-        Assert.True(importer.RecoverIncompleteApplyCommand.CanExecute(null));
+        main.OpenImportWorkspaceCommand.Execute(null);
+        await ImportWorkspaceHarness.WaitUntil(() => main.ImportWorkspace.State == ImportWorkspaceState.Editing, "가져오기 화면");
+
+        Assert.Equal(1, main.ImportWorkspace.Summary!.ImportCount);
+        Assert.False(main.ImportWorkspace.CanImport);
+        Assert.False(main.ImportWorkspace.ImportCommand.CanExecute(null));
+        Assert.Contains("이전 상태로 복구", main.ImportWorkspace.SummaryHint);
     }
 
     [Fact]

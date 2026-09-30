@@ -7,7 +7,8 @@ namespace CodexBackupManager.Restore;
 /// <summary>실행 중인 프로세스 하나에 대해 알아야 할 최소 정보(테스트 주입용 추상화).</summary>
 /// <param name="ProcessName">프로세스 이름(확장자 없이, 예: <c>"Codex"</c>, <c>"codex"</c>).</param>
 /// <param name="MainModulePath">실행 파일 전체 경로. 접근할 수 없으면 <c>null</c>(예: 권한 문제).</param>
-public sealed record RunningProcessInfo(string ProcessName, string? MainModulePath);
+/// <param name="ProcessId">프로세스 ID(진단/테스트에서 특정 프로세스를 찾을 때만 쓴다. 판정에는 쓰지 않는다). 모르면 <c>null</c>.</param>
+public sealed record RunningProcessInfo(string ProcessName, string? MainModulePath, int? ProcessId = null);
 
 /// <summary>
 /// Codex(Desktop Electron 앱 또는 CLI)가 지금 실행 중인지 판정한다(Phase 7 — 요구사항 5).
@@ -101,7 +102,7 @@ public static class CodexProcessGuard
                     // 접근 권한 문제 등 — 경로 없이 이름만으로 판정한다.
                 }
 
-                result.Add(new RunningProcessInfo(processName, mainModulePath));
+                result.Add(new RunningProcessInfo(processName, mainModulePath, process.Id));
             }
             catch
             {

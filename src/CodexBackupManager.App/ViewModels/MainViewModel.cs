@@ -8,6 +8,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using CodexBackupManager.App.Services;
+using CodexBackupManager.App.ViewModels.Import;
 using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Backup.Manifest;
 using CodexBackupManager.Backup.Planning;
@@ -40,8 +41,6 @@ public sealed class MainViewModel : ObservableObject
     private readonly FileLogger _logger;
     private readonly Func<string?> _folderPicker;
     private readonly Func<string, string?> _exportFilePicker;
-    private readonly Func<string?> _importFilePicker;
-    private readonly Func<string?> _projectPathPicker;
     private readonly Func<string, string, bool> _confirmDialog;
     private readonly Func<string> _snapshotRootProvider;
 
@@ -77,31 +76,11 @@ public sealed class MainViewModel : ObservableObject
     private string? _exportStatusText;
     private CancellationTokenSource? _exportCancellation;
 
-    // Phase 6 — Import Preview. Codex에는 아무것도 쓰지 않는다(판정/미리보기까지만).
-    private bool _isImportPreviewLoading;
-    private string? _importStatusText;
-    private ImportPreviewViewModel? _currentImportPreview;
-    private CancellationTokenSource? _importPreviewCancellation;
-    private string? _lastImportBackupFilePath;
-
-    // Phase 06_01 — override 상태는 View code-behind가 아니라 여기(도메인 ImportPreview 그 자체)에
-    // 저장한다. ImportPreviewBuilder.ApplyManualProjectPathOverride가 이 값만 갱신하고,
-    // ImportPreviewViewModel은 매번 이 값으로부터 다시 만든다.
-    private ImportPreview? _lastImportPreviewDomain;
-    private string? _importPlanSummaryText;
-
-    // Phase 06_03 — freeze된 ImportPlan은 여기 한 곳에만 보관한다. Preview가 성공하거나 경로를
-    // 재지정할 때 딱 한 번만 ImportPlanBuilder.Build를 부르고, 그 결과를 이 필드에 저장한다 — Phase 7이
-    // Apply 직전에 이 인스턴스를 그대로 받아 preflight만 다시 돌리면 되고, Preview를 다시 해석하거나
-    // Plan을 다시 만들 필요가 없다.
-    private ImportPlan? _currentImportPlan;
-
-    // Phase 07_01 — Apply. RestoreExecutor가 유일한 안전성 판단 주체다: 여기서는 확인 대화상자를
-    // 띄우고, 진행 중 다른 조작(Export/새 Import Preview/경로 재지정/폴더 변경)을 막고, 결과 문구를
-    // 보여줄 뿐 Plan/Preflight를 다시 해석하지 않는다.
-    private bool _isApplying;
-    private string? _applyStatusText;
-    private CancellationTokenSource? _applyCancellation;
+    // Phase 9_2-08 — 가져오기(Import Preview/선택/Apply/결과)는 전부 ImportWorkspaceViewModel이 맡는다.
+    // MainViewModel에는 진입(OpenImportWorkspaceCommand), 복귀(Closed 이벤트), 결과 강조만 남긴다.
+    private readonly ImportWorkspaceViewModel _importWorkspace;
+    private CodexInstallationInfo? _lastInstallation;
+    private string? _exportNoticeText;
 
     // Phase 07_02 — 완료되지 못한 이전 Apply(durable transaction journal이 Applying으로 멈춘 것)가
     // 있으면 새 Apply를 막고 사용자가 명시적으로 승인해야만 복구한다. RestoreExecutor.Apply 자신도
@@ -157,27 +136,32 @@ public sealed class MainViewModel : ObservableObject
         _logger = logger;
         _folderPicker = folderPicker;
         _exportFilePicker = exportFilePicker ?? BackupFilePicker.PickSaveLocation;
-        _importFilePicker = importFilePicker ?? BackupFilePicker.PickOpenLocation;
-        _projectPathPicker = projectPathPicker ?? FolderPicker.PickProjectFolder;
         _confirmDialog = confirmDialog ?? Services.ConfirmDialog.Confirm;
         _snapshotRootProvider = snapshotRootProvider ?? SnapshotService.DefaultSnapshotRoot;
 
         // UI 스레드에서 시작하고 결과를 기다리지 않는다. 예외는 각 메서드 내부에서 처리한다.
-        RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy && !IsApplying);
-        ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync(), () => !IsBusy && !IsApplying);
+        RefreshCommand = new RelayCommand(() => _ = RefreshAsync(), () => !IsBusy && !IsImportWorkspaceOpen);
+        ChangeFolderCommand = new RelayCommand(() => _ = ChangeFolderAsync(), () => !IsBusy && !IsImportWorkspaceOpen);
         SelectAllConversationsCommand = new RelayCommand(SelectAllConversations, () => TotalConversationCount > 0);
         ClearSelectionCommand = new RelayCommand(ClearAllSelections, () => HasSelection);
-        ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting && !IsApplying);
+        ExportCommand = new RelayCommand(() => _ = ExportAsync(), () => HasSelection && !IsExporting && !IsImportWorkspaceOpen);
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
-        ImportPreviewCommand = new RelayCommand(() => _ = ImportPreviewAsync(), () => !IsImportPreviewLoading && !IsApplying);
-        CloseImportPreviewCommand = new RelayCommand(CloseImportPreview, () => !IsApplying);
-        // 요구사항 9(Phase 07_02) — Diverged/Unverifiable이 섞인 Plan은 버튼 자체를 비활성화한다
-        // (이전에는 Plan이 있기만 하면 눌렸다 — 실제 차단은 Core의 최종 Preflight가 하지만, 애초에
-        // 막힐 게 뻔한 Plan으로 클릭조차 못 하게 하는 편이 더 명확하다). Core의 최종 판단은 그대로
-        // 유지한다 — 이 조건은 1차 UI 판단일 뿐이다.
-        ApplyCommand = new RelayCommand(() => _ = ApplyAsync(), () => _currentImportPlan is { IsApplyReady: true } && !IsApplying && !HasIncompleteApply);
-        CancelApplyCommand = new RelayCommand(CancelApply, () => IsApplying);
-        RecoverIncompleteApplyCommand = new RelayCommand(() => _ = RecoverIncompleteApplyAsync(), () => HasIncompleteApply && !IsApplying);
+        OpenImportWorkspaceCommand = new RelayCommand(
+            () => _ = ImportWorkspace.OpenAsync(), () => IsConnected && !IsBusy && !IsImportWorkspaceOpen && !IsExporting);
+        RecoverIncompleteApplyCommand = new RelayCommand(() => _ = RecoverIncompleteApplyAsync(), () => HasIncompleteApply && !IsImportWorkspaceOpen);
+
+        _importWorkspace = new ImportWorkspaceViewModel(
+            logger, importFilePicker ?? BackupFilePicker.PickOpenLocation, projectPathPicker ?? FolderPicker.PickProjectFolder,
+            _confirmDialog, _snapshotRootProvider, () => string.IsNullOrWhiteSpace(HomePath) ? null : HomePath, () => HasIncompleteApply);
+        _importWorkspace.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ImportWorkspaceViewModel.IsOpen))
+            {
+                OnPropertyChanged(nameof(IsImportWorkspaceOpen));
+                RaiseMainCommands();
+            }
+        };
+        _importWorkspace.Closed += OnImportWorkspaceClosed;
 
         // 선택 상태 변경은 한 곳에서만 구독한다 — 대량 선택이어도 이 핸들러는 딱 한 번만 불려서
         // O(1) 작업(개수 갱신)만 한다(요구사항 10: 수천 개에서도 재계산이 폭증하지 않아야 한다).
@@ -202,22 +186,11 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>진행 중인 Export를 취소한다(Phase 05_01). Export 중일 때만 활성화된다.</summary>
     public RelayCommand CancelExportCommand { get; }
 
-    /// <summary><c>.codexbackup</c> 파일을 선택해 Import Preview를 만든다(Phase 6). Codex에는 아무것도 쓰지 않는다.</summary>
-    public RelayCommand ImportPreviewCommand { get; }
-
-    /// <summary>현재 표시 중인 Import Preview를 닫는다(판정 결과를 버릴 뿐, Codex에는 아무 영향 없다).</summary>
-    public RelayCommand CloseImportPreviewCommand { get; }
-
     /// <summary>
-    /// 현재 frozen된 <see cref="_currentImportPlan"/>을 실제 Codex에 적용한다(Phase 07_01). 이
-    /// <c>CanExecute</c>는 1차 UI 조건일 뿐이다 — 실제 안전성 판단은 클릭 시점에
-    /// <see cref="RestoreExecutor"/>가 직접 fresh preflight/backup pin/Operation Plan 재검증으로
-    /// 수행한다.
+    /// [백업 가져오기](Phase 9_2-2): 가져오기 작업 공간을 연다. 파일 선택, Codex 실행 확인, 분석, 선택, 적용, 결과는
+    /// 전부 <see cref="ImportWorkspace"/>가 맡는다.
     /// </summary>
-    public RelayCommand ApplyCommand { get; }
-
-    /// <summary>진행 중인 Apply를 취소한다. Snapshot 이후라면 취소도 Rollback으로 처리된다.</summary>
-    public RelayCommand CancelApplyCommand { get; }
+    public RelayCommand OpenImportWorkspaceCommand { get; }
 
     /// <summary>
     /// 완료되지 못하고 중단된 이전 Apply를 사용자가 명시적으로 승인해 이전 상태로 복구한다(Phase
@@ -226,81 +199,27 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     public RelayCommand RecoverIncompleteApplyCommand { get; }
 
-    /// <summary>Import Preview를 만드는 중인지.</summary>
-    public bool IsImportPreviewLoading
-    {
-        get => _isImportPreviewLoading;
-        private set
-        {
-            if (SetProperty(ref _isImportPreviewLoading, value))
-            {
-                ImportPreviewCommand.RaiseCanExecuteChanged();
-            }
-        }
-    }
+    /// <summary>가져오기 작업 공간(Phase 9_2-2). 항상 같은 인스턴스이고 열림/닫힘은 <see cref="ImportWorkspaceViewModel.IsOpen"/>이 말한다.</summary>
+    public ImportWorkspaceViewModel ImportWorkspace => _importWorkspace;
 
-    /// <summary>Import Preview 진행/결과 문구. 대화 원문이나 개인 절대경로는 담지 않는다.</summary>
-    public string? ImportStatusText
-    {
-        get => _importStatusText;
-        private set => SetProperty(ref _importStatusText, value);
-    }
-
-    /// <summary>현재 만들어진 Import Preview. 아직 없으면 <c>null</c>.</summary>
-    public ImportPreviewViewModel? CurrentImportPreview
-    {
-        get => _currentImportPreview;
-        private set
-        {
-            if (SetProperty(ref _currentImportPreview, value))
-            {
-                OnPropertyChanged(nameof(HasImportPreview));
-            }
-        }
-    }
-
-    /// <summary>Import Preview 결과가 있어 화면에 보여줄 수 있는지.</summary>
-    public bool HasImportPreview => CurrentImportPreview is not null;
+    /// <summary>가져오기 작업 공간이 열려 있는지(메인 화면을 가리고 메인 명령을 막는다).</summary>
+    public bool IsImportWorkspaceOpen => _importWorkspace?.IsOpen == true;
 
     /// <summary>
-    /// Preview를 <see cref="ImportPlan"/>으로 freeze한 결과에 대한 안내 문구(Phase 06_01, 문구는
-    /// Phase 06_03에서 정정). <b>이 문구는 "지금 바로 Apply해도 안전하다"는 뜻이 아니다</b> —
-    /// <see cref="ImportPlan.IsApplyReady"/>는 Diverged/Unverifiable이 없다는 것만 말해줄 뿐, backup
-    /// 파일이나 로컬 Codex가 Preview 이후 바뀌었는지는 전혀 모른다(그건 Apply 직전 fresh
-    /// <see cref="ImportPlanPreflightValidator"/>만 알 수 있다). Phase 7 이전까지는 "실제 적용
-    /// 가능"이라는 오해를 주지 않는 중립적인 문구만 보여준다.
+    /// [이전 상태로 복구]와 내보내기 전 안내가 쓰는 프로세스 목록 제공자(Phase 9_1-01/9_2-20, 테스트 전용 seam —
+    /// <c>InternalsVisibleTo</c>로 App.Tests에만 보인다). 기본값은 <see cref="CodexProcessGuard.SystemRunningProcessLister"/>다.
+    /// 가져오기 화면의 확인은 <see cref="ImportWorkspaceViewModel"/>이 따로 가진다.
     /// </summary>
-    public string? ImportPlanSummaryText
+    internal CodexProcessGuard.RunningProcessLister ProcessLister { get; set; } = CodexProcessGuard.SystemRunningProcessLister;
+
+    /// <summary>
+    /// 내보내기 시작 전 Codex가 실행 중이었을 때의 안내(Phase 9_2-20). 차단하지 않는다. 아니면 <c>null</c>.
+    /// </summary>
+    public string? ExportNoticeText
     {
-        get => _importPlanSummaryText;
-        private set => SetProperty(ref _importPlanSummaryText, value);
+        get => _exportNoticeText;
+        private set => SetProperty(ref _exportNoticeText, value);
     }
-
-    /// <summary>
-    /// 테스트 전용 접근자(<c>InternalsVisibleTo</c>로 App.Tests에만 노출). 현재 freeze된
-    /// <see cref="ImportPlan"/> — <see cref="UpdateImportPlanSummary"/>가 딱 한 곳에서만 만들고
-    /// 저장한다. Phase 7은 이 인스턴스를 그대로 받아 Apply 직전 preflight만 다시 돌리면 된다(Preview
-    /// 재해석/Plan 재생성 금지).
-    /// </summary>
-    internal ImportPlan? CurrentImportPlan => _currentImportPlan;
-
-    /// <summary>
-    /// Apply가 실제로 부르는 Restore 진입점(Phase 9_1-01, 테스트 전용 seam — <c>InternalsVisibleTo</c>로
-    /// App.Tests에만 보인다). 인자: (plan, codexHomePath, snapshotRoot, onStatusChanged, cancellationToken).
-    /// 기본값은 production <see cref="RestoreExecutor.Apply(ImportPlan,string,string?,IRestoreFaultInjectionHook?,Action{string}?,CancellationToken)"/>이고,
-    /// 그 안에서 <see cref="CodexProcessGuard.SystemRunningProcessLister"/>를 쓴다. 제품에는 이 값을 바꾸는
-    /// 설정/인자/환경 변수가 없다. 테스트는 호스트에서 실제로 실행 중인 Codex와 무관하게 배선만 확인하려고
-    /// 프로세스 목록만 바꾼 Restore 호출로 교체한다.
-    /// </summary>
-    internal Func<ImportPlan, string, string, Action<string>, CancellationToken, RestoreResult> RestoreApply { get; set; }
-        = static (plan, codexHomePath, snapshotRoot, onStatusChanged, cancellationToken) => RestoreExecutor.Apply(
-            plan, codexHomePath, snapshotRoot: snapshotRoot, onStatusChanged: onStatusChanged, cancellationToken: cancellationToken);
-
-    /// <summary>
-    /// [이전 상태로 복구]가 <see cref="IncompleteApplyRecoveryService.Recover"/>에 넘기는 프로세스 목록 제공자
-    /// (Phase 9_1-01, 테스트 전용 seam). 기본값은 <see cref="CodexProcessGuard.SystemRunningProcessLister"/>다.
-    /// </summary>
-    internal CodexProcessGuard.RunningProcessLister RecoveryProcessLister { get; set; } = CodexProcessGuard.SystemRunningProcessLister;
 
     /// <summary>Export가 진행 중인지. 재실행을 막고 취소 버튼 표시 여부를 결정하는 데 쓴다.</summary>
     public bool IsExporting
@@ -324,37 +243,6 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Apply가 진행 중인지(Phase 07_01). 진행 중에는 Export/새 Import Preview/경로 재지정/Codex
-    /// Home 변경을 모두 막는다.
-    /// </summary>
-    public bool IsApplying
-    {
-        get => _isApplying;
-        private set
-        {
-            if (SetProperty(ref _isApplying, value))
-            {
-                ApplyCommand.RaiseCanExecuteChanged();
-                CancelApplyCommand.RaiseCanExecuteChanged();
-                RefreshCommand.RaiseCanExecuteChanged();
-                ChangeFolderCommand.RaiseCanExecuteChanged();
-                ExportCommand.RaiseCanExecuteChanged();
-                ImportPreviewCommand.RaiseCanExecuteChanged();
-                CloseImportPreviewCommand.RaiseCanExecuteChanged();
-            }
-        }
-    }
-
-    /// <summary>
-    /// Apply 진행/결과 문구("안전성 확인 중" 등). 대화 원문이나 개인 절대경로는 담지 않는다.
-    /// </summary>
-    public string? ApplyStatusText
-    {
-        get => _applyStatusText;
-        private set => SetProperty(ref _applyStatusText, value);
-    }
-
-    /// <summary>
     /// 완료되지 못한 이전 Apply가 남아 있는지(Phase 07_02). 참이면 새 Apply를 시작할 수 없고,
     /// <see cref="RecoverIncompleteApplyCommand"/>로 먼저 복구해야 한다.
     /// </summary>
@@ -365,7 +253,6 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _hasIncompleteApply, value))
             {
-                ApplyCommand.RaiseCanExecuteChanged();
                 RecoverIncompleteApplyCommand.RaiseCanExecuteChanged();
             }
         }
@@ -392,8 +279,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (SetProperty(ref _isBusy, value))
             {
-                RefreshCommand.RaiseCanExecuteChanged();
-                ChangeFolderCommand.RaiseCanExecuteChanged();
+                RaiseMainCommands();
             }
         }
     }
@@ -402,7 +288,13 @@ public sealed class MainViewModel : ObservableObject
     public bool IsConnected
     {
         get => _isConnected;
-        private set => SetProperty(ref _isConnected, value);
+        private set
+        {
+            if (SetProperty(ref _isConnected, value))
+            {
+                OpenImportWorkspaceCommand.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>상단 상태 문구.</summary>
@@ -819,6 +711,7 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task LoadCatalogAsync(CodexInstallationInfo installation)
     {
+        _lastInstallation = installation;
         _catalogCancellation?.Cancel();
         var cancellation = new CancellationTokenSource();
         _catalogCancellation = cancellation;
@@ -943,6 +836,9 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        // Phase 9_2-20 — Codex가 실행 중이어도 내보내기는 막지 않는다. 도중에 바뀌면 실패할 수 있다고만 알린다.
+        ExportNoticeText = IsCodexRunningForNotice() ? ImportTexts.ExportWhileCodexRunning : null;
+
         var cancellation = new CancellationTokenSource();
         _exportCancellation = cancellation;
         IsExporting = true;
@@ -1006,309 +902,94 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     private void CancelExport() => _exportCancellation?.Cancel();
 
-    /// <summary>Import Preview를 닫고 관련 상태를 전부 비운다(override 상태 포함).</summary>
-    private void CloseImportPreview()
+    private bool IsCodexRunningForNotice()
     {
-        CurrentImportPreview = null;
-        _lastImportPreviewDomain = null;
-        _lastImportBackupFilePath = null;
-        _currentImportPlan = null;
-        ImportPlanSummaryText = null;
-        ApplyCommand.RaiseCanExecuteChanged();
-    }
-
-    /// <summary>
-    /// <c>.codexbackup</c> 파일을 선택해 Import Preview를 만든다(Phase 6). core
-    /// (<see cref="ImportPreviewBuilder"/>)를 그대로 호출할 뿐이다 — ZIP/rollout 비교 로직을 여기서
-    /// 직접 만들지 않는다. Codex 파일에는 어떤 것도 쓰지 않는다(판정/미리보기까지만).
-    /// </summary>
-    private async Task ImportPreviewAsync()
-    {
-        string? path = _importFilePicker();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
-        if (_lastCatalog is not { } catalog)
-        {
-            ImportStatusText = "카탈로그가 아직 준비되지 않았습니다.";
-            return;
-        }
-
-        var cancellation = new CancellationTokenSource();
-        _importPreviewCancellation = cancellation;
-        IsImportPreviewLoading = true;
-        ImportStatusText = "백업 파일을 확인하는 중…";
-        CurrentImportPreview = null;
-        _lastImportPreviewDomain = null;
-        _lastImportBackupFilePath = path;
-
-        // 새 Preview를 "실제로 시작하는" 이 시점에 예전 frozen Plan을 즉시 무효화한다 — 새 backup을
-        // 선택한 순간 기존 Plan은 더 이상 Apply 후보가 아니다. 이후 빌드가 취소/실패/예외로 끝나도
-        // 예전 Plan이 남아있으면 안 되므로, 여기서 미리 비워 두고 UpdateImportPlanSummary가 성공
-        // 시에만 다시 채운다(OpenFileDialog 자체를 취소한 경우는 위에서 이미 return해 여기 도달하지
-        // 않으므로 기존 상태가 그대로 유지된다).
-        // 새 Preview를 "실제로 시작하는" 이 시점에 예전 frozen Plan을 즉시 무효화한다 — 새 backup을
-        // 선택한 순간 기존 Plan은 더 이상 Apply 후보가 아니다. 이후 빌드가 취소/실패/예외로 끝나도
-        // 예전 Plan이 남아있으면 안 되므로, 여기서 미리 비워 두고 UpdateImportPlanSummary가 성공
-        // 시에만 다시 채운다(OpenFileDialog 자체를 취소한 경우는 위에서 이미 return해 여기 도달하지
-        // 않으므로 기존 상태가 그대로 유지된다).
-        _currentImportPlan = null;
-        ImportPlanSummaryText = null;
-        ApplyCommand.RaiseCanExecuteChanged();
-
         try
         {
-            ImportPreview preview = await Task.Run(
-                () => ImportPreviewBuilder.Build(path, catalog, cancellation.Token),
-                cancellation.Token).ConfigureAwait(true);
-
-            if (cancellation.IsCancellationRequested)
-            {
-                return;
-            }
-
-            _lastImportPreviewDomain = preview;
-            CurrentImportPreview = new ImportPreviewViewModel(preview, RequestProjectPathOverride);
-            UpdateImportPlanSummary(preview);
-
-            if (preview.Success)
-            {
-                int total = preview.Projects.Sum(p => p.Conversations.Count);
-                ImportStatusText = $"백업 확인 완료 — 대화 {total}개.";
-                _logger.Info(
-                    $"Import Preview 완료. projects={preview.Projects.Count} conversations={total} " +
-                    $"dependencyOnly={preview.DependencyOnlyConversations.Count} warnings={preview.Warnings.Count}");
-            }
-            else
-            {
-                ImportStatusText = "이 백업 파일을 사용할 수 없습니다.";
-                _logger.Warning($"Import Preview 검증 실패. errors={preview.ValidationErrors.Count}");
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            ImportStatusText = "Import Preview를 취소했습니다.";
+            return CodexProcessGuard.Check(ProcessLister).IsRunning;
         }
         catch (Exception ex)
         {
-            _logger.Error("Import Preview 중 오류", ex);
-            ImportStatusText = $"백업을 확인하는 중 오류가 발생했습니다: {ex.GetType().Name}";
+            _logger.Warning($"Codex 실행 여부 확인 실패. type={ex.GetType().Name}");
+            return false;
         }
-        finally
+    }
+
+    /// <summary>
+    /// 가져오기 작업 공간이 닫혔다(Phase 9_2-17). 적용이 무언가를 썼거나 [목록에서 보기]면 카탈로그를 다시 읽고,
+    /// [목록에서 보기]면 가져온 대화를 선택·펼침·강조한다.
+    /// </summary>
+    private void OnImportWorkspaceClosed(object? sender, ImportWorkspaceClosedEventArgs e) => _ = HandleImportWorkspaceClosedAsync(e);
+
+    private async Task HandleImportWorkspaceClosedAsync(ImportWorkspaceClosedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(HomePath))
         {
-            if (ReferenceEquals(_importPreviewCancellation, cancellation))
+            RefreshIncompleteApplyState(HomePath);
+        }
+
+        if ((e.CodexDataChanged || e.ShowInList) && _lastInstallation is { } installation)
+        {
+            await LoadCatalogAsync(installation).ConfigureAwait(true);
+        }
+
+        if (e.ShowInList && e.ThreadIdsToHighlight.Count > 0)
+        {
+            HighlightConversations(e.ThreadIdsToHighlight);
+        }
+    }
+
+    /// <summary>강조 표시를 유지하는 시간(설계 §7.7).</summary>
+    internal static TimeSpan HighlightDuration { get; set; } = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// 메인 트리에서 대화들을 펼치고, 첫 대화를 선택(스크롤)하고, 잠시 강조한다. 선택(백업 체크)은 바꾸지 않는다.
+    /// </summary>
+    internal IReadOnlyList<ConversationNodeViewModel> HighlightConversations(IReadOnlyList<string> threadIds)
+    {
+        var wanted = new HashSet<string>(threadIds, StringComparer.OrdinalIgnoreCase);
+        var found = new List<ConversationNodeViewModel>();
+        foreach (ProjectNodeViewModel project in ProjectNodes)
+        {
+            foreach (ConversationNodeViewModel conversation in project.Conversations)
             {
-                IsImportPreviewLoading = false;
-                _importPreviewCancellation = null;
+                if (wanted.Contains(conversation.ThreadId))
+                {
+                    project.IsExpanded = true;
+                    conversation.IsHighlighted = true;
+                    found.Add(conversation);
+                }
             }
         }
+
+        if (found.Count > 0)
+        {
+            found[0].IsTreeSelected = true;
+            SelectConversation(found[0]);
+            _ = ClearHighlightLaterAsync(found);
+        }
+
+        _logger.Info($"가져온 대화 목록 강조. requested={threadIds.Count} found={found.Count}");
+        return found;
     }
 
-    /// <summary>
-    /// 사용자가 프로젝트 폴더를 직접 재지정한다(Phase 06_01, 요구사항 3). 실제 재지정 상태는
-    /// <see cref="ImportPreviewBuilder.ApplyManualProjectPathOverride"/>가 <see cref="_lastImportPreviewDomain"/>에
-    /// 만든 새 <see cref="ImportPreview"/>로 저장된다 — View code-behind에는 아무 상태도 두지 않는다.
-    /// Codex에는 여전히 아무것도 쓰지 않는다.
-    /// </summary>
-    private void RequestProjectPathOverride(string? projectId)
+    private static async Task ClearHighlightLaterAsync(IReadOnlyList<ConversationNodeViewModel> nodes)
     {
-        if (_isApplying)
+        await Task.Delay(HighlightDuration).ConfigureAwait(true);
+        foreach (ConversationNodeViewModel node in nodes)
         {
-            // Apply 진행 중에는 경로 재지정을 막는다(요구사항 15) — pin된 ImportPlan을 흔들 수 있는
-            // 조작이므로 버튼 자체가 항상 보이더라도(자식 ViewModel의 RelayCommand는 CanExecute를
-            // 다시 묻지 않는 고정 델리게이트라 여기서 직접 막는다) 여기서 차단한다.
-            return;
-        }
-
-        if (_lastImportPreviewDomain is not { } currentPreview)
-        {
-            return;
-        }
-
-        string? selected = _projectPathPicker();
-        if (string.IsNullOrWhiteSpace(selected))
-        {
-            return;
-        }
-
-        try
-        {
-            ImportPreview updated = ImportPreviewBuilder.ApplyManualProjectPathOverride(currentPreview, projectId, selected);
-            _lastImportPreviewDomain = updated;
-            CurrentImportPreview = new ImportPreviewViewModel(updated, RequestProjectPathOverride);
-            UpdateImportPlanSummary(updated);
-            ImportStatusText = "프로젝트 경로를 재지정했습니다.";
-            _logger.Info("Import Preview 프로젝트 경로 수동 재지정 완료.");
-        }
-        catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException or InvalidOperationException)
-        {
-            // 사용자가 잘못된 경로를 고르거나(존재하지 않는 폴더), 재지정할 수 없는 프로젝트("기타
-            // 대화")를 시도한 경우. Codex에는 아무 영향이 없으므로 문구만 보여주고 되돌린다.
-            ImportStatusText = $"경로를 재지정할 수 없습니다: {ex.Message}";
-            _logger.Warning($"Import Preview 프로젝트 경로 재지정 실패. reason={ex.GetType().Name}");
+            node.IsHighlighted = false;
         }
     }
 
-    /// <summary>
-    /// Preview를 <see cref="ImportPlan"/>으로 freeze해 <see cref="_currentImportPlan"/>에 보존하고,
-    /// 문구를 갱신한다(요구사항 4/5). <b>이 메서드가 <see cref="ImportPlanBuilder.Build"/>를 부르는
-    /// 유일한 곳이어야 한다</b> — 다른 곳(예: 문구를 다시 보여줘야 할 때)에서 Plan을 다시 만들지
-    /// 않고 항상 <see cref="_currentImportPlan"/>을 그대로 읽어야 한다. Plan을 "만들기"만 할 뿐
-    /// 여기서도 아무것도 적용하지 않는다.
-    /// </summary>
-    /// <remarks>
-    /// (Phase 06_03) <see cref="ImportPlanBuilder.Build"/>가 <c>null</c>을 돌려주는 경우는 두 가지를
-    /// 구분하지 않는다 — Preview 검증 실패, 그리고 Preview 이후 backup 파일이 바뀐 경우
-    /// (<see cref="ImportPreview.SourceBackupIdentity"/> 불일치) 전부 "Plan을 지금 신뢰할 수 없다"는
-    /// 같은 결론이므로, 문구도 재-Preview를 안내하는 것으로 충분하다.
-    /// </remarks>
-    private void UpdateImportPlanSummary(ImportPreview preview)
+    private void RaiseMainCommands()
     {
-        if (!preview.Success || _lastImportBackupFilePath is not { } backupPath)
-        {
-            _currentImportPlan = null;
-            ImportPlanSummaryText = null;
-            ApplyCommand.RaiseCanExecuteChanged();
-            return;
-        }
-
-        ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
-        _currentImportPlan = plan;
-        ApplyCommand.RaiseCanExecuteChanged();
-
-        if (plan is null)
-        {
-            ImportPlanSummaryText = "가져오기 계획을 만들 수 없습니다 — 백업 파일이 미리보기 이후 변경되었을 수 있습니다. 다시 불러와 주세요.";
-            return;
-        }
-
-        if (!plan.IsApplyReady)
-        {
-            int blockedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.Blocked);
-            int divergedCount = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.RequiresDecision);
-            ImportPlanSummaryText = $"충돌 있음 — 확인 불가 {blockedCount}건, 분기 충돌 {divergedCount}건(사용자 결정 필요).";
-            return;
-        }
-
-        // "Apply 준비 완료"라고 말하지 않는다 — Diverged/Unverifiable이 없다는 뜻일 뿐, backup/로컬
-        // Codex가 지금(Apply 직전) 이 상태와 같은지는 Phase 7의 fresh preflight만 알 수 있다.
-        ImportPlanSummaryText = "가져오기 계획 생성 완료 — 충돌 없음(적용 전 최종 검사가 필요합니다).";
+        RefreshCommand.RaiseCanExecuteChanged();
+        ChangeFolderCommand.RaiseCanExecuteChanged();
+        ExportCommand.RaiseCanExecuteChanged();
+        OpenImportWorkspaceCommand.RaiseCanExecuteChanged();
+        RecoverIncompleteApplyCommand.RaiseCanExecuteChanged();
     }
-
-    /// <summary>
-    /// Apply 전 항상 보여줘야 하는 알려진 제약 사항(Phase 07_01 요구사항 16). 이 backup/현재 상태에
-    /// 실제로 해당하는지와 무관하게, 사용자가 "성공했다"고 오해하지 않도록 항상 함께 표시한다.
-    /// </summary>
-    public static string KnownLimitationsText =>
-        "알려진 제약: Codex Desktop 사이드바에 프로젝트별로 정확히 표시되는지는 아직 별도 검증되지 " +
-        "않았습니다. local_image 첨부는 복원되지 않습니다. 새 프로젝트 자동 생성은 지원하지 않습니다. " +
-        ".jsonl.zst로 압축된 대화의 이어받기(Update)는 지원하지 않습니다. 분기(Diverged)된 대화는 자동" +
-        "적용하지 않습니다.";
-
-    /// <summary>
-    /// frozen된 <see cref="_currentImportPlan"/>을 실제로 적용한다(Phase 07_01). 여기서는
-    /// <see cref="ImportPlan"/>을 다시 해석하거나 Preflight를 다시 판단하지 않는다 — 확인 대화상자를
-    /// 띄우고, 다른 조작을 막고, <see cref="RestoreExecutor"/>의 결과를 그대로 보여줄 뿐이다.
-    /// </summary>
-    private async Task ApplyAsync()
-    {
-        if (_currentImportPlan is not { } plan)
-        {
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(HomePath))
-        {
-            ApplyStatusText = "Codex Home 경로를 확인할 수 없습니다.";
-            return;
-        }
-
-        bool confirmed = _confirmDialog(
-            "백업 내용을 Codex에 적용합니다.\n적용 전에 현재 상태의 복구용 Snapshot을 생성합니다.\n" +
-            "Codex가 완전히 종료되어 있어야 합니다.\n계속하시겠습니까?",
-            "적용 확인");
-        if (!confirmed)
-        {
-            return;
-        }
-
-        string codexHomePath = HomePath;
-        var cancellation = new CancellationTokenSource();
-        _applyCancellation = cancellation;
-        IsApplying = true;
-        ApplyStatusText = "안전성 확인 중…";
-
-        // RestoreExecutor.Apply의 onStatusChanged 콜백은 Task.Run 내부(백그라운드 스레드)에서
-        // 그대로 호출된다 — WPF 바인딩 대상 속성은 UI 스레드에서만 갱신해야 하므로, 호출 스레드(UI
-        // 스레드)의 SynchronizationContext로 다시 넘겨서(Post) 반영한다. ViewModel 자체는 WPF를
-        // 직접 참조하지 않는다(System.Threading만 사용).
-        SynchronizationContext? uiContext = SynchronizationContext.Current;
-
-        try
-        {
-            RestoreResult result = await Task.Run(
-                () => RestoreApply(
-                    plan,
-                    codexHomePath,
-                    _snapshotRootProvider(),
-                    status => ReportApplyStatus(status, uiContext),
-                    cancellation.Token),
-                cancellation.Token).ConfigureAwait(true);
-
-            ApplyStatusText = DescribeApplyResult(result);
-
-            switch (result.Outcome)
-            {
-                case RestoreOutcome.Succeeded:
-                case RestoreOutcome.NothingToDo:
-                    // 적용된(또는 더 이상 적용할 것이 없는) Plan을 다시 Apply할 수 없게 무효화한다 —
-                    // 다시 적용하려면 새 Import Preview부터 시작해야 한다.
-                    _currentImportPlan = null;
-                    ApplyCommand.RaiseCanExecuteChanged();
-                    _logger.Info($"Apply 완료. outcome={result.Outcome} snapshotId={result.SnapshotId}");
-                    break;
-                default:
-                    _logger.Warning($"Apply 실패/중단. outcome={result.Outcome} snapshotId={result.SnapshotId}");
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            // RestoreExecutor.Apply는 Snapshot 이후의 모든 예외(취소 포함)를 스스로 Rollback 처리해
-            // RestoreResult로 돌려준다 — 여기까지 예외가 올라온다면 Rollback 경로 자체에 들어가기
-            // 전(예: fresh catalog 생성 실패)의 예기치 않은 오류다.
-            _logger.Error("Apply 중 예기치 않은 오류", ex);
-            ApplyStatusText = $"적용 중 예기치 않은 오류가 발생했습니다: {ex.GetType().Name}";
-        }
-        finally
-        {
-            if (ReferenceEquals(_applyCancellation, cancellation))
-            {
-                IsApplying = false;
-                _applyCancellation = null;
-            }
-        }
-    }
-
-    /// <summary>
-    /// RestoreExecutor의 진행 콜백(백그라운드 스레드에서 호출됨)을 UI 스레드로 옮겨 반영한다.
-    /// <paramref name="uiContext"/>가 없으면(예: 테스트에서 동기 컨텍스트 없이 실행) 그냥 직접 쓴다.
-    /// </summary>
-    private void ReportApplyStatus(string status, SynchronizationContext? uiContext)
-    {
-        if (uiContext is null)
-        {
-            ApplyStatusText = status;
-            return;
-        }
-
-        uiContext.Post(_ => ApplyStatusText = status, null);
-    }
-
-    /// <summary>진행 중인 Apply를 취소한다. Snapshot 이전이면 그냥 중단되고, 이후면 Rollback된다.</summary>
-    private void CancelApply() => _applyCancellation?.Cancel();
 
     /// <summary>
     /// <see cref="IncompleteApplyRecoveryService.FindIncompleteForHome"/>로 <paramref name="codexHomePath"/>에
@@ -1370,7 +1051,7 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             RestoreResult result = await Task.Run(
-                () => IncompleteApplyRecoveryService.Recover(snapshotDir, RecoveryProcessLister, expectedCodexHomePath: expectedHome)).ConfigureAwait(true);
+                () => IncompleteApplyRecoveryService.Recover(snapshotDir, ProcessLister, expectedCodexHomePath: expectedHome)).ConfigureAwait(true);
             IncompleteApplyStatusText = DescribeApplyResult(result);
             _logger.Info($"이전 Apply 복구 시도. outcome={result.Outcome}");
         }

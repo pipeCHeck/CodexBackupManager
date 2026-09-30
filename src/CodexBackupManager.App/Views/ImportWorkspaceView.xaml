@@ -1,0 +1,484 @@
+<UserControl x:Class="CodexBackupManager.App.Views.ImportWorkspaceView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:CodexBackupManager.App.Views"
+             x:Name="Root">
+  <!-- Phase 9_2-2 가져오기 작업 공간(설계 §7). DataContext = ImportWorkspaceViewModel.
+       상태별 영역은 ViewModel의 IsWaitingForCodexExit / IsAnalyzing / IsFailed / IsEditorVisible / IsApplying / IsResult로 전환한다.
+       이 View는 상태를 들고 있지 않는다(트리 선택만 SelectNode로 넘긴다). -->
+  <UserControl.Resources>
+    <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Padding" Value="8,3" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+    </Style>
+    <Style x:Key="Caption" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style x:Key="PathText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+      <Setter Property="FontFamily" Value="Consolas, D2Coding, Malgun Gothic" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+
+    <!-- 배지(설계 §7.4 색) -->
+    <Style x:Key="BadgeBorder" TargetType="Border">
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="7,1" />
+      <Setter Property="Margin" Value="8,0,0,0" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="BorderBrush" Value="{StaticResource Muted}" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="New">
+          <Setter Property="BorderBrush" Value="{StaticResource Ok}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="IncomingAhead">
+          <Setter Property="BorderBrush" Value="{StaticResource Info}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="Diverged">
+          <Setter Property="BorderBrush" Value="{StaticResource Warn}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="Unverifiable">
+          <Setter Property="BorderBrush" Value="{StaticResource Bad}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="AutoIncluded">
+          <Setter Property="BorderBrush" Value="{StaticResource Border}" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="BadgeText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+      <Setter Property="FontSize" Value="10" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="New">
+          <Setter Property="Foreground" Value="{StaticResource Ok}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="IncomingAhead">
+          <Setter Property="Foreground" Value="{StaticResource Info}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="Diverged">
+          <Setter Property="Foreground" Value="{StaticResource Warn}" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding BadgeKind}" Value="Unverifiable">
+          <Setter Property="Foreground" Value="{StaticResource Bad}" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="TargetStatusText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Foreground" Value="{StaticResource Warn}" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsLinked}" Value="True">
+          <Setter Property="Foreground" Value="{StaticResource Ok}" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+  </UserControl.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- ① 상단: ← 목록으로 · 제목 · 백업 한 줄 정보 -->
+    <StackPanel Grid.Row="0">
+      <StackPanel Orientation="Horizontal">
+        <Button Content="← 목록으로" Command="{Binding CloseCommand}" Style="{StaticResource SmallButton}" />
+        <TextBlock Text="백업 가져오기" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0,0,0" />
+      </StackPanel>
+      <TextBlock Text="{Binding BackupHeaderText}" Style="{StaticResource Caption}" Margin="0,6,0,0"
+                 TextTrimming="CharacterEllipsis" ToolTip="{Binding BackupHeaderText}"
+                 Visibility="{Binding BackupHeaderText, Converter={StaticResource NullToCollapsed}}" />
+    </StackPanel>
+
+    <!-- ② Codex 실행 배너(편집 중 감지) -->
+    <Border Grid.Row="1" Background="{StaticResource WarnBg}" CornerRadius="6" Padding="12,8" Margin="0,10,0,0"
+            Visibility="{Binding HasCodexBanner, Converter={StaticResource BoolToVisibility}}">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding CodexBannerText}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" VerticalAlignment="Center" />
+        <Button Grid.Column="1" Content="다시 분석" Command="{Binding ReanalyzeCommand}" Style="{StaticResource SmallButton}" Margin="10,0,0,0" />
+      </Grid>
+    </Border>
+
+    <!-- ③ 본문(상태별) -->
+    <Grid Grid.Row="2" Margin="0,10,0,0">
+
+      <!-- Codex 종료 대기 -->
+      <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="18"
+              Visibility="{Binding IsWaitingForCodexExit, Converter={StaticResource BoolToVisibility}}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="560">
+          <TextBlock Text="{Binding Message}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" FontSize="14" />
+          <StackPanel Orientation="Horizontal" Margin="0,14,0,0" HorizontalAlignment="Center">
+            <Button Content="다시 확인" Command="{Binding RecheckCodexCommand}" />
+            <Button Content="닫기" Command="{Binding CloseCommand}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- 분석 중 -->
+      <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="18"
+              Visibility="{Binding IsAnalyzing, Converter={StaticResource BoolToVisibility}}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="420">
+          <TextBlock Text="{Binding Message}" TextWrapping="Wrap" FontSize="14" />
+          <ProgressBar IsIndeterminate="True" Height="4" Margin="0,12,0,0" Foreground="{StaticResource Info}"
+                       Background="{StaticResource PanelAlt}" BorderThickness="0" />
+          <Button Content="취소" Command="{Binding CancelAnalysisCommand}" HorizontalAlignment="Center" Margin="0,14,0,0" />
+        </StackPanel>
+      </Border>
+
+      <!-- 분석 실패 -->
+      <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="18"
+              Visibility="{Binding IsFailed, Converter={StaticResource BoolToVisibility}}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="560">
+          <TextBlock Text="{Binding Message}" Foreground="{StaticResource Bad}" TextWrapping="Wrap" FontSize="14" />
+          <TextBlock Text="{Binding MessageHint}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0" />
+          <StackPanel Orientation="Horizontal" Margin="0,14,0,0" HorizontalAlignment="Center">
+            <Button Content="다른 파일 선택" Command="{Binding ChooseOtherFileCommand}" />
+            <Button Content="닫기" Command="{Binding CloseCommand}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- 편집: 트리 | 상세 -->
+      <Grid Visibility="{Binding IsEditorVisible, Converter={StaticResource BoolToVisibility}}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="3*" MinWidth="300" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="2*" MinWidth="240" />
+        </Grid.ColumnDefinitions>
+
+        <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="12">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- 검색 + 빠른 선택 -->
+            <WrapPanel>
+              <TextBox Width="170" Margin="0,0,8,4" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                       ToolTip="제목으로 찾기(선택은 그대로 유지됩니다)" AutomationProperties.Name="대화 검색" />
+              <Button Content="새 대화만" Command="{Binding SelectNewOnlyCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
+              <Button Content="전체 선택" Command="{Binding SelectAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
+              <Button Content="모두 해제" Command="{Binding ClearAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
+            </WrapPanel>
+
+            <TreeView x:Name="ImportTree" Grid.Row="1" Margin="0,8,0,0" BorderThickness="0" Background="Transparent"
+                      ItemsSource="{Binding Projects}" SelectedItemChanged="ImportTree_SelectedItemChanged"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+              <TreeView.ItemContainerStyle>
+                <Style TargetType="TreeViewItem">
+                  <Setter Property="IsExpanded" Value="True" />
+                  <Setter Property="Padding" Value="0,3" />
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                  <Setter Property="IsSelected" Value="{Binding IsTreeSelected, Mode=TwoWay}" />
+                  <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BoolToVisibility}}" />
+                  <Setter Property="views:TreeViewItemBehavior.BringIntoViewWhenSelected" Value="True" />
+                </Style>
+              </TreeView.ItemContainerStyle>
+              <TreeView.ItemTemplate>
+                <HierarchicalDataTemplate ItemsSource="{Binding Conversations}">
+                  <!-- TreeViewItem 머리글은 폭 제한이 없어 줄바꿈이 안 된다 → TreeView 폭에서 들여쓰기만큼 뺀 폭을 준다. -->
+                  <StackPanel Margin="0,2,0,4"
+                              Width="{Binding ActualWidth, ElementName=ImportTree, Converter={StaticResource Subtract}, ConverterParameter=44}">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <CheckBox IsThreeState="True" IsChecked="{Binding IsChecked, Mode=TwoWay}" Focusable="True"
+                                VerticalAlignment="Center" Margin="0,0,6,0"
+                                AutomationProperties.Name="{Binding DisplayName}"
+                                IsEnabled="{Binding DataContext.CanEditSelection, ElementName=Root}"
+                                Visibility="{Binding HasCheckbox, Converter={StaticResource BoolToVisibility}}" />
+                      <TextBlock Grid.Column="1" Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                 TextTrimming="CharacterEllipsis" ToolTip="{Binding DisplayName}" />
+                      <TextBlock Grid.Column="2" Text="{Binding CountText}" Style="{StaticResource Caption}" Margin="8,0,0,0" />
+                    </Grid>
+
+                    <!-- 작업 폴더 영역(설계 §7.3). 조상 그룹에는 설명 한 줄만. -->
+                    <Border Background="{StaticResource PanelAlt}" CornerRadius="5" Padding="10,7" Margin="22,6,0,2">
+                      <StackPanel>
+                        <TextBlock Text="작업 폴더" Style="{StaticResource Caption}"
+                                   Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
+                        <Grid Margin="0,3,0,0" Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="44" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                          </Grid.RowDefinitions>
+                          <TextBlock Text="원본" Style="{StaticResource Caption}" />
+                          <TextBlock Grid.Column="1" Text="{Binding OriginalPathText}" Style="{StaticResource PathText}" Foreground="{StaticResource Muted}" />
+                          <TextBlock Grid.Row="1" Text="이 PC" Style="{StaticResource Caption}" Margin="0,2,0,0" />
+                          <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LocalPathText}" Style="{StaticResource PathText}" Margin="0,2,0,0" />
+                        </Grid>
+                        <TextBlock Text="{Binding TargetStatusText}" Style="{StaticResource TargetStatusText}" Margin="0,5,0,0" />
+                        <TextBlock Text="{Binding DecisionError}" Foreground="{StaticResource Bad}" FontSize="11" TextWrapping="Wrap"
+                                   Visibility="{Binding DecisionError, Converter={StaticResource NullToCollapsed}}" />
+                        <WrapPanel Margin="0,6,0,0" Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}">
+                          <Button Content="{Binding ChooseFolderText}" Command="{Binding ChooseFolderCommand}" Style="{StaticResource SmallButton}" />
+                          <Button Content="원래대로" Command="{Binding ResetFolderCommand}" Style="{StaticResource SmallButton}"
+                                  Visibility="{Binding IsFolderUserSelected, Converter={StaticResource BoolToVisibility}}" />
+                          <Button Content="새로고침" Command="{Binding DataContext.ReanalyzeCommand, ElementName=Root}" Style="{StaticResource SmallButton}"
+                                  ToolTip="Codex에서 폴더를 연 뒤 누르면 다시 분석합니다(선택은 유지됩니다)."
+                                  Visibility="{Binding ShowRefreshHint, Converter={StaticResource BoolToVisibility}}" />
+                        </WrapPanel>
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+
+                  <HierarchicalDataTemplate.ItemTemplate>
+                    <DataTemplate>
+                      <Grid Margin="0,1"
+                            Width="{Binding ActualWidth, ElementName=ImportTree, Converter={StaticResource Subtract}, ConverterParameter=64}">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.Style>
+                          <Style TargetType="Grid">
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding IsAutoIncluded}" Value="True">
+                                <Setter Property="Opacity" Value="0.6" />
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </Grid.Style>
+                        <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" IsEnabled="{Binding IsCheckable}"
+                                  VerticalAlignment="Center" Margin="0,0,6,0"
+                                  AutomationProperties.Name="{Binding Title}"
+                                  ToolTipService.ShowOnDisabled="True" ToolTip="{Binding DisabledReason}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"
+                                   VerticalAlignment="Center" />
+                        <Border Grid.Column="2" Style="{StaticResource BadgeBorder}" VerticalAlignment="Center"
+                                ToolTip="{Binding DisabledReason}">
+                          <TextBlock Text="{Binding BadgeText}" Style="{StaticResource BadgeText}" />
+                        </Border>
+                      </Grid>
+                    </DataTemplate>
+                  </HierarchicalDataTemplate.ItemTemplate>
+                </HierarchicalDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+          </Grid>
+        </Border>
+
+        <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" Background="Transparent" Margin="4,0" Cursor="SizeWE" />
+
+        <!-- 오른쪽 상세 -->
+        <Border Grid.Column="2" Background="{StaticResource Panel}" CornerRadius="6" Padding="14">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="*" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <Grid>
+                <TextBlock Text="왼쪽에서 대화나 프로젝트를 선택하세요." Style="{StaticResource Caption}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="{Binding HasNoSelection, Converter={StaticResource BoolToVisibility}}" />
+
+                <!-- 대화 상세 -->
+                <StackPanel DataContext="{Binding SelectedConversation}"
+                            Visibility="{Binding Converter={StaticResource NullToCollapsed}}">
+                  <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <Border Style="{StaticResource BadgeBorder}" HorizontalAlignment="Left" Margin="0,6,0,0">
+                    <TextBlock Text="{Binding BadgeText}" Style="{StaticResource BadgeText}" />
+                  </Border>
+                  <TextBlock Text="{Binding StatusSentence}" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12" />
+                  <TextBlock Text="{Binding PresenceText}" TextWrapping="Wrap" Margin="0,6,0,0" FontSize="12"
+                             Visibility="{Binding PresenceText, Converter={StaticResource NullToCollapsed}}" />
+                  <TextBlock Text="원본 작업 폴더" Style="{StaticResource Caption}" Margin="0,10,0,0"
+                             Visibility="{Binding OriginalCwd, Converter={StaticResource NullToCollapsed}}" />
+                  <TextBlock Text="{Binding OriginalCwd}" Style="{StaticResource PathText}"
+                             Visibility="{Binding OriginalCwd, Converter={StaticResource NullToCollapsed}}" />
+                  <TextBlock Text="{Binding DatesText}" Style="{StaticResource Caption}" Margin="0,8,0,0"
+                             Visibility="{Binding DatesText, Converter={StaticResource NullToCollapsed}}" />
+                  <TextBlock Text="{Binding LimitationText}" Foreground="{StaticResource Warn}" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"
+                             Visibility="{Binding LimitationText, Converter={StaticResource NullToCollapsed}}" />
+                  <TextBlock Text="대화 내용" Style="{StaticResource Caption}" Margin="0,16,0,4" />
+                  <Border Background="{StaticResource PanelAlt}" CornerRadius="5" Padding="10">
+                    <TextBlock Text="{Binding DataContext.ContentPreviewPlaceholder, ElementName=Root}" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                  </Border>
+                </StackPanel>
+
+                <!-- 프로젝트 상세 -->
+                <StackPanel DataContext="{Binding SelectedProject}"
+                            Visibility="{Binding Converter={StaticResource NullToCollapsed}}">
+                  <TextBlock Text="{Binding DisplayName}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock Text="{Binding DetailSummaryText}" TextWrapping="Wrap" Margin="0,8,0,0" FontSize="12" />
+                  <TextBlock Text="{Binding TargetStatusText}" Style="{StaticResource TargetStatusText}" Margin="0,8,0,0" />
+                  <TextBlock Text="원본 경로" Style="{StaticResource Caption}" Margin="0,10,0,0"
+                             Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
+                  <TextBlock Text="{Binding OriginalPathText}" Style="{StaticResource PathText}"
+                             Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
+                  <TextBlock Text="이 PC 경로" Style="{StaticResource Caption}" Margin="0,6,0,0"
+                             Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
+                  <TextBlock Text="{Binding LocalPathText}" Style="{StaticResource PathText}"
+                             Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+              </Grid>
+            </ScrollViewer>
+
+            <!-- 상세 정보 ▼ (개발/문제 분석용) -->
+            <StackPanel Grid.Row="1" Margin="0,10,0,0">
+              <ToggleButton x:Name="BackupDetailToggle" Style="{StaticResource DetailToggleLink}" HorizontalAlignment="Left" />
+              <ItemsControl ItemsSource="{Binding DetailRows}" Margin="0,6,0,0" MaxHeight="180"
+                            Visibility="{Binding IsChecked, ElementName=BackupDetailToggle, Converter={StaticResource BoolToVisibility}}">
+                <ItemsControl.Template>
+                  <ControlTemplate TargetType="ItemsControl">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                      <ItemsPresenter />
+                    </ScrollViewer>
+                  </ControlTemplate>
+                </ItemsControl.Template>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,0,0,3">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="140" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="{Binding Label}" Style="{StaticResource Caption}" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource PathText}" Foreground="{StaticResource Muted}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- 적용 중 -->
+      <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="18"
+              Visibility="{Binding IsApplying, Converter={StaticResource BoolToVisibility}}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="420">
+          <TextBlock Text="적용하는 중입니다. Codex를 실행하지 마세요." FontSize="14" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding ApplyStatusText}" Style="{StaticResource Caption}" Margin="0,6,0,0" />
+          <ProgressBar IsIndeterminate="True" Height="4" Margin="0,12,0,0" Foreground="{StaticResource Info}"
+                       Background="{StaticResource PanelAlt}" BorderThickness="0" />
+          <Button Content="적용 취소" Command="{Binding CancelApplyCommand}" HorizontalAlignment="Center" Margin="0,14,0,0" />
+        </StackPanel>
+      </Border>
+
+      <!-- 결과 -->
+      <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="18"
+              Visibility="{Binding IsResult, Converter={StaticResource BoolToVisibility}}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          <StackPanel>
+            <TextBlock Text="{Binding ResultTitle}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                  <Setter Property="Foreground" Value="{StaticResource Warn}" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsResultSuccess}" Value="True">
+                      <Setter Property="Foreground" Value="{StaticResource Fg}" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Text="{Binding ResultCountsText}" Style="{StaticResource Caption}" Margin="0,4,0,0"
+                       Visibility="{Binding ResultCountsText, Converter={StaticResource NullToCollapsed}}" />
+          </StackPanel>
+
+          <ScrollViewer Grid.Row="1" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding ResultGroups}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel Margin="0,0,0,12">
+                    <WrapPanel>
+                      <TextBlock Text="{Binding Header}" FontWeight="SemiBold" />
+                      <TextBlock Text="{Binding Destination}" Style="{StaticResource Caption}" Margin="8,1,0,0" TextWrapping="Wrap"
+                                 Visibility="{Binding Destination, Converter={StaticResource NullToCollapsed}}" />
+                    </WrapPanel>
+                    <ItemsControl ItemsSource="{Binding Items}" Margin="16,4,0,0">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                          <Grid Margin="0,1">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                            <TextBlock Grid.Column="1" Text="{Binding Text}" Style="{StaticResource Caption}" Margin="10,0,0,0" />
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+
+          <StackPanel Grid.Row="2" Margin="0,10,0,0">
+            <TextBlock Text="{Binding ResultSnapshotText}" Style="{StaticResource Caption}"
+                       Visibility="{Binding ResultSnapshotText, Converter={StaticResource NullToCollapsed}}" />
+            <TextBlock Text="{Binding ResultHint}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0"
+                       Visibility="{Binding ResultHint, Converter={StaticResource NullToCollapsed}}" />
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+              <Button Content="목록에서 보기" Command="{Binding ShowInListCommand}" />
+              <Button Content="다시 시도" Command="{Binding RetryCommand}"
+                      Visibility="{Binding CanRetry, Converter={StaticResource BoolToVisibility}}" />
+              <Button Content="닫기" Command="{Binding CloseCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- ④ 하단 요약 + [대화 N개 가져오기] -->
+    <Border Grid.Row="3" Background="{StaticResource Panel}" CornerRadius="6" Padding="12,9" Margin="0,10,0,0"
+            Visibility="{Binding IsEditorVisible, Converter={StaticResource BoolToVisibility}}">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel VerticalAlignment="Center">
+          <TextBlock Text="{Binding SummaryText}" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding SummaryHint}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0"
+                     Visibility="{Binding SummaryHint, Converter={StaticResource NullToCollapsed}}">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                <Setter Property="Foreground" Value="{StaticResource Muted}" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsSummaryHintWarning}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource Warn}" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+          <TextBlock Text="{Binding EditingError}" Foreground="{StaticResource Bad}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0"
+                     Visibility="{Binding EditingError, Converter={StaticResource NullToCollapsed}}" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="{Binding ImportButtonText}" Command="{Binding ImportCommand}"
+                VerticalAlignment="Center" Margin="12,0,0,0" FontWeight="SemiBold" />
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

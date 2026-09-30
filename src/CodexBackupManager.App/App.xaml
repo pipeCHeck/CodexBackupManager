@@ -7,6 +7,8 @@
 
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
     <converters:InverseBooleanConverter x:Key="InverseBool" />
+    <converters:NullToCollapsedConverter x:Key="NullToCollapsed" />
+    <converters:SubtractConverter x:Key="Subtract" />
 
     <!-- TreeViewItem/ListBoxItem의 기본 ControlTemplate은 선택 배경/글자색을 SystemColors의
          Highlight*(창 활성 시) / InactiveSelectionHighlight*(창 비활성 시) 두 DynamicResource로
@@ -35,6 +37,10 @@
     <SolidColorBrush x:Key="Border" Color="#FF44474D" />
     <SolidColorBrush x:Key="CodeBg" Color="#FF17181B" />
     <SolidColorBrush x:Key="UserBubbleBg" Color="#FF2F3B4C" />
+    <!-- Phase 9_2-2 가져오기 화면: 이어받기 배지(파랑), 경고 배너 배경, 강조(방금 가져온 대화) 배경. -->
+    <SolidColorBrush x:Key="Info" Color="#FF64B5F6" />
+    <SolidColorBrush x:Key="WarnBg" Color="#FF3A2E1E" />
+    <SolidColorBrush x:Key="HighlightBg" Color="#FF2E4A3A" />
 
     <SolidColorBrush x:Key="ButtonBg" Color="#FF3A3D42" />
     <SolidColorBrush x:Key="ButtonBgHover" Color="#FF484B52" />
@@ -100,6 +106,16 @@
 
     <!-- CheckBox는 네이티브 글리프를 유지하되(과설계 방지), 라벨 글자색만 명시해
          테마와 무관하게 항상 또렷이 보이게 한다. -->
+    <!-- Phase 9_2-2 — 검색 입력칸. 시스템 기본(흰 배경)을 쓰지 않는다. -->
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource PanelAlt}" />
+      <Setter Property="Foreground" Value="{StaticResource Fg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Border}" />
+      <Setter Property="CaretBrush" Value="{StaticResource Fg}" />
+      <Setter Property="Padding" Value="6,4" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+
     <Style TargetType="CheckBox">
       <Setter Property="Foreground" Value="{StaticResource Fg}" />
       <Setter Property="FontFamily" Value="Segoe UI, Malgun Gothic" />

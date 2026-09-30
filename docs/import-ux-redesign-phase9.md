@@ -251,6 +251,16 @@ ImportResultViewModel(결과 + 어디로 들어갔는지 + 되돌리기 가능 �
 - **Ambiguous 루트에서 사용자가 프로젝트를 고르는 기능은 보류한다(9_2-22).** Apply 시점 재판정이 Ambiguous를 다시 돌려주면 계획과 달라져 거부된다.
   이를 풀 결정 모델이 필요하다. 9_2-2 화면은 안내 문구만 둔다.
 
+### 4.7 9_2-2 구현으로 확정된 사항 (2026-10-01 점검)
+
+- 가져오기 화면은 `ImportWorkspaceViewModel`(+`ImportTreeNodes`, `ImportTexts`)과 `ImportWorkspaceView.xaml`이다. 열려 있는 동안 메인 화면은 숨기고 메인 명령은 막는다.
+- 체크 상태의 원천은 `ImportUserChoices` 하나다. 트리 노드는 `ImportSelection.Compute` 결과를 표시만 한다. Plan은 [가져오기] 때 한 번만 만든다.
+- 작업 폴더의 [새로고침]은 **다시 분석**(선택 유지)이다. 이 PC 프로젝트 목록은 분석 때 한 번 읽기 때문이다. 분석은 그 시점의 fresh 카탈로그로 한다.
+- [다시 시도]는 다시 분석 후 편집으로 돌아간다. Plan이 null이면 결과 화면이 아니라 편집 화면에 오류 한 줄을 띄운다.
+- Codex 실행 여부 확인 자체가 실패하면 "실행 중"으로 본다(안전한 쪽).
+- 원본으로만 들어 있는 조상은 트리 끝 "필요한 원본 대화(자동 포함)" 그룹에, 실제로 자동 포함될 때만 보인다.
+- `RunningProcessInfo.ProcessId`(선택 필드)가 추가됐다. 제품 판정(`CodexProcessGuard.Check`)은 이 값을 쓰지 않는다.
+
 ---
 
 ## 5. 도메인 모델 변경

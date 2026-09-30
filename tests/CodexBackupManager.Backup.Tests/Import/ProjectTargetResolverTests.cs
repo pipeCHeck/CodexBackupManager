@@ -163,6 +163,20 @@ public sealed class ProjectTargetResolverTests : IDisposable
     }
 
     [Fact]
+    public void 사용자가_고른_폴더도_등록_루트와_표기가_다르면_등록_루트_표기를_쓴다()
+    {
+        // Phase 9_1-16 — 수동 지정도 9_1-14와 같은 규칙(이 PC project_roots 표기 → cwd).
+        string folder = Folder("ChosenCase");
+        string registeredDisplay = folder.ToLowerInvariant();
+        var directory = new ProjectDirectory([Db("db-9", "Nine", registeredDisplay)]);
+
+        ProjectTarget target = ProjectTargetResolver.Resolve([Missing("orig")], folder, directory);
+
+        Assert.Equal(ProjectTargetReason.UserSelectedRegistered, target.Reason);
+        Assert.Equal(registeredDisplay, target.FolderPath);
+    }
+
+    [Fact]
     public void T4_사용자가_고른_폴더가_미등록이면_UserSelectedUnregistered다()
     {
         string folder = Folder("chosen-unregistered");

@@ -69,4 +69,23 @@ public sealed class ConversationNodeViewModel : ObservableObject
     /// 갱신하기 위해 호출한다. 값 자체는 저장하지 않고 다시 읽으라고 알리기만 한다.
     /// </summary>
     internal void NotifySelectionChanged() => OnPropertyChanged(nameof(IsSelected));
+
+    private bool _isHighlighted;
+    private bool _isTreeSelected;
+
+    /// <summary>
+    /// (Phase 9_2-17) 방금 가져온 대화라 잠시 강조 중인지. 백업 선택(<see cref="IsSelected"/>)과는 무관하다.
+    /// </summary>
+    public bool IsHighlighted
+    {
+        get => _isHighlighted;
+        set => SetProperty(ref _isHighlighted, value);
+    }
+
+    /// <summary>(Phase 9_2-17) 트리에서 선택(보이는 위치로 스크롤)됐는지. 백업 선택과 무관하다.</summary>
+    public bool IsTreeSelected
+    {
+        get => _isTreeSelected;
+        set => SetProperty(ref _isTreeSelected, value);
+    }
 }

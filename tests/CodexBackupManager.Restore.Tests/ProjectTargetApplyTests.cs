@@ -458,6 +458,23 @@ public sealed class ProjectTargetApplyTests : IDisposable
         Assert.Equal(root, CwdOf(threadId));
     }
 
+    [Fact]
+    public void T9_1_16_수동_지정_폴더도_cwd는_등록_루트_표기다()
+    {
+        string folder = NewFolder("manual-case");
+        string registered = folder.ToUpperInvariant();
+        TestCodexHomeBuilder.InsertProject(_pcBHome, "db-manual-case", "ManualCase", registered);
+        string threadId = NewId();
+        string backupPath = ExportProjectConversation(threadId, MissingFolder("orig"));
+
+        ImportPreview preview = ImportPreviewBuilder.ApplyManualProjectPathOverride(Preview(backupPath), SourceProjectId, folder);
+        Assert.Equal(registered, TargetOf(preview).FolderPath);
+        AssertSucceeded(Apply(Plan(preview, backupPath)));
+
+        Assert.Equal("db-manual-case", ProjectIdOf(threadId));
+        Assert.Equal(registered, CwdOf(threadId));
+    }
+
     // ── 9_1-12 사후 검증 강화(project_id / cwd) ─────────────────────────────────
 
     /// <summary>검증 직전에 방금 쓴 thread 행을 바꿔, 사후 검증이 실제로 잡아내는지 본다.</summary>

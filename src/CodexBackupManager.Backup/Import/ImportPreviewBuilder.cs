@@ -359,6 +359,13 @@ public static class ImportPreviewBuilder
         ProjectTarget suggested = ProjectTargetResolver.Resolve(
             target.PathMapping.OriginalRootPaths, canonical.Display, preview.LocalProjectDirectory);
 
+        // Phase 9_1-16 — 등록 프로젝트로 연결되면 ResolvedLocalPath(→ TargetProjectPath → cwd)도 등록 루트 표기로 맞춘다.
+        // 같은 위치이고 표기만 다르다. ManuallyLinked(사용자가 폴더를 골랐다)라는 의미는 그대로다.
+        if (suggested is { Kind: ProjectTargetKind.LinkExisting, FolderPath: { } registeredRoot })
+        {
+            updatedMapping = updatedMapping with { ResolvedLocalPath = registeredRoot };
+        }
+
         List<ImportProjectPreview> updatedProjects = preview.Projects.ToList();
         updatedProjects[matchIndex] = target with { PathMapping = updatedMapping, SuggestedTarget = suggested };
 

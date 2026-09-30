@@ -91,10 +91,14 @@ public sealed class CodexProcessGuardTests
         try
         {
             IReadOnlyList<RunningProcessInfo> processes = CodexProcessGuard.SystemRunningProcessLister();
-            RunningProcessInfo? found = processes.FirstOrDefault(p => p.ProcessName.Equals("cmd", System.StringComparison.OrdinalIgnoreCase));
+            // Phase 9_1-15 — 목록의 "첫 번째 cmd"가 아니라 이 테스트가 띄운 바로 그 자식을 PID로 찾는다. 병렬 실행 중
+            // 다른 cmd.exe(경로를 읽을 수 없는 것 포함)가 먼저 잡히면 간헐적으로 실패하던 결함이다.
+            RunningProcessInfo? found = processes.FirstOrDefault(p => p.ProcessId == child.Id);
 
             Assert.NotNull(found);
-            Assert.NotNull(found!.MainModulePath);
+            Assert.Equal("cmd", found!.ProcessName, ignoreCase: true);
+
+            Assert.NotNull(found.MainModulePath);
             Assert.Contains("cmd.exe", found.MainModulePath, System.StringComparison.OrdinalIgnoreCase);
         }
         finally

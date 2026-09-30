@@ -132,4 +132,13 @@ public sealed class ProjectNodeViewModel : ObservableObject
 
     /// <summary>이 프로젝트의 선택 상태가 바뀌었을 수 있다고 바인딩에 알린다. 값 자체는 저장하지 않는다.</summary>
     internal void NotifySelectionChanged() => OnPropertyChanged(nameof(IsSelected));
+
+    private bool _isExpanded = true;
+
+    /// <summary>(Phase 9_2-17) 트리에서 펼쳐져 있는지. 기본은 펼침이다.</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetProperty(ref _isExpanded, value);
+    }
 }
