@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Phase 9 전체 설계 — 백업 가져오기 재설계 · 작업 폴더 연결 · 자동 프로젝트 생성</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Nanum+Gothic+Coding:wght@400;700&display=swap">
+<style>
+/* Layout: 고정 목차 레일 + 72ch 본문 열(표·도식은 열 전체 폭), 앱(WPF) 다크 팔레트를 문서 톤으로 옮김 */
+:root {
+  --bg: #f4f6f8;        /* 청회색 기운의 종이 */
+  --surface: #ffffff;
+  --surface-2: #eef1f5;
+  --fg: #1c2128;
+  --muted: #5b6573;
+  --line: #d9dee5;
+  --accent: #2f5f93;    /* 앱 선택색 #3A6EA5 계열 */
+  --accent-soft: #e3ecf6;
+  --ok: #2e7d32;  --ok-soft: #e4f2e5;
+  --warn: #9a5b00; --warn-soft: #fbefdc;
+  --bad: #c0392b;  --bad-soft: #fbe6e3;
+  --info: #3b5bb5; --info-soft: #e5eafa;
+  --code-bg: #eef1f4;
+  --shadow: 0 1px 2px rgba(20, 30, 45, .06), 0 2px 8px rgba(20, 30, 45, .04);
+  --font-body: "IBM Plex Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "D2Coding", Consolas, "Malgun Gothic", monospace;
+  --font-diagram: "D2Coding", "Nanum Gothic Coding", "IBM Plex Mono", Consolas, monospace;
+  --measure: 72ch;
+  /* 앱 화면 목업 전용(앱은 다크 테마 하나뿐이라 두 테마에서 같은 값) */
+  --app-bg: #1e1f22; --app-panel: #2b2d31; --app-panel-2: #33363b; --app-fg: #e6e6e6; --app-muted: #9aa0a6;
+  --app-line: #44474d; --app-accent: #3a6ea5; --app-on-accent: #ffffff; --app-ok: #4caf50; --app-warn: #ffb74d;
+  --app-warn-bg: #3a2e1e; --app-input: #17181b; --app-bubble: #2f3b4c;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1e1f22; --surface: #2b2d31; --surface-2: #33363b; --fg: #e6e6e6; --muted: #9aa0a6; --line: #44474d;
+    --accent: #7fa8d6; --accent-soft: #2a3747;
+    --ok: #6cc070; --ok-soft: #243427; --warn: #ffb74d; --warn-soft: #3a2e1e; --bad: #e57373; --bad-soft: #3b2626;
+    --info: #9bb0ee; --info-soft: #2a3150; --code-bg: #17181b; --shadow: none; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1e1f22; --surface: #2b2d31; --surface-2: #33363b; --fg: #e6e6e6; --muted: #9aa0a6; --line: #44474d;
+  --accent: #7fa8d6; --accent-soft: #2a3747;
+  --ok: #6cc070; --ok-soft: #243427; --warn: #ffb74d; --warn-soft: #3a2e1e; --bad: #e57373; --bad-soft: #3b2626;
+  --info: #9bb0ee; --info-soft: #2a3150; --code-bg: #17181b; --shadow: none; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-padding-top: 20px; -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 15.5px/1.75 var(--font-body); word-break: keep-all; overflow-wrap: break-word; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.shell { display: grid; grid-template-columns: 272px minmax(0, 1fr); min-height: 100vh; }
+
+/* ── 목차 레일 ── */
+.rail { position: sticky; top: 0; height: 100vh; overflow: auto; border-right: 1px solid var(--line); background: var(--surface); padding-block: 22px 40px; padding-inline: 14px; }
+.rail .brand { font: 600 11px/1.4 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 0 8px 10px; }
+.rail .rail-title { font-weight: 700; font-size: 14px; line-height: 1.45; padding: 0 8px 14px; border-bottom: 1px solid var(--line); margin-bottom: 10px; text-wrap: balance; }
+.rail details summary { list-style: none; cursor: pointer; font: 600 12px var(--font-body); letter-spacing: .02em; color: var(--muted); padding: 4px 8px; }
+.rail details summary::-webkit-details-marker { display: none; }
+.toc { display: grid; gap: 1px; margin-top: 4px; }
+.toc a { display: flex; gap: 8px; align-items: baseline; padding: 5px 8px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; line-height: 1.45; }
+.toc a:hover { background: var(--surface-2); color: var(--fg); }
+.toc a.l3 { padding-left: 26px; font-size: 12.5px; }
+.toc a.active { background: var(--accent-soft); color: var(--fg); }
+.toc .tnum { font: 500 11.5px var(--font-mono); color: var(--muted); min-width: 2.2em; }
+.toc .tlabel { flex: 1; min-width: 0; }
+.toc .count { font: 500 11px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.toc .count.full { color: var(--ok); }
+
+/* ── 본문 ── */
+main { min-width: 0; padding-block: 36px 96px; padding-inline: clamp(16px, 5vw, 56px); }
+.col { max-width: 1040px; }
+.masthead { display: grid; gap: 14px; padding-bottom: 8px; }
+.eyebrow { font: 600 13px/1 var(--font-body); letter-spacing: .02em; color: var(--accent); }
+h1 { font-size: clamp(26px, 3.4vw, 36px); line-height: 1.25; letter-spacing: -.02em; margin: 0; text-wrap: balance; font-weight: 700; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; color: var(--muted); font-size: 13px; }
+.meta code { font-size: 12px; }
+.meta .spacer { flex: 1; }
+.btn { font: 500 12.5px var(--font-body); color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 4px 12px; cursor: pointer; }
+.btn:hover { background: var(--surface-2); }
+.overview { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; box-shadow: var(--shadow); max-width: var(--measure); }
+.overview p { margin: 6px 0; }
+.overview > :first-child { margin-top: 0; }
+.overview ol, .overview ul { margin: 6px 0; }
+
+/* 진행 대시보드 */
+.dash { margin: 26px 0 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.dash-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+.dash-head strong { font-size: 15px; }
+.dash-total { font: 600 22px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.dash-total small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.dash-rows { display: grid; }
+.dash-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, 220px) 64px; gap: 14px; align-items: center; padding: 9px 20px; text-decoration: none; color: var(--fg); border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.dash-row:last-child { border-bottom: none; }
+.dash-row:hover { background: var(--surface-2); }
+.dash-row .dname { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.dash-row .dname span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-row .dcount { font: 500 12.5px var(--font-mono); text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dash-row.full .dcount { color: var(--ok); }
+.meter { height: 6px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
+
+/* 제목 */
+h2, h3, h4 { position: relative; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; text-wrap: balance; }
+h2 { font-size: 22px; line-height: 1.35; letter-spacing: -.01em; margin: 56px 0 14px; padding-top: 22px; border-top: 1px solid var(--line); font-weight: 700; }
+h3 { font-size: 17.5px; line-height: 1.4; margin: 34px 0 10px; font-weight: 600; }
+h4 { font-size: 15.5px; margin: 24px 0 8px; font-weight: 600; }
+.htext { min-width: 0; }
+.num { font: 600 .72em/1 var(--font-mono); color: var(--accent); background: var(--accent-soft); padding: .35em .5em; border-radius: 6px; align-self: center; }
+h3 .num { background: none; padding: 0; color: var(--muted); }
+.phase { font: 600 .72em/1 var(--font-mono); color: var(--fg); border: 1px solid var(--line); background: var(--surface); padding: .35em .5em; border-radius: 6px; align-self: center; }
+h2 .count, h3 .count { font: 500 12px/1 var(--font-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 5px 9px; align-self: center; margin-left: auto; font-variant-numeric: tabular-nums; }
+h2 .count.full { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+.anchor { position: absolute; left: -22px; top: auto; color: var(--muted); text-decoration: none; opacity: 0; font-weight: 400; }
+h2 .anchor { top: 22px; }
+h2:hover .anchor, h3:hover .anchor, h4:hover .anchor, .anchor:focus-visible { opacity: .7; }
+
+/* 본문 요소 */
+p, main > .col > ul, main > .col > ol, .fields, aside.note { max-width: var(--measure); }
+p { margin: 10px 0; }
+strong { font-weight: 600; }
+code { font: 500 .86em var(--font-mono); background: var(--code-bg); border: 1px solid var(--line); padding: .05em .38em; border-radius: 5px; overflow-wrap: anywhere; }
+ul, ol { padding-left: 1.4em; margin: 8px 0; }
+li { margin: 4px 0; }
+li::marker { color: var(--muted); }
+del { color: var(--muted); }
+
+.fields { margin: 12px 0 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.fields > div { display: grid; grid-template-columns: 8.5em minmax(0, 1fr); gap: 14px; padding: 9px 16px; border-bottom: 1px solid var(--line); }
+.fields > div:last-child { border-bottom: none; }
+.fields dt { font-weight: 600; font-size: 13px; color: var(--muted); padding-top: 1px; }
+.fields dd { margin: 0; min-width: 0; }
+
+aside.note { margin: 14px 0; padding: 12px 16px; border: 1px solid var(--line); border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 8px; }
+aside.note p { margin: 4px 0; }
+
+.table-wrap { overflow-x: auto; margin: 14px 0 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+th { background: var(--surface-2); font-weight: 600; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+td:first-child { font-weight: 500; }
+
+figure.block { margin: 14px 0 18px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--code-bg); }
+figure.block figcaption { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); font: 600 12px var(--font-body); letter-spacing: .02em; color: var(--muted); }
+.copy { font: 500 11.5px var(--font-body); letter-spacing: 0; text-transform: none; color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; cursor: pointer; }
+.copy:hover { color: var(--fg); background: var(--surface); }
+figure.block pre { margin: 0; padding: 14px 16px; overflow-x: auto; }
+figure.block pre code { font: 400 12.5px/1.6 var(--font-mono); background: none; border: 0; padding: 0; white-space: pre; word-break: normal; overflow-wrap: normal; }
+figure.diagram pre code { font-family: var(--font-diagram); font-size: 13px; line-height: 1.45; }
+
+/* 상태 배지 */
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 2px 9px 2px 8px; border-radius: 99px; border: 1px solid transparent; white-space: nowrap; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.st-wait { color: var(--muted); background: var(--surface-2); }
+.st-doing { color: var(--info); background: var(--info-soft); }
+.st-review { color: var(--warn); background: var(--warn-soft); }
+.st-done { color: var(--ok); background: var(--ok-soft); }
+.st-hold { color: var(--bad); background: var(--bad-soft); }
+
+/* 작업 목록 */
+ul.tasks { list-style: none; padding: 0; margin: 12px 0 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; max-width: none; }
+li.task { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 12px; margin: 0; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+li.task:last-child { border-bottom: none; }
+li.task .box { width: 18px; height: 18px; border: 1.5px solid var(--line); border-radius: 5px; margin-top: 3px; background: var(--surface); position: relative; }
+li.task.done .box { background: var(--ok); border-color: var(--ok); }
+li.task.done .box::after { content: ""; position: absolute; left: 5px; top: 1.5px; width: 5px; height: 10px; border: solid var(--surface); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+li.task .thead:empty { display: none; }
+li.task .thead { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
+code.tid { font: 600 12px/1.3 var(--font-mono); color: var(--accent); background: var(--accent-soft); border-color: transparent; padding: .15em .45em; word-break: normal; }
+code.tid.test { color: var(--info); background: var(--info-soft); }
+.kind { font-size: 11.5px; color: var(--muted); }
+li.task .ttext { font-size: 14.5px; line-height: 1.65; }
+li.task.done .ttext { color: var(--muted); }
+li.task.done code.tid { color: var(--ok); background: var(--ok-soft); }
+li.task ul { margin: 6px 0 0; }
+
+footer.gen { margin-top: 72px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; }
+
+/* 시각 자료(목업/흐름도) */
+.visual { margin: 16px 0 10px; }
+details.alt { margin: 4px 0 18px; }
+details.alt > summary { cursor: pointer; color: var(--muted); font-size: 13px; width: fit-content; }
+.mock { background: var(--app-bg); color: var(--app-fg); border: 1px solid var(--app-line); border-radius: 12px; overflow: hidden; font-size: 13px; line-height: 1.5; box-shadow: var(--shadow); }
+.mock b { font-weight: 600; }
+.m-top, .m-foot, .m-tools, .m-proj, .m-conv, .m-kv, .m-create { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.m-top { padding: 12px 16px 4px; font-size: 14px; }
+.m-link { color: var(--app-muted); }
+.m-sub { padding: 0 16px 10px; color: var(--app-muted); font-size: 12px; overflow-wrap: anywhere; }
+.m-banner { margin: 0 16px 12px; padding: 8px 12px; background: var(--app-warn-bg); color: var(--app-warn); border-radius: 8px; }
+.m-grow { flex: 1; }
+.m-dim { color: var(--app-muted); }
+.m-btn { background: var(--app-panel-2); border: 1px solid var(--app-line); border-radius: 6px; padding: 1px 9px; font-size: 12px; white-space: nowrap; }
+.m-primary { background: var(--app-accent); color: var(--app-on-accent); border-radius: 7px; padding: 6px 14px; font-weight: 600; white-space: nowrap; }
+.m-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); border-top: 1px solid var(--app-line); border-bottom: 1px solid var(--app-line); }
+.m-tree { padding: 12px 14px; border-right: 1px solid var(--app-line); display: grid; gap: 6px; align-content: start; min-width: 0; }
+.m-detail { padding: 12px 16px; display: grid; gap: 7px; align-content: start; background: var(--app-panel); min-width: 0; }
+.m-title { font-size: 14px; }
+.m-search { background: var(--app-input); border: 1px solid var(--app-line); border-radius: 6px; padding: 1px 10px; color: var(--app-muted); min-width: 5em; }
+.m-proj { padding: 4px 2px 0; }
+.m-conv { padding: 3px 2px 3px 22px; }
+.m-conv.m-child { padding-left: 48px; color: var(--app-muted); font-size: 12.5px; }
+.m-folder { margin-left: 22px; padding: 8px 10px; background: var(--app-panel); border: 1px solid var(--app-line); border-radius: 8px; display: grid; gap: 5px; }
+.m-cap { color: var(--app-muted); font-size: 11.5px; font-weight: 600; display: flex; gap: 6px; align-items: center; }
+.m-kv > span:first-child { color: var(--app-muted); min-width: 4.5em; font-size: 12px; }
+.m-path { font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.m-input { background: var(--app-input); border: 1px solid var(--app-line); border-radius: 5px; padding: 0 8px; font-family: var(--font-mono); font-size: 11.5px; flex: 1; min-width: 8em; }
+.m-input.sm { flex: 0 1 auto; min-width: 5em; }
+.m-create { font-size: 12.5px; }
+.m-spark { color: var(--app-warn); font-weight: 600; }
+.m-cb { width: 13px; height: 13px; border: 1.5px solid var(--app-muted); border-radius: 3px; flex: none; position: relative; }
+.m-cb.on { background: var(--app-accent); border-color: var(--app-accent); }
+.m-cb.on::after { content: ""; position: absolute; left: 3.5px; top: 0.5px; width: 3.5px; height: 7px; border: solid var(--app-on-accent); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.m-cb.part::after { content: ""; position: absolute; left: 2px; right: 2px; top: 4.5px; height: 1.5px; background: var(--app-fg); }
+.m-badge { font-size: 11.5px; border-radius: 99px; padding: 0 8px; border: 1px solid var(--app-line); white-space: nowrap; width: fit-content; }
+.b-gray { color: var(--app-muted); }
+.b-green { color: var(--app-ok); border-color: var(--app-ok); }
+.m-tag { font-family: var(--font-mono); font-size: 10.5px; color: var(--app-muted); border: 1px dashed var(--app-line); border-radius: 4px; padding: 0 5px; }
+.m-msg { background: var(--app-panel-2); border-radius: 8px; padding: 6px 10px; color: var(--app-muted); }
+.m-msg.m-you { background: var(--app-bubble); margin-left: 24px; }
+.m-foot { padding: 12px 16px; font-size: 12.5px; }
+.flow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 14px; align-items: center; }
+.room { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 18px; box-shadow: var(--shadow); min-width: 0; }
+.room-h { font-weight: 700; margin-bottom: 6px; }
+.room ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 14px; }
+.room li b { color: var(--accent); font-weight: 600; margin-right: 4px; }
+.flow-links { display: grid; gap: 10px; }
+.flow-arrow { font-size: 12.5px; color: var(--muted); background: var(--surface-2); border-radius: 99px; padding: 4px 12px; white-space: nowrap; text-align: center; }
+.flow-arrow span { color: var(--accent); font-weight: 700; }
+
+@media (max-width: 960px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: static; height: auto; max-height: none; border-right: none; border-bottom: 1px solid var(--line); padding-block: 14px; }
+  .rail .rail-title { display: none; }
+  .rail details:not([open]) .toc { display: none; }
+  .anchor { display: none; }
+  .fields > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .dash-row { grid-template-columns: minmax(0, 1fr) 70px 54px; gap: 10px; padding-inline: 14px; }
+}
+@media (max-width: 720px) {
+  .m-split { grid-template-columns: minmax(0, 1fr); }
+  .m-tree { border-right: none; border-bottom: 1px solid var(--app-line); }
+  .flow { grid-template-columns: minmax(0, 1fr); }
+  .flow-links { grid-auto-flow: column; justify-content: center; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+@media print { .rail, .btn, .copy { display: none; } .shell { display: block; } body { background: #fff; } }
+</style>
+</head>
+<body>
+<div class="shell" id="top">
+<nav class="rail" aria-label="목차">
+  <div class="brand">Codex Backup Manager</div>
+  <div class="rail-title">Phase 9 전체 설계 — 백업 가져오기 재설계 · 작업 폴더 연결 · 자동 프로젝트 생성</div>
+  <details id="toc-details" open><summary>목차</summary>
+  <div class="toc">
+<a class="l2" href="#s1-배경과-진단"><span class="tnum">1</span><span class="tlabel">배경과 진단</span></a>
+<a class="l3" href="#s11-스크린샷-상황의-실제-원인"><span class="tnum">1.1</span><span class="tlabel">스크린샷 상황의 실제 원인</span></a>
+<a class="l3" href="#s12-구조적-결함-목록"><span class="tnum">1.2</span><span class="tlabel">구조적 결함 목록</span></a>
+<a class="l2" href="#s2-목표-비목표-설계-원칙"><span class="tnum">2</span><span class="tlabel">목표 · 비목표 · 설계 원칙</span></a>
+<a class="l3" href="#s21-목표"><span class="tnum">2.1</span><span class="tlabel">목표</span></a>
+<a class="l3" href="#s22-비목표v1-범위-유지"><span class="tnum">2.2</span><span class="tlabel">비목표(V1 범위 유지)</span></a>
+<a class="l3" href="#s23-설계-원칙"><span class="tnum">2.3</span><span class="tlabel">설계 원칙</span></a>
+<a class="l2" href="#s3-전체-구조"><span class="tnum">3</span><span class="tlabel">전체 구조</span></a>
+<a class="l3" href="#s31-계층과-신규변경-컴포넌트"><span class="tnum">3.1</span><span class="tlabel">계층과 신규/변경 컴포넌트</span></a>
+<a class="l3" href="#s32-데이터-흐름"><span class="tnum">3.2</span><span class="tlabel">데이터 흐름</span></a>
+<a class="l2" href="#s4-핵심-개념-프로젝트-식별project-identity"><span class="tnum">4</span><span class="tlabel">핵심 개념: 프로젝트 식별(Project Identity)</span></a>
+<a class="l3" href="#s41-이-pc의-프로젝트-정보-출처실측"><span class="tnum">4.1</span><span class="tlabel">이 PC의 프로젝트 정보 출처(실측)</span></a>
+<a class="l3" href="#s42-정의"><span class="tnum">4.2</span><span class="tlabel">정의</span></a>
+<a class="l3" href="#s43-카탈로그-트리-그룹-키-변경결함-d"><span class="tnum">4.3</span><span class="tlabel">카탈로그 트리 그룹 키 변경(결함 D)</span></a>
+<a class="l2" href="#s5-도메인-모델-변경"><span class="tnum">5</span><span class="tlabel">도메인 모델 변경</span></a>
+<a class="l3" href="#s51-codexdomain"><span class="tnum">5.1</span><span class="tlabel">Codex/Domain</span></a>
+<a class="l3" href="#s52-importbackup"><span class="tnum">5.2</span><span class="tlabel">Import(Backup)</span></a>
+<a class="l3" href="#s53-importplan-addendumv2"><span class="tnum">5.3</span><span class="tlabel">ImportPlan addendum(v2)</span></a>
+<a class="l3" href="#s54-restore"><span class="tnum">5.4</span><span class="tlabel">Restore</span></a>
+<a class="l2" href="#s6-단계별-상세-설계"><span class="tnum">6</span><span class="tlabel">단계별 상세 설계</span></a>
+<a class="l3" href="#9_0-codex-desktop-반영-실험-사용자-진행-병행"><span class="tnum"></span><span class="tlabel">9_0 Codex Desktop 반영 실험 (사용자 진행, 병행)</span></a>
+<a class="l3" href="#9_1-프로젝트-식별-정리-결함-abcd-수정-core만-ui는-문구만"><span class="tnum"></span><span class="tlabel">9_1 프로젝트 식별 정리 + 결함 A·B·C·D 수정 (Core만, UI는 문구만)</span></a>
+<a class="l3" href="#9_2-가져오기-작업-공간새-화면-사용자-선택"><span class="tnum"></span><span class="tlabel">9_2 가져오기 작업 공간(새 화면) + 사용자 선택</span></a>
+<a class="l3" href="#9_2b-백업-속-대화-내용-미리보기"><span class="tnum"></span><span class="tlabel">9_2b 백업 속 대화 내용 미리보기</span></a>
+<a class="l3" href="#9_5-자동-프로젝트-생성-최종-목표"><span class="tnum"></span><span class="tlabel">9_5 자동 프로젝트 생성 (최종 목표)</span></a>
+<a class="l3" href="#9_3-이미-있는-대화의-프로젝트-연결-변경"><span class="tnum"></span><span class="tlabel">9_3 이미 있는 대화의 프로젝트 연결 변경</span></a>
+<a class="l3" href="#9_4-가져오기-기록-되돌리기-snapshot-정리"><span class="tnum"></span><span class="tlabel">9_4 가져오기 기록 · 되돌리기 · Snapshot 정리</span></a>
+<a class="l2" href="#s7-화면-설계전체-ui-스펙"><span class="tnum">7</span><span class="tlabel">화면 설계(전체 UI 스펙)</span></a>
+<a class="l3" href="#s71-화면-상태-머신importworkspaceviewmodelstate"><span class="tnum">7.1</span><span class="tlabel">화면 상태 머신(ImportWorkspaceViewModel.State)</span></a>
+<a class="l3" href="#s72-레이아웃editing"><span class="tnum">7.2</span><span class="tlabel">레이아웃(Editing)</span></a>
+<a class="l3" href="#s73-작업-폴더-편집-영역프로젝트-행"><span class="tnum">7.3</span><span class="tlabel">작업 폴더 편집 영역(프로젝트 행)</span></a>
+<a class="l3" href="#s74-대화-배지와-체크-규칙"><span class="tnum">7.4</span><span class="tlabel">대화 배지와 체크 규칙</span></a>
+<a class="l3" href="#s75-확인-대화상자"><span class="tnum">7.5</span><span class="tlabel">확인 대화상자</span></a>
+<a class="l3" href="#s76-결과-화면"><span class="tnum">7.6</span><span class="tlabel">결과 화면</span></a>
+<a class="l3" href="#s77-메인-화면-연동"><span class="tnum">7.7</span><span class="tlabel">메인 화면 연동</span></a>
+<a class="l2" href="#s8-안전성-불변식-phase-9-전체에서-깨지면-안-됨"><span class="tnum">8</span><span class="tlabel">안전성 불변식 (Phase 9 전체에서 깨지면 안 됨)</span></a>
+<a class="l2" href="#s9-사용자-메시지-카탈로그"><span class="tnum">9</span><span class="tlabel">사용자 메시지 카탈로그</span></a>
+<a class="l2" href="#s10-로깅"><span class="tnum">10</span><span class="tlabel">로깅</span></a>
+<a class="l2" href="#s11-테스트-계획"><span class="tnum">11</span><span class="tlabel">테스트 계획</span></a>
+<a class="l3" href="#s111-9_1"><span class="tnum">11.1</span><span class="tlabel">9_1</span></a>
+<a class="l3" href="#s112-9_2"><span class="tnum">11.2</span><span class="tlabel">9_2</span></a>
+<a class="l3" href="#s113-9_2b"><span class="tnum">11.3</span><span class="tlabel">9_2b</span></a>
+<a class="l3" href="#s114-9_5"><span class="tnum">11.4</span><span class="tlabel">9_5</span></a>
+<a class="l3" href="#s115-9_3-9_4"><span class="tnum">11.5</span><span class="tlabel">9_3 / 9_4</span></a>
+<a class="l3" href="#s116-e2e스크래치패드-복제본-원본-해시-불변-확인"><span class="tnum">11.6</span><span class="tlabel">E2E(스크래치패드 복제본, 원본 해시 불변 확인)</span></a>
+<a class="l3" href="#s117-테스트-환경결함-i"><span class="tnum">11.7</span><span class="tlabel">테스트 환경(결함 I)</span></a>
+<a class="l2" href="#s12-문서-버전-인계"><span class="tnum">12</span><span class="tlabel">문서 · 버전 · 인계</span></a>
+<a class="l2" href="#s13-위험-미해결-질문"><span class="tnum">13</span><span class="tlabel">위험 · 미해결 질문</span></a>
+<a class="l2" href="#s14-부록-근거"><span class="tnum">14</span><span class="tlabel">부록: 근거</span></a>
+<a class="l3" href="#s141-실측이-pc-읽기-전용"><span class="tnum">14.1</span><span class="tlabel">실측(이 PC, 읽기 전용)</span></a>
+<a class="l3" href="#s142-복제본-e2e"><span class="tnum">14.2</span><span class="tlabel">복제본 E2E</span></a>
+<a class="l3" href="#s143-공식-소스openaicodex-bcd6d9ab"><span class="tnum">14.3</span><span class="tlabel">공식 소스(openai/codex bcd6d9ab)</span></a>
+  </div></details>
+</nav>
+<main>
+<div class="col">
+<header class="masthead">
+  <div class="eyebrow">설계 문서</div>
+  <h1>Phase 9 전체 설계 — 백업 가져오기 재설계 · 작업 폴더 연결 · 자동 프로젝트 생성</h1>
+  <div class="meta"><span>원본 <code>docs/import-ux-redesign-phase9.md</code></span><span>생성 2026-09-30 16:43</span><span class="spacer"></span>
+  <button type="button" class="btn" id="theme">밝게 / 어둡게</button></div>
+<div class="overview"><p><strong>상태: 전체 설계(구현 전)</strong> · 작성 2026-09-30 · 대상 버전 <code>0.2.0</code> 코드는 아직 바꾸지 않았다. 이 문서가 Phase 9 전체(9_0~9_5)의 기준 스펙이다. 구현 단계, 작업 ID, 진행 체크리스트는 <a href="./phase9-implementation-plan.html"><code>docs/phase9-implementation-plan.md</code></a>에 있다. 이 문서의 .html은 <code>python scripts/render-docs.py &lt;md&gt;</code>로 생성한다(직접 수정 금지).</p>
+<p>근거 자료</p>
+<ul><li>사용자 스크린샷(v0.1.1 "백업 불러오기 미리보기")</li><li>실제 <code>C:\Users\User\.codex</code> <strong>읽기 전용</strong> 진단(작업 전후 해시 불변 확인)</li><li><code>.codex</code> 복제본 E2E(PC A→B 42항목 PASS, 경로 재지정 Case 0~4)</li><li>공식 <code>openai/codex</code> 소스 <code>bcd6d9ab</code>(2026-09-30): <code>codex-rs/state/src/runtime/projects.rs</code>, <code>codex-rs/app-server/src/request_processors/projects.rs</code>, <code>app-server-protocol/src/protocol/v2/{project,thread}.rs</code></li></ul>
+<p>확정된 사용자 결정(2026-09-30)</p>
+<ol><li>최종 목표: <strong>폴더를 고르면 그 경로를 작업 폴더로 하는 프로젝트가 자동으로 생기고, 가져온 대화가 거기 들어간다.</strong> 9_2까지는 A안(미등록 폴더면 기타 대화 + 안내)으로 동작하고, 9_5에서 최종 동작으로 바꾼다.</li><li>Codex Desktop 반영 실험(9_0)은 추천안대로 사용자가 직접 진행한다.</li><li>순서는 추천안대로 <strong>9_1 → 9_2 → 9_2b → 9_5 → 9_3 → 9_4</strong>(9_0은 병행).</li><li>백업 속 대화 내용 미리보기(9_2b)는 <strong>포함</strong>한다.</li></ol></div>
+</header>
+
+<h2 id="s1-배경과-진단"><span class="num">§1</span><span class="htext">배경과 진단</span><a class="anchor" href="#s1-배경과-진단" aria-label="이 절 링크">¶</a></h2>
+<h3 id="s11-스크린샷-상황의-실제-원인"><span class="num">1.1</span><span class="htext">스크린샷 상황의 실제 원인</span><a class="anchor" href="#s11-스크린샷-상황의-실제-원인" aria-label="이 절 링크">¶</a></h3>
+<div class="table-wrap"><table><thead><tr><th>항목</th><th>확인 결과</th></tr></thead><tbody><tr><td>백업</td><td><code>Downloads\codex-backup-20260913-211909.codexbackup</code>: 대화 1개("b버전 한글패치 제작"), 원본 경로 <code>C:\Users\ProController\Documents\한글패치</code></td></tr><tr><td>이 PC Apply 기록</td><td><code>%LOCALAPPDATA%\CodexBackupManager\Snapshots\20260913-122034-…</code>: 2026-09-13 21:20 <strong>적용 성공(journal <code>Completed</code>)</strong></td></tr><tr><td>현재 상태</td><td>이미 이 PC에 있다(비교 결과 "동일"). 원본 경로가 없어 <strong>"기타 대화"</strong>에 들어가 있다</td></tr></tbody></table></div>
+<p>첫 번째 불러오기는 성공했다. 대화가 프로젝트가 아닌 "기타 대화"로 들어가서 안 보였고, 다시 불러오면 "동일"이라 할 일이 없었다. 화면은 이 사실을 전달하지 못했다.</p>
+<h3 id="s12-구조적-결함-목록"><span class="num">1.2</span><span class="htext">구조적 결함 목록</span><a class="anchor" href="#s12-구조적-결함-목록" aria-label="이 절 링크">¶</a></h3>
+<div class="table-wrap"><table><thead><tr><th>ID</th><th>결함</th><th>근거</th><th>영향</th></tr></thead><tbody><tr><td><strong>A</strong></td><td>대화가 0개인 등록 프로젝트를 모른다. 재지정이 조용히 무시된다</td><td><code>CodexCatalog.Projects</code>가 대화 있는 그룹만 담는다. <code>ProjectPathMapper</code>/<code>RestoreOperationPlanner.ResolveLocalProjectId</code>가 이 목록만 본다. 복제본 Case 0/1/3</td><td>"사용자가 지정함"으로 뜨지만 <code>project_id=null</code>, <code>cwd=원본</code></td></tr><tr><td><strong>B</strong></td><td>폴더 실존 여부를 안 본다</td><td><code>ProjectPathMapper</code>는 문자열 비교만 한다</td><td>원본 폴더가 같은 경로에 있어도 "원본 경로를 찾을 수 없습니다"</td></tr><tr><td><strong>C</strong></td><td><strong>레거시 프로젝트 ID를 <code>threads.project_id</code>에 쓰려다 외래키 위반 → Apply 전체 Rollback</strong></td><td><code>threads.project_id REFERENCES projects(id)</code>. 카탈로그 프로젝트 ID가 global-state 레거시 ID(<code>0e4a4695-…</code>)이면 그 값이 그대로 INSERT된다. 복제본 Case 4: <code>RolledBack</code></td><td>이 PC에서 global-state로 배정된 대화 72개가 쓰는 프로젝트 26개가 <strong>전부 레거시 ID</strong>다. 이 폴더들로 가져오기를 지정하면 <strong>항상 실패</strong>한다</td></tr><tr><td><strong>D</strong></td><td>같은 폴더가 서로 다른 프로젝트 ID로 여러 번 표시된다</td><td>레거시 ID와 SQLite ID를 통합하지 않는다(<code>app-server-project-id-by-legacy-project-id-by-host</code> 미사용). 실측: 같은 루트를 공유하는 카탈로그 프로젝트 묶음 2건</td><td>메인 목록 중복, 매핑 모호</td></tr><tr><td><strong>E</strong></td><td>Codex Desktop의 연결 정보 위치가 불확실하다</td><td><code>threadAssignmentsMigrated=false</code>, <code>threads.project_id</code> 채워진 행 416개 중 0개, global-state 배정 72건</td><td>DB에 연결해도 Desktop 사이드바 반영이 미검증이다</td></tr><tr><td><strong>F</strong></td><td>성공한 Import를 되돌릴 UI가 없다</td><td>UI 명령은 <code>RecoverIncompleteApplyCommand</code>(중간 실패 복구)뿐이다</td><td>CLAUDE.md §17 미충족</td></tr><tr><td><strong>G</strong></td><td>가져오기 화면이 내부 용어 나열이다. 결과·위치 안내가 없다</td><td>스크린샷</td><td>사용자가 성공/실패와 위치를 알 수 없다</td></tr><tr><td>H</td><td>Snapshot이 계속 쌓인다</td><td>현재 339개(대부분 09-12)</td><td>디스크 사용 증가</td></tr><tr><td>I</td><td>일부 테스트가 호스트 환경에 의존한다</td><td>Codex가 켜져 있으면 7건 실패(실제 ProcessGuard 사용)</td><td>개발 중 오탐</td></tr></tbody></table></div>
+<h2 id="s2-목표-비목표-설계-원칙"><span class="num">§2</span><span class="htext">목표 · 비목표 · 설계 원칙</span><a class="anchor" href="#s2-목표-비목표-설계-원칙" aria-label="이 절 링크">¶</a></h2>
+<h3 id="s21-목표"><span class="num">2.1</span><span class="htext">목표</span><a class="anchor" href="#s21-목표" aria-label="이 절 링크">¶</a></h3>
+<ol><li>가져오기 화면을 <strong>메인 목록과 같은 프로젝트→대화 트리 + 체크박스</strong>로 만든다.</li><li>그 화면에서 <strong>가져올 대화를 고르고</strong>, <strong>프로젝트별 작업 폴더를 지정</strong>한다.</li><li>폴더를 지정하면 <strong>기존 프로젝트에 연결하거나, 없으면 새 프로젝트를 자동 생성</strong>한다(9_5).</li><li>각 대화가 적용 후 <strong>어디에 어떤 상태로 들어가는지</strong> 적용 전에 보여주고, 적용 후에는 결과를 보여준다.</li><li>백업 속 <strong>대화 내용을 미리 읽을 수</strong> 있다.</li><li>이미 있는 대화의 <strong>프로젝트 연결만 고칠 수</strong> 있다(9_3). 지금 한글패치 대화 같은 경우다.</li><li>성공한 가져오기를 <strong>안전하게 되돌릴 수</strong> 있다(9_4).</li></ol>
+<h3 id="s22-비목표v1-범위-유지"><span class="num">2.2</span><span class="htext">비목표(V1 범위 유지)</span><a class="anchor" href="#s22-비목표v1-범위-유지" aria-label="이 절 링크">¶</a></h3>
+<p>Diverged 자동 병합, 백업으로 기존 대화 내용 교체, <code>.jsonl.zst</code> 이어받기, 첨부 파일 복원, global-state 쓰기(9_0 판정 전까지), Cloud/계정 기능. <strong>Backup Format V1은 바꾸지 않는다(FROZEN).</strong> Export 쪽 변경은 없다.</p>
+<h3 id="s23-설계-원칙"><span class="num">2.3</span><span class="htext">설계 원칙</span><a class="anchor" href="#s23-설계-원칙" aria-label="이 절 링크">¶</a></h3>
+<ul><li><strong>P1 원본 보호 우선</strong>: 읽기·미리보기·분석은 전부 read-only다. 쓰기는 <code>RestoreExecutor</code> 파이프라인 (ProcessGuard → fresh preflight → pinned backup → Operation Plan → Snapshot → write → post-validation → 실패 시 Rollback) <strong>안에서만</strong> 한다. 새 write 종류(프로젝트 생성, 연결 변경)도 이 파이프라인에 올린다.</li><li><strong>P2 표시는 실제 동작과 일치해야 한다</strong>: "연결됨"은 적용 시 실제로 연결될 때만 표시한다. 반영되지 않을 선택은 적용 전에 경고한다.</li><li><strong>P3 공식 동작 정합</strong>: 프로젝트 생성·연결은 공식 <code>codex-rs</code> <code>create_project</code>/<code>set_thread_project</code>와 같은 SQL 순서와 제약을 따르고, 스키마 게이트로 버전 차이를 막는다.</li><li><strong>P4 식별은 ID가 아니라 canonical 루트 경로 + 이 PC의 authoritative ID</strong>(§4).</li><li><strong>P5 frozen contract는 "추가"로만 확장한다</strong>: <code>ImportPreview</code>/<code>ImportPlan</code>/<code>RevisionRelation</code> 판정 semantics는 바꾸지 않는다. 새 필드와 오버로드만 추가하고 문서에 addendum으로 남긴다.</li><li><strong>P6 UI와 로직 분리</strong>: 판단은 전부 Core(Backup/Restore/Codex)에 두고, ViewModel은 표시와 사용자 선택 수집만 한다. 테스트 가능성을 확보한다.</li></ul>
+<h2 id="s3-전체-구조"><span class="num">§3</span><span class="htext">전체 구조</span><a class="anchor" href="#s3-전체-구조" aria-label="이 절 링크">¶</a></h2>
+<h3 id="s31-계층과-신규변경-컴포넌트"><span class="num">3.1</span><span class="htext">계층과 신규/변경 컴포넌트</span><a class="anchor" href="#s31-계층과-신규변경-컴포넌트" aria-label="이 절 링크">¶</a></h3>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>App (WPF, MVVM)
+ ├─ ImportWorkspaceViewModel          [신규] 가져오기 화면 전체 상태 머신
+ │   ├─ ImportProjectNodeViewModel    [신규] 트리 프로젝트 노드(3상태 체크 + 작업 폴더 편집)
+ │   ├─ ImportConversationNodeViewModel [신규] 트리 대화 노드(배지 + 체크)
+ │   ├─ ImportDetailViewModel         [신규] 오른쪽 상세 + 내용 미리보기(9_2b)
+ │   └─ ImportResultViewModel         [신규] 결과 화면
+ ├─ ImportHistoryViewModel            [신규, 9_4] 가져오기 기록/되돌리기
+ └─ MainViewModel                     [변경] 가져오기 진입/복귀, 결과 강조 표시만 담당(기존 Import 코드는 Workspace로 이관)
+
+Backup
+ ├─ ImportPreviewBuilder              [변경] KnownProjects 기반 매핑, LocalLocation 채움
+ ├─ ProjectPathMapper → ProjectTargetResolver [변경/확장] 목적지 판정(연결/생성/기타)
+ ├─ ImportSelection                   [신규] 사용자 선택 + 의존성 closure 계산(순수 로직)
+ ├─ ImportPlanBuilder                 [변경] 선택/목적지 결정을 반영하는 오버로드(기존 시그니처 유지)
+ ├─ ImportPlanPreflightValidator      [변경] 목적지 결정 재검증(생성 대상 루트 충돌 등)
+ └─ BackupTranscriptSource            [신규, 9_2b] backup entry를 스트림으로 읽는 transcript 입력
+
+Restore
+ ├─ RestoreOperationPlanner           [변경] PlannedProjectCreate/PlannedThreadProjectLink 생성, authoritative ID로만 연결
+ ├─ StateDatabaseWriter               [변경] CreateProject / LinkThreadProject 추가
+ ├─ SchemaCompatibilityChecker        [변경] projects/project_roots/project_idempotency_keys 게이트
+ ├─ RestoreValidator                  [변경] 프로젝트 생성/연결 사후 검증
+ ├─ RestoreTransactionJournal         [변경] Apply 직후 target 해시 기록(되돌리기 전제조건)
+ ├─ ImportUndoService                 [신규, 9_4] 성공한 Apply 되돌리기
+ └─ SnapshotRetentionService          [신규, 9_4] Snapshot 목록/정리
+
+Codex
+ ├─ ProjectDirectoryBuilder           [신규] &quot;이 PC에 등록된 모든 프로젝트&quot; + ID 통합(§4)
+ ├─ CodexCatalogBuilder               [변경] KnownProjects/ProjectDirectory 노출, 트리 그룹 중복(결함 D) 제거
+ └─ ConversationTranscriptBuilder     [변경, 9_2b] 파일 경로 대신 IRolloutContentSource로도 동작
+
+Domain
+ └─ 신규 레코드: KnownProject, ProjectDirectory, ProjectTarget, ConversationLocalLocation, ImportUserChoices …(§5)</code></pre></figure>
+<p>의존 방향 <code>App → Restore → Backup → Codex → Domain</code>은 유지한다.</p>
+<h3 id="s32-데이터-흐름"><span class="num">3.2</span><span class="htext">데이터 흐름</span><a class="anchor" href="#s32-데이터-흐름" aria-label="이 절 링크">¶</a></h3>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>[백업 파일 선택]
+   │  (read-only)
+   ▼
+BackupValidator ──실패──▶ Workspace.Failed(원인 + 해결 방법)
+   │
+   ▼
+ImportPreviewBuilder(backup, localCatalog{Projects, ProjectDirectory})
+   │  → ImportPreview { 대화별 Relation/Action/LocalLocation, 프로젝트별 ProjectTarget 제안 }
+   ▼
+ImportWorkspaceViewModel  ◀── 사용자: 체크 변경 / 폴더 선택 / 새 프로젝트 이름 편집
+   │  ImportUserChoices(선택 집합, 프로젝트별 목적지 결정)
+   │  ImportSelection.Compute(preview, choices) → 요약(개수, 기타 대화 행 수, 생성될 프로젝트, 차단 사유)
+   │        ※ 체크를 바꿀 때마다 즉시 재계산한다(순수 메모리 연산, 파일 I/O 없음)
+   ▼
+[N개 가져오기] 클릭
+   │  ImportPlanBuilder.Build(preview, backupPath, choices)   ← 이 시점에 한 번만 backup 해시
+   │  → ImportPlan(v2 addendum: UserExcluded, ProjectTarget, ProjectCreates, ThreadLinks)
+   ▼
+확인 대화상자(적용 요약)
+   ▼
+RestoreExecutor.Apply(plan)   (Codex 종료 확인 → fresh preflight → Operation Plan → Snapshot → write → validate)
+   ▼
+ImportResultViewModel(결과 + 어디로 들어갔는지 + 되돌리기 가능 여부)
+   ▼
+[목록에서 보기] → MainViewModel 새로고침 + 해당 대화 선택/강조</code></pre></figure>
+<p>체크박스를 바꿀 때마다 Plan을 만들면 안 된다. <code>ImportPlanBuilder</code>가 backup 전체를 스트리밍 해시하기 때문이다 (128MB 백업이면 매번 수백 ms). Plan은 가져오기 버튼을 누를 때 한 번만 만든다. 그 전의 요약은 <code>ImportSelection</code>이 메모리에서 계산한다.</p>
+<h2 id="s4-핵심-개념-프로젝트-식별project-identity"><span class="num">§4</span><span class="htext">핵심 개념: 프로젝트 식별(Project Identity)</span><a class="anchor" href="#s4-핵심-개념-프로젝트-식별project-identity" aria-label="이 절 링크">¶</a></h2>
+<p>결함 A·C·D의 공통 원인은 "프로젝트가 무엇인가"를 정의하지 않은 채 카탈로그 그룹 ID를 그대로 썼다는 점이다.</p>
+<h3 id="s41-이-pc의-프로젝트-정보-출처실측"><span class="num">4.1</span><span class="htext">이 PC의 프로젝트 정보 출처(실측)</span><a class="anchor" href="#s41-이-pc의-프로젝트-정보-출처실측" aria-label="이 절 링크">¶</a></h3>
+<div class="table-wrap"><table><thead><tr><th>출처</th><th>내용</th><th>이 PC 실측</th></tr></thead><tbody><tr><td><code>state_5.sqlite projects</code> + <code>project_roots</code></td><td>공식 코어 프로젝트. <code>threads.project_id</code>가 <strong>외래키로 참조하는 유일한 대상</strong></td><td>46개, 루트 53개</td></tr><tr><td>global-state <code>local-projects</code></td><td>Desktop 레거시 프로젝트(레거시 ID)</td><td>46개</td></tr><tr><td>global-state <code>app-server-project-id-by-legacy-project-id-by-host[&quot;local:&lt;home&gt;&quot;]</code></td><td>레거시 ID → SQLite ID 매핑(Desktop이 migration 중에 기록)</td><td>46개 전부 매핑됨</td></tr><tr><td>global-state <code>thread-project-assignments</code></td><td>thread → <strong>레거시</strong> 프로젝트 ID</td><td>72건, 26개 프로젝트, 전부 레거시 ID</td></tr><tr><td><code>threads.project_id</code></td><td>thread → SQLite 프로젝트 ID</td><td>416행 중 0개</td></tr></tbody></table></div>
+<h3 id="s42-정의"><span class="num">4.2</span><span class="htext">정의</span><a class="anchor" href="#s42-정의" aria-label="이 절 링크">¶</a></h3>
+<ul><li><strong>KnownProject</strong>: 이 PC에 등록된 프로젝트 하나. 대화 유무와 관계없다.<ul><li><code>DbProjectId</code>: SQLite <code>projects.id</code>. 없으면 null(레거시만 있고 DB로 migration되지 않은 프로젝트).</li><li><code>LegacyProjectIds</code>: 이 프로젝트를 가리키는 global-state 레거시 ID 집합(매핑 기반).</li><li><code>Name</code>, <code>Roots</code>(원본 표기 + canonical), <code>RootsExistOnDisk</code>.</li></ul></li><li><strong>통합 규칙</strong>:<ol><li>DB 프로젝트를 기준으로 KnownProject를 만든다.</li><li>레거시 ID는 매핑 테이블로 DB 프로젝트에 합친다.</li><li>매핑이 없는 레거시 프로젝트는 canonical 루트가 같은 DB 프로젝트가 <strong>정확히 하나</strong>일 때만 합친다. 그렇지 않으면 레거시 전용 KnownProject(<code>DbProjectId=null</code>)로 둔다.</li></ol></li><li><strong>연결 가능한 ID(authoritative link id)</strong>: <code>threads.project_id</code>에 쓸 수 있는 값은 <strong>오직 <code>DbProjectId</code></strong>다. <code>DbProjectId</code>가 없는 프로젝트로는 "연결"하지 않는다. 9_5부터는 "생성" 대상이 된다. 결함 C의 근본 수정이다.</li><li><strong>ProjectDirectory</strong>: KnownProject 목록 + 조회 인덱스(canonical 루트 → KnownProject, 레거시 ID → KnownProject, DB ID → KnownProject). 같은 canonical 루트가 여러 DB 프로젝트에 걸리면 <strong>모호(Ambiguous)</strong>로 표시하고 자동 연결하지 않는다. 사용자에게 선택을 맡긴다.</li></ul>
+<h3 id="s43-카탈로그-트리-그룹-키-변경결함-d"><span class="num">4.3</span><span class="htext">카탈로그 트리 그룹 키 변경(결함 D)</span><a class="anchor" href="#s43-카탈로그-트리-그룹-키-변경결함-d" aria-label="이 절 링크">¶</a></h3>
+<p><code>CodexCatalog.Projects</code>의 그룹 키를 "대화가 가리키는 원시 ID"에서 <strong>KnownProject 기준 키</strong>로 바꾼다. 대화가 레거시 ID로 배정돼 있어도 매핑되는 DB 프로젝트와 같은 그룹에 모인다. 그룹 <code>ProjectId</code>는 <code>DbProjectId ?? 레거시 ID</code>로 둔다. 기존 ViewModel이 쓰는 속성 이름은 바꾸지 않는다. (판정 로직 <code>CodexProjectResolver</code>의 authority 규칙은 그대로다. 결과 ID를 KnownProject로 정규화하는 단계만 추가한다.)</p>
+<h2 id="s5-도메인-모델-변경"><span class="num">§5</span><span class="htext">도메인 모델 변경</span><a class="anchor" href="#s5-도메인-모델-변경" aria-label="이 절 링크">¶</a></h2>
+<p>모든 추가는 기존 레코드에 <strong>옵션 필드 추가</strong> 또는 <strong>새 레코드</strong>로 한다. 기존 생성자와 시그니처는 유지한다.</p>
+<h3 id="s51-codexdomain"><span class="num">5.1</span><span class="htext">Codex/Domain</span><a class="anchor" href="#s51-codexdomain" aria-label="이 절 링크">¶</a></h3>
+<figure class="block code"><figcaption><span>C#</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>// Domain.Codex.Projects
+public sealed record KnownProjectRoot(string DisplayPath, CanonicalPath Canonical, bool ExistsOnDisk);
+
+public sealed record KnownProject(
+    string Key,                                  // DbProjectId ?? &quot;legacy:&quot; + 첫 레거시 ID
+    string? DbProjectId,
+    IReadOnlySet&lt;string&gt; LegacyProjectIds,
+    string DisplayName,
+    IReadOnlyList&lt;KnownProjectRoot&gt; Roots,
+    int ConversationCount);
+
+public sealed record ProjectDirectory(IReadOnlyList&lt;KnownProject&gt; Projects)
+{
+    public ProjectLookupResult FindByRoot(CanonicalPath root);   // Found / Ambiguous / None
+    public KnownProject? FindById(string anyId);                 // DB 또는 레거시 ID
+}
+
+// CodexCatalog에 추가(기존 생성자 유지, init 속성)
+public ProjectDirectory ProjectDirectory { get; init; } = ProjectDirectory.Empty;</code></pre></figure>
+<h3 id="s52-importbackup"><span class="num">5.2</span><span class="htext">Import(Backup)</span><a class="anchor" href="#s52-importbackup" aria-label="이 절 링크">¶</a></h3>
+<figure class="block code"><figcaption><span>C#</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>// 대화의 &quot;이 PC에서의 현재 위치&quot;(결함 G: 이미 있음 + 어디에 있는지)
+public sealed record ConversationLocalLocation(
+    bool ExistsLocally,
+    string? KnownProjectKey,       // null이면 기타 대화
+    string? ProjectDisplayName,
+    bool Archived);
+
+// ImportConversationPreview에 추가(옵션 init 속성)
+public ConversationLocalLocation? LocalLocation { get; init; }
+public bool IsCompressedRollout { get; init; }        // .zst → 이어받기 불가 안내용
+public IReadOnlyList&lt;string&gt; RequiredAncestorThreadIds { get; init; } = [];
+
+// 프로젝트 목적지(ProjectPathMapping을 대체하지 않고 옆에 추가)
+public enum ProjectTargetKind { Uncategorized, LinkExisting, CreateNew }
+public enum ProjectTargetReason
+{
+    OriginalRootRegistered,      // 원본 경로 = 등록 프로젝트 → 자동 연결
+    UserSelectedRegistered,      // 사용자가 고른 폴더 = 등록 프로젝트
+    OriginalRootExistsUnregistered, // 원본 경로 폴더는 있으나 미등록 → (9_5) 생성 제안
+    UserSelectedUnregistered,    // 사용자가 고른 폴더가 미등록 → (9_5) 생성
+    OriginalRootMissing,         // 원본 경로 없음, 지정 안 함 → 기타 대화
+    AmbiguousRoot,               // 같은 루트가 여러 프로젝트 → 사용자 선택 필요
+    LegacyOnlyProject,           // 레거시 전용(DB ID 없음) → (9_5) 생성, 그 전엔 기타 대화
+    CreationUnsupported,         // 스키마 게이트 실패 → 기타 대화
+    NotApplicable,               // 백업의 &quot;기타 대화&quot; 그룹(9_5 전)
+}
+public sealed record ProjectTarget(
+    ProjectTargetKind Kind,
+    ProjectTargetReason Reason,
+    string? FolderPath,                 // 목적지 폴더(연결/생성 공통)
+    string? LinkDbProjectId,            // Kind=LinkExisting일 때만
+    string? NewProjectName);            // Kind=CreateNew일 때만(기본: 폴더 이름)
+
+// ImportProjectPreview에 추가
+public ProjectTarget SuggestedTarget { get; init; }
+
+// 사용자 선택(ViewModel이 모아서 Core에 넘기는 유일한 형태)
+public sealed record ImportUserChoices(
+    IReadOnlySet&lt;string&gt; IncludedThreadIds,                       // 사용자가 체크한 대화(선택 대화만. 조상은 자동)
+    IReadOnlyDictionary&lt;string, ProjectTargetDecision&gt; ProjectDecisions,  // key: 백업 프로젝트 키
+    IReadOnlySet&lt;string&gt; RelinkThreadIds);                        // (9_3) 연결만 바꿀 &quot;이미 있음&quot; 대화
+
+public sealed record ProjectTargetDecision(string? FolderPath, string? NewProjectName, bool UseSuggestion);</code></pre></figure>
+<h3 id="s53-importplan-addendumv2"><span class="num">5.3</span><span class="htext">ImportPlan addendum(v2)</span><a class="anchor" href="#s53-importplan-addendumv2" aria-label="이 절 링크">¶</a></h3>
+<figure class="block code"><figcaption><span>C#</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>public enum ImportSkipReason { None, LocalAhead, UserExcluded, NotSelectedDependencyNotNeeded }
+
+// ImportPlanConversation에 추가
+public ImportSkipReason SkipReason { get; init; }
+public string? TargetProjectKey { get; init; }          // 계획상 목적지(백업 프로젝트 키 → ProjectTarget)
+public bool RelinkOnly { get; init; }                   // (9_3) 내용은 그대로, 연결만
+
+// ImportPlanProject에 추가
+public ProjectTarget ResolvedTarget { get; init; }      // Plan 생성 시점에 확정된 목적지
+
+// ImportPlan에 추가
+public ImportUserChoices? UserChoices { get; init; }    // null = 기존 동작(전부 포함, 제안 목적지)</code></pre></figure>
+<ul><li>기존 <code>ImportPlanBuilder.Build(preview, path)</code>는 <code>UserChoices=null</code>로 <strong>지금과 완전히 같은 결과</strong>를 낸다. 회귀 테스트로 고정한다.</li><li>기존 <code>TargetProjectPath</code>는 호환용으로 유지하고 <code>ResolvedTarget.FolderPath</code>와 같은 값을 넣는다.</li></ul>
+<h3 id="s54-restore"><span class="num">5.4</span><span class="htext">Restore</span><a class="anchor" href="#s54-restore" aria-label="이 절 링크">¶</a></h3>
+<figure class="block code"><figcaption><span>C#</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>public sealed record PlannedProjectCreate(
+    string NewProjectId,           // UUIDv7, 계획 시점에 생성(재시도 시 idempotency로 재사용)
+    string Name,
+    string RootPathDisplay,        // \\?\ 없는 절대경로(공식 validate_roots 형식)
+    string IdempotencyKey);        // &quot;codex-backup-manager:import:v1:&lt;backupSha256&gt;:&lt;canonicalRoot&gt;&quot;
+
+public sealed record PlannedThreadProjectLink(   // 기존 thread의 연결만 변경(9_3)
+    string ThreadId,
+    string? ExpectedCurrentProjectId,  // TOCTOU: 계획 시점 값과 같을 때만
+    string NewDbProjectId,
+    string? NewCwd);
+
+// PlannedThreadInsert.ResolvedProjectId는 이제 &quot;DbProjectId 또는 같은 트랜잭션에서 만들 NewProjectId&quot;만 허용
+// RestoreOperationPlan에 추가
+public IReadOnlyList&lt;PlannedProjectCreate&gt; ProjectCreates { get; init; } = [];
+public IReadOnlyList&lt;PlannedThreadProjectLink&gt; ThreadProjectLinks { get; init; } = [];
+
+// Journal에 추가(9_4)
+public IReadOnlyList&lt;AppliedTargetFingerprint&gt;? AppliedFingerprints { get; init; } // Apply 직후 target 파일/행 해시
+public ImportRecordSummary? Summary { get; init; }   // 기록 화면용(개수, 백업 이름, 생성 프로젝트 이름. 원문 없음)</code></pre></figure>
+<h2 id="s6-단계별-상세-설계"><span class="num">§6</span><span class="htext">단계별 상세 설계</span><a class="anchor" href="#s6-단계별-상세-설계" aria-label="이 절 링크">¶</a></h2>
+<h3 id="9_0-codex-desktop-반영-실험-사용자-진행-병행"><span class="phase">9_0</span><span class="htext">Codex Desktop 반영 실험 (사용자 진행, 병행)</span><a class="anchor" href="#9_0-codex-desktop-반영-실험-사용자-진행-병행" aria-label="이 절 링크">¶</a></h3>
+<dl class="fields"><div><dt>목적</dt><dd>DB(<code>threads.project_id</code>, <code>projects</code>)에만 쓴 연결과 프로젝트가 Desktop 사이드바에 나타나는지 판정한다(결함 E).</dd></div></dl>
+<p><strong>공식 소스로 이미 확인한 것</strong></p>
+<ul><li><code>threads.project_id</code>는 공식 코어 필드이고 <code>projects(id)</code> 외래키다. <code>set_thread_project</code>, <code>create_project</code>가 쓴다.</li><li>app-server에는 <code>project/create</code>, <code>project/import</code>, <code>thread/metadata/update.projectId</code>(모두 experimental)가 있다.</li><li>global-state 플래그(<code>projectsMigrated=true</code>, <code>threadAssignmentsMigrated=false</code>, <code>pendingThreadAssignmentIds</code>)는 Desktop이 연결 정보를 DB로 옮기는 중임을 시사한다. Electron 소스는 비공개라 동작은 <strong>실측으로만 확정</strong>한다.</li></ul>
+<p><strong>절차</strong></p>
+<ol><li>Codex Desktop/CLI 완전 종료(작업 관리자에서 <code>codex*</code> 프로세스 없음 확인).</li><li><code>C:\Users\User\.codex</code> 폴더 전체를 다른 위치로 복사(원복용).</li><li>Claude가 읽기 전용으로 기준값을 기록한다: global-state 플래그, 배정 수, <code>threads.project_id</code> 분포.</li><li><strong>실험 1 (9_1 이후 버전 사용)</strong>: 테스트 대화 1개를 "대화가 있는 등록 프로젝트" 폴더로 지정해 가져온다 (<code>threads.project_id = DbProjectId</code>만 기록됨).</li><li>Desktop 실행 → 그 대화가 (a) 지정 프로젝트 아래 / (b) 프로젝트 없음 / (c) 안 보임 중 어디인지 확인하고 스크린샷을 남긴다.</li><li><strong>실험 2 (9_5 개발 빌드)</strong>: 미등록 폴더로 새 프로젝트 자동 생성 → Desktop에 새 프로젝트와 대화가 보이는지 확인한다.</li><li>종료 후 Claude가 global-state 변화(플래그, pending 목록, 배정)를 읽기 전용으로 비교한다.</li><li>문제가 있으면 2번 복사본으로 폴더를 통째로 원복한다.</li></ol>
+<p><strong>판정과 영향</strong></p>
+<div class="table-wrap"><table><thead><tr><th>결과</th><th>결론</th><th>후속</th></tr></thead><tbody><tr><td>실험1 (a), 실험2 보임</td><td>DB가 Desktop 기준으로도 authoritative</td><td>9_5/9_3을 DB 방식 그대로 진행. UI의 ⓘ 경고 제거</td></tr><tr><td>(b)/(c)</td><td>Desktop이 global-state를 본다</td><td>9_5 앞에 <strong>9_5a "global-state 연결 기록"</strong> 설계 추가(<code>local-projects</code>/<code>thread-project-assignments</code> 쓰기, <code>.bak</code> 포함 Snapshot 대상 확장, 원자적 교체). <strong>별도 승인 후 진행</strong></td></tr><tr><td>Desktop 재시작 후 (a)로 바뀜</td><td>Desktop이 시작 시 migration/backfill을 한다</td><td>결과 화면에 "Codex를 다시 시작하면 반영됩니다" 안내 추가</td></tr></tbody></table></div>
+<dl class="fields"><div><dt>금지</dt><dd>Claude가 복제본을 <code>CODEX_HOME</code>으로 지정해 Codex를 실행하는 방식. 복제본 DB의 <code>rollout_path</code>가 원본 절대경로라 원본이 오염된다(2026-09-30 실제 발생).</dd></div></dl>
+<h3 id="9_1-프로젝트-식별-정리-결함-abcd-수정-core만-ui는-문구만"><span class="phase">9_1</span><span class="htext">프로젝트 식별 정리 + 결함 A·B·C·D 수정 (Core만, UI는 문구만)</span><a class="anchor" href="#9_1-프로젝트-식별-정리-결함-abcd-수정-core만-ui는-문구만" aria-label="이 절 링크">¶</a></h3>
+<p><strong>변경</strong></p>
+<ol><li><code>ProjectDirectoryBuilder</code>(Codex): §4 통합 규칙 구현. 입력은 <code>ProjectTableReader</code> 결과, <code>GlobalStateReader.ProjectGraph</code>, 레거시 매핑(<code>GlobalStateReader</code>에 <code>app-server-project-id-by-legacy-project-id-by-host[local:&lt;home&gt;]</code> 읽기 추가, host key는 현재 Home canonical로 선택)이다. <code>Directory.Exists</code>로 루트 실존을 판정한다(read-only).</li><li><code>CodexCatalogBuilder</code>: <code>ProjectDirectory</code> 노출, 트리 그룹 키 정규화(§4.3).</li><li><code>ProjectTargetResolver</code>(Backup, <code>ProjectPathMapper</code> 확장): 백업 프로젝트 + 사용자 결정 → <code>ProjectTarget</code>.</li></ol>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>입력: 백업 프로젝트 원본 루트들, (선택) 사용자 폴더, ProjectDirectory, 스키마 게이트 결과(9_5)
+1) 폴더 = 사용자 폴더 ?? (원본 루트 중 이 PC에 실존하는 첫 번째)
+2) 폴더가 없으면 → Uncategorized/OriginalRootMissing
+3) FindByRoot(canonical(폴더)):
+     Found(p) &amp; p.DbProjectId != null → LinkExisting(p.DbProjectId)
+     Found(p) &amp; DbProjectId == null   → LegacyOnlyProject → (9_5) CreateNew / (9_1~9_2) Uncategorized
+     Ambiguous                        → AmbiguousRoot(사용자 선택 필요, 선택 전 Uncategorized)
+     None                             → (9_5) CreateNew(폴더 이름) / (9_1~9_2) Uncategorized + *Unregistered 사유</code></pre></figure>
+<ol><li><code>ImportPreviewBuilder</code>: <code>SuggestedTarget</code>, <code>LocalLocation</code>, <code>IsCompressedRollout</code>, <code>RequiredAncestorThreadIds</code>를 채운다. <code>ProjectPathMapping</code>은 호환용으로 계속 채운다(Status는 새 판정에서 파생).</li><li><code>RestoreOperationPlanner</code>: <code>ResolveLocalProjectId</code>를 <strong>fresh ProjectDirectory 기준 <code>DbProjectId</code>만</strong> 돌려주도록 교체한다(결함 C). 계획 시점의 목적지와 fresh 판정이 다르면(그 사이 프로젝트 삭제 등) Plan 생성을 거부한다(<code>LocalStateChanged</code>).</li><li><code>ImportPlanPreflightValidator</code>: LinkExisting 대상 <code>DbProjectId</code>가 fresh ProjectDirectory에 있는지, 폴더가 실존하는지 확인한다.</li><li>UI 문구 최소 수정(9_2 전 임시): "원본 경로를 찾을 수 없습니다" → 사유별 문구(§9). "사용자가 지정함"은 LinkExisting일 때만 쓴다.</li></ol>
+<dl class="fields"><div><dt>결과(9_1 완료 시점)</dt><dd>등록 프로젝트(대화 0개 포함, 레거시 배정 포함)로 연결이 <strong>실제로</strong> 된다. 레거시 ID 때문에 Rollback되던 문제(결함 C)가 사라진다. 미등록 폴더는 기타 대화로 들어가고 그 사실이 정확히 표시된다(A안).</dd></div></dl>
+<dl class="fields"><div><dt>테스트(RED→GREEN)</dt><dd>§11.1.</dd></div></dl>
+<h3 id="9_2-가져오기-작업-공간새-화면-사용자-선택"><span class="phase">9_2</span><span class="htext">가져오기 작업 공간(새 화면) + 사용자 선택</span><a class="anchor" href="#9_2-가져오기-작업-공간새-화면-사용자-선택" aria-label="이 절 링크">¶</a></h3>
+<p>화면 스펙은 §7. 여기서는 로직을 다룬다.</p>
+<p><strong><code>ImportSelection</code>(Backup, 순수 로직)</strong></p>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>Compute(preview, choices) → SelectionSummary
+  included = choices.IncludedThreadIds ∩ 선택 가능 대화
+  closure  = included ∪ 각 included의 RequiredAncestorThreadIds(New/IncomingAhead인 조상만 실제 쓰기 대상)
+  대화별 최종 동작:
+    included &amp; New           → Import(목적지 = 소속 백업 프로젝트의 결정)
+    included &amp; IncomingAhead → Update
+    included &amp; Identical     → NoOp (9_3: RelinkThreadIds에 있으면 RelinkOnly)
+    not included             → Skip(UserExcluded)
+    LocalAhead/Diverged/Unverifiable → 체크 불가(항상 제외)
+  차단 판정:
+    closure 안에 Blocked(Unverifiable) 또는 RequiresDecision(Diverged)가 있으면 → 이 선택으로는 적용 불가(그 대화 이름을 사유로)
+  요약:
+    writeCount(New+Update+Relink), 새로 만들 프로젝트 목록(9_5), 기타 대화로 들어갈 대화 수, 자동 포함 조상 수, 적용 가능 여부 + 사유</code></pre></figure>
+<ul><li>기본 선택: <code>New</code>와 <code>IncomingAhead</code>는 체크, 나머지는 해제(§7.4 표).</li><li>조상 자동 포함은 사용자가 끌 수 없다. 트리에는 "필요한 원본 대화(자동 포함)"로 흐리게 표시한다.</li><li>Diverged·Unverifiable 대화가 있어도 <strong>체크하지 않으면</strong> 나머지는 적용할 수 있다. 지금은 Apply 전체가 막힌다. 단 closure에 걸리면 계속 막는다.</li></ul>
+<p><strong><code>ImportPlanBuilder.Build(preview, path, choices)</code></strong>: <code>ImportSelection</code>과 같은 규칙으로 Plan을 만든다. <code>UserChoices</code>와 확정된 <code>ResolvedTarget</code>을 Plan에 freeze한다. backup identity pinning(06_03)은 그대로다.</p>
+<dl class="fields"><div><dt><code>RestoreExecutor</code></dt><dd>로직 변경은 없다. Skip이 늘고 9_5에서 ProjectCreates가 추가될 뿐이다.</dd></div></dl>
+<dl class="fields"><div><dt><code>MainViewModel</code> 정리</dt><dd>Import 관련 상태(<code>CurrentImportPreview</code>, <code>_currentImportPlan</code>, Apply 명령 등)를 <code>ImportWorkspaceViewModel</code>로 옮긴다. MainViewModel에는 진입(<code>OpenImportWorkspace</code>), 복귀, 결과 강조만 남긴다 (현재 1525줄 → 축소, CLAUDE.md §5 "거대 Manager 금지").</dd></div></dl>
+<h3 id="9_2b-백업-속-대화-내용-미리보기"><span class="phase">9_2b</span><span class="htext">백업 속 대화 내용 미리보기</span><a class="anchor" href="#9_2b-백업-속-대화-내용-미리보기" aria-label="이 절 링크">¶</a></h3>
+<p><strong>구조</strong></p>
+<ul><li><code>IRolloutContentSource</code>(Codex): <code>Stream OpenRaw(RolloutFileReference file)</code>. 구현은 <code>LocalFileRolloutContentSource</code>(기존 동작)와 <code>BackupRolloutContentSource</code>(Backup, <code>BackupReader.OpenEntry(file.FullPath)</code>, <code>BackupCatalogReader</code>가 이미 entry 경로를 FullPath로 둔다).</li><li><code>ConversationItemParser.ParseFile*</code>와 <code>ConversationTranscriptBuilder.Build</code>에 <code>IRolloutContentSource</code> 오버로드를 추가한다. 기존 오버로드는 Local 구현에 위임해 동작을 그대로 둔다. 파서는 이미 <code>RolloutStreamReader.ReadLines(Stream, …)</code>를 지원한다.</li><li><code>.jsonl.zst</code>도 같은 스트림 경로(기존 관리형 zstd 디코더)로 읽는다.</li></ul>
+<p><strong>동작</strong></p>
+<ul><li>트리에서 대화를 클릭하면 백그라운드에서 <code>BackupReader</code>로 transcript를 만든다. 선택이 바뀌면 이전 작업을 취소한다.</li><li><code>BackupReader</code>는 Workspace 수명 동안 한 번 열어 재사용한다. 닫을 때 Dispose한다. Plan 생성 시 identity 검증은 별도로 하므로 미리보기용 reader가 열려 있어도 안전성에는 영향이 없다.</li><li>렌더링은 메인 Viewer와 같은 <code>ConversationMessageViewModel</code> + MarkdownLite + <code>FlowDocumentBinding</code>(04_04 재활용 버그 수정 포함)을 쓴다.</li><li>대형 대화: 메인 Viewer와 같은 가상화 목록을 쓰고, transcript는 한 번만 만든 뒤 캐시한다(LRU 3개).</li><li><strong>임시 파일을 만들지 않는다. Codex Home에는 절대 쓰지 않는다.</strong> 로그에 대화 원문을 남기지 않는다.</li></ul>
+<h3 id="9_5-자동-프로젝트-생성-최종-목표"><span class="phase">9_5</span><span class="htext">자동 프로젝트 생성 (최종 목표)</span><a class="anchor" href="#9_5-자동-프로젝트-생성-최종-목표" aria-label="이 절 링크">¶</a></h3>
+<dl class="fields"><div><dt>트리거</dt><dd><code>ProjectTarget.Kind = CreateNew</code>. 사유는 <code>*Unregistered</code>, <code>LegacyOnlyProject</code>이거나, 백업 "기타 대화" 그룹에 사용자가 폴더를 지정한 경우다.</dd></div></dl>
+<p><strong>계획(Planner)</strong></p>
+<ol><li>fresh ProjectDirectory로 대상 canonical 루트를 다시 조회한다. 그 사이 등록됐으면 <strong>LinkExisting으로 전환</strong>한다(중복 생성 금지, TOCTOU).</li><li>같은 Plan 안에서 같은 canonical 루트를 가진 CreateNew가 여러 개면 <strong>하나로 합친다</strong>(백업 프로젝트 여러 개가 같은 폴더로 지정된 경우).</li><li><code>PlannedProjectCreate(NewProjectId=UUIDv7, Name, RootPathDisplay, IdempotencyKey)</code>를 만든다.<ul><li><code>Name</code>: 사용자 입력 → 비면 폴더 이름. 앞뒤 공백을 제거하고 빈 값을 거부한다(공식 <code>validate_name</code>).</li><li><code>RootPathDisplay</code>: 절대경로, <code>\\?\</code> 제거, 공식 <code>validate_roots</code>처럼 절대경로만 허용한다.</li><li><code>IdempotencyKey</code>: <code>codex-backup-manager:import:v1:&lt;backupSha256&gt;:&lt;canonicalRoot&gt;</code>(512바이트 이하).</li></ul></li><li>그 프로젝트로 가는 모든 <code>PlannedThreadInsert.ResolvedProjectId = NewProjectId</code>, <code>ResolvedTargetCwd = RootPathDisplay</code>.</li></ol>
+<p><strong>실행(StateDatabaseWriter, 기존 단일 SQLite 트랜잭션 안에서 thread INSERT보다 먼저)</strong> — 공식 <code>create_project</code>와 같은 순서:</p>
+<figure class="block code"><figcaption><span>SQL</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>-- 1) 멱등성
+SELECT project_id FROM project_idempotency_keys WHERE key = @key;
+--    있으면 그 project를 재사용(존재하지 않으면 실패 → Rollback)
+-- 2) 루트 충돌 재확인(트랜잭션 안)
+SELECT project_id FROM project_roots WHERE path = @root COLLATE NOCASE;   -- canonical 비교는 C#에서 전체 목록으로 수행
+-- 3) 생성
+INSERT INTO projects (id, name, metadata, position, created_at_ms, updated_at_ms)
+  VALUES (@id, @name, &#x27;{}&#x27;, (SELECT COALESCE(MAX(position), -1) + 1 FROM projects), @now, @now);
+INSERT INTO project_roots (project_id, position, path) VALUES (@id, 0, @root);
+-- 4) 대화 INSERT(기존 InsertThread, project_id=@id, cwd=@root)
+-- 5) 멱등성 키
+INSERT INTO project_idempotency_keys (key, project_id, created_at_ms) VALUES (@key, @id, @now);</code></pre></figure>
+<p><strong>스키마 게이트(<code>SchemaCompatibilityChecker</code>)</strong>: 아래 컬럼과 타입이 정확히 있어야 한다. <code>projects(id TEXT PK, name TEXT NOT NULL, metadata TEXT NOT NULL, position INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)</code>, <code>project_roots(project_id, position, path; PK(project_id, position))</code>, <code>project_idempotency_keys(key, project_id, created_at_ms)</code>, <code>threads.project_id</code> FK. 실패하면 <strong>생성만 포기</strong>한다. Preview에서 <code>CreationUnsupported</code>로 표시하고 그 대화들은 기타 대화로 들어간다. Apply 전체를 막지는 않는다.</p>
+<p><strong>사후 검증(<code>RestoreValidator</code>)</strong>: 프로젝트 행, 루트 행, idempotency 행이 존재하는지 확인한다. 각 대화의 <code>threads.project_id</code>/<code>cwd</code>를 확인한다. fresh catalog의 ProjectDirectory에 새 프로젝트가 있고 가져온 대화가 그 그룹 아래 있는지 확인한다.</p>
+<dl class="fields"><div><dt>Rollback</dt><dd>state DB(+WAL/SHM)는 이미 Snapshot 대상이다. 실패 시 프로젝트 행까지 함께 원복된다. 새 파일은 없다.</dd></div></dl>
+<dl class="fields"><div><dt>Desktop</dt><dd>9_0 판정 (a)면 이것으로 끝난다. (b)/(c)면 9_5a(global-state 기록)를 거친 뒤에만 "✨ 새 프로젝트" 기능을 켠다. 그 전에는 기능 플래그로 끈 상태로 배포한다.</dd></div></dl>
+<dl class="fields"><div><dt>채택하지 않은 대안</dt><dd>app-server <code>project/import</code> 호출. 다음 이유로 쓰지 않는다. (1) Apply 중 Codex 프로세스를 직접 띄워야 해서 ProcessGuard·"종료 상태에서만 쓰기"와 충돌한다. (2) Snapshot 트랜잭션 밖의 쓰기가 된다. (3) experimental API와 <code>codex.exe</code> 위치·버전에 종속된다(CLAUDE.md §20). 공식 SQL 순서를 그대로 따르고 스키마 게이트로 드리프트를 막는 방식으로 정합성을 확보한다.</dd></div></dl>
+<h3 id="9_3-이미-있는-대화의-프로젝트-연결-변경"><span class="phase">9_3</span><span class="htext">이미 있는 대화의 프로젝트 연결 변경</span><a class="anchor" href="#9_3-이미-있는-대화의-프로젝트-연결-변경" aria-label="이 절 링크">¶</a></h3>
+<p>지금 한글패치 대화(기타 대화에 있음)를 프로젝트로 옮기는 기능이다.</p>
+<ul><li>대상: <code>Identical</code>(또는 IncomingAhead)이고 <code>LocalLocation</code>과 목적지가 다른 대화. 트리에 "📁 연결만 변경" 체크를 따로 둔다(기본 해제).</li><li>계획: <code>PlannedThreadProjectLink(ThreadId, ExpectedCurrentProjectId, NewDbProjectId or 같은 Plan의 NewProjectId, NewCwd)</code>.</li><li>실행: <code>UPDATE threads SET project_id=@p, cwd=@cwd WHERE id=@id AND project_id IS @expected</code>. 영향 행이 1이 아니면 실패 → Rollback(TOCTOU).</li><li>rollout 파일은 건드리지 않는다. Snapshot은 state DB만 대상이다.</li><li>9_0이 (b)/(c)면 9_5a와 같은 global-state 기록이 필요하다(<code>thread-project-assignments</code>에서 제거/변경, <code>projectless-thread-ids</code>에서 제거).</li><li>메인 화면에도 같은 기능을 노출할지는 V1에서 하지 않는다. 가져오기 흐름 안에서만 제공한다(범위 통제).</li></ul>
+<h3 id="9_4-가져오기-기록-되돌리기-snapshot-정리"><span class="phase">9_4</span><span class="htext">가져오기 기록 · 되돌리기 · Snapshot 정리</span><a class="anchor" href="#9_4-가져오기-기록-되돌리기-snapshot-정리" aria-label="이 절 링크">¶</a></h3>
+<dl class="fields"><div><dt>기록 화면</dt><dd>메인 하단 <code>[가져오기 기록]</code>. Snapshot 목록(현재 Home 기준)을 날짜, 백업 이름, 결과, 개수, 새 프로젝트와 함께 보여준다. 내용은 journal <code>Summary</code>에서 읽는다. 원문은 없다.</dd></div></dl>
+<p><strong>되돌리기(<code>ImportUndoService</code>)</strong></p>
+<ol><li>대상: journal <code>Completed</code>이고 <code>AppliedFingerprints</code>가 있는 Snapshot. 9_4 이전 Apply는 fingerprint가 없어 <strong>되돌리기 불가</strong>로 표시한다.</li><li>사전 조건: Codex 종료, 같은 Home, 그 Apply 이후 <strong>변경이 없어야 함</strong>. target rollout 파일과 threads 행의 현재 해시가 <code>AppliedFingerprints</code>와 같아야 한다. 사용자가 가져온 대화를 이어 썼으면 되돌리면 그 내용이 사라지므로 <strong>거부</strong>하고 이유를 보여준다. state DB는 다른 thread 변경이 섞일 수 있다. 그래서 <strong>DB 파일 통째 복원을 하지 않는다.</strong> 대신 "이 Apply가 만든 행과 파일만 역연산"한다.<ul><li>새로 만든 rollout 파일 삭제, append한 파일은 원래 길이로 truncate(앞부분 해시 확인 후)</li><li>INSERT한 threads 행 DELETE, UPDATE한 필드는 Snapshot의 이전 값으로 복원</li><li>새로 만든 projects/project_roots/idempotency 행 DELETE(그 프로젝트에 다른 thread가 생겼으면 프로젝트는 남기고 알림)</li><li>이 역연산 자체도 <strong>새 Snapshot → 실행 → 검증 → 실패 시 Rollback</strong> 파이프라인으로 수행한다.</li></ul></li><li>되돌린 뒤 journal에 <code>Undone</code> 상태를 기록한다.</li></ol>
+<p><strong>Snapshot 정리(<code>SnapshotRetentionService</code>)</strong>: 사용자가 기록 화면에서 선택 삭제하거나 "30일 이상 + 되돌리기 불가 항목 정리"를 한다. <strong>자동 삭제는 하지 않는다.</strong> 진행 중이거나 미완료(<code>Prepared</code>/<code>Applying</code>) Snapshot은 절대 삭제하지 않는다.</p>
+<h2 id="s7-화면-설계전체-ui-스펙"><span class="num">§7</span><span class="htext">화면 설계(전체 UI 스펙)</span><a class="anchor" href="#s7-화면-설계전체-ui-스펙" aria-label="이 절 링크">¶</a></h2>
+<h3 id="s71-화면-상태-머신importworkspaceviewmodelstate"><span class="num">7.1</span><span class="htext">화면 상태 머신(<code>ImportWorkspaceViewModel.State</code>)</span><a class="anchor" href="#s71-화면-상태-머신importworkspaceviewmodelstate" aria-label="이 절 링크">¶</a></h3>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>Closed ──[백업 불러오기]──▶ Opening(파일 선택)
+Opening ──취소──▶ Closed
+Opening ──파일 선택──▶ Analyzing(검증·비교 중, 진행률 + [취소])
+Analyzing ──실패──▶ Failed(원인·해결 방법, [다른 파일 선택] [닫기])
+Analyzing ──성공──▶ Editing(트리/선택/폴더/미리보기)
+Editing ──[N개 가져오기]──▶ Confirming(요약 대화상자)
+Confirming ──취소──▶ Editing
+Confirming ──확인──▶ Applying(단계 표시 + [적용 취소])
+Applying ──▶ Result(Succeeded | NothingToDo | NotReady | Cancelled | RolledBack | Critical)
+Result ──[목록에서 보기]/[닫기]──▶ Closed(메인 새로고침 + 강조)
+Result(NotReady: Codex 실행 중 등) ──[다시 시도]──▶ Editing(선택 유지, Plan 재생성)</code></pre></figure>
+<p>Editing 상태에서 Codex 실행 여부를 창 활성화 시점과 5초 주기(읽기 전용 프로세스 목록)로 확인한다. 실행 중이면 상단에 경고 배너를 띄우고 가져오기 버튼을 비활성화한다. 사유는 버튼 옆에 적는다.</p>
+<h3 id="s72-레이아웃editing"><span class="num">7.2</span><span class="htext">레이아웃(Editing)</span><a class="anchor" href="#s72-레이아웃editing" aria-label="이 절 링크">¶</a></h3>
+<div class="visual"><div class="mock" role="img" aria-label="가져오기 화면 예시: 왼쪽은 백업 속 프로젝트와 대화 트리, 오른쪽은 선택한 대화의 상세와 내용 미리보기, 아래는 요약과 가져오기 버튼">
+  <div class="m-top"><span class="m-link">← 목록으로</span><b>백업 가져오기</b><span class="m-grow"></span><span class="m-btn">가져오기 기록</span></div>
+  <div class="m-sub">codex-backup-20260913-211909.codexbackup · 2026-09-13 21:19 · 대화 1개 · 앱 0.1.1</div>
+  <div class="m-banner">Codex가 실행 중입니다. 가져오기 전에 Codex를 종료해 주세요. <span class="m-dim">(실행 중일 때만 표시)</span></div>
+  <div class="m-split">
+    <div class="m-tree">
+      <div class="m-tools"><span class="m-search">검색</span><span class="m-btn">새 대화만</span><span class="m-btn">전체 선택</span><span class="m-btn">모두 해제</span></div>
+      <div class="m-proj"><span class="m-cb part"></span><b>한글패치</b><span class="m-grow"></span><span class="m-dim">1개 중 0</span></div>
+      <div class="m-folder">
+        <div class="m-cap">작업 폴더</div>
+        <div class="m-kv"><span>원본</span><span class="m-path">C:\Users\ProController\…\한글패치</span></div>
+        <div class="m-kv"><span>이 PC</span><span class="m-input">D:\Work\한글패치</span><span class="m-btn">…</span></div>
+        <div class="m-create"><span class="m-spark">새 프로젝트</span><span class="m-input sm">한글패치</span><span>로 만들어 연결합니다</span><span class="m-tag">9_5</span></div>
+      </div>
+      <div class="m-conv"><span class="m-cb"></span><span>b버전 한글패치 제작</span><span class="m-grow"></span><span class="m-badge b-gray">이미 있음</span></div>
+      <div class="m-conv m-child"><span class="m-cb"></span><span>이 대화를 위 폴더 프로젝트로 옮기기(연결만 변경)</span><span class="m-tag">9_3</span></div>
+      <div class="m-proj"><span class="m-cb on"></span><b>기타 대화</b></div>
+      <div class="m-folder"><div class="m-kv"><span>작업 폴더</span><span class="m-dim">지정 안 함 → 기타 대화</span><span class="m-btn">…</span></div></div>
+      <div class="m-conv"><span class="m-cb on"></span><span>다른 대화</span><span class="m-grow"></span><span class="m-badge b-green">새 대화</span></div>
+    </div>
+    <div class="m-detail">
+      <b class="m-title">b버전 한글패치 제작</b>
+      <span class="m-badge b-gray">이미 이 PC에 있음 · 내용 동일</span>
+      <div class="m-kv"><span>이 PC 위치</span><span>기타 대화</span></div>
+      <div class="m-kv"><span>원본 작업 폴더</span><span class="m-path">C:\Users\ProController\…</span></div>
+      <div class="m-kv"><span>날짜</span><span>만든 날 2026-06-29 · 마지막 2026-09-13</span></div>
+      <div class="m-cap">대화 내용 <span class="m-tag">9_2b</span></div>
+      <div class="m-msg m-you">You · …</div>
+      <div class="m-msg">Codex · …</div>
+    </div>
+  </div>
+  <div class="m-foot"><div><div>가져오기: 새 대화 1 · 이어받기 0 · 연결 변경 0 · 새 프로젝트 0 · 기타 대화로 1</div><div class="m-dim">선택한 대화 중 "기타 대화"로 들어가는 것이 1개 있습니다.</div></div><span class="m-grow"></span><span class="m-primary">대화 1개 가져오기</span></div>
+</div></div>
+<details class="alt"><summary>텍스트 버전 보기</summary><figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>┌──────────────────────────────────────────────────────────────────────────────────────┐
+│ ← 목록으로   백업 가져오기                                                [가져오기 기록] │
+│ codex-backup-20260913-211909.codexbackup · 2026-09-13 21:19 · 대화 1개 · 앱 0.1.1      │
+│ ⚠ Codex가 실행 중입니다. 가져오기 전에 Codex를 종료해 주세요.        (실행 중일 때만)  │
+├───────────────────────────────────────────┬──────────────────────────────────────────┤
+│ 🔍 검색   [새 대화만] [전체 선택] [모두 해제] │  b버전 한글패치 제작                       │
+│                                           │  ● 이미 이 PC에 있음 (내용 동일)            │
+│ ▼ ▣ 한글패치                      1개 중 0 │  이 PC 위치: 기타 대화                      │
+│    📁 작업 폴더                             │  원본 작업 폴더: C:\Users\ProController\…   │
+│       원본  C:\Users\ProController\…\한글패치 │  만든 날 2026-06-29 · 마지막 2026-09-13     │
+│       이 PC [ D:\Work\한글패치        ][…] │ ────────────────────────────────────────  │
+│       ✨ 새 프로젝트 &quot;[한글패치    ]&quot;로 만들어 │  [대화 내용]                               │
+│          연결합니다                (9_5)   │   You  ...                                 │
+│    ☐ b버전 한글패치 제작        [이미 있음] │   Codex ...                                │
+│       └ ☐ 📁 이 대화를 위 폴더 프로젝트로   │                                            │
+│            옮기기 (연결만 변경, 9_3)        │                                            │
+│                                           │                                            │
+│ ▼ ☑ 기타 대화                             │                                            │
+│    📁 작업 폴더  (지정 안 함 → 기타 대화) […]│                                            │
+│    ☑ 다른 대화                   [새 대화] │                                            │
+├───────────────────────────────────────────┴──────────────────────────────────────────┤
+│ 가져오기: 새 대화 1 · 이어받기 0 · 연결 변경 0   새 프로젝트 0   기타 대화로 1           │
+│ ⓘ 선택한 대화 중 &quot;기타 대화&quot;로 들어가는 것이 1개 있습니다.            [ 대화 1개 가져오기 ] │
+└──────────────────────────────────────────────────────────────────────────────────────┘</code></pre></figure></details>
+<ul><li>왼쪽 트리: 메인 목록과 같은 스타일(3상태 체크, 가상화, <code>GridSplitter</code>). 프로젝트 노드 아래 첫 줄은 항상 <strong>작업 폴더 편집 영역</strong>이다.</li><li>검색: 제목 부분 일치 필터(표시만 바꾸고 선택 상태는 유지).</li><li>빠른 선택: <code>[새 대화만]</code> = New + IncomingAhead만 체크.</li><li>오른쪽: 선택한 대화의 상태 설명, 이 PC 위치, 원본 정보, 대화 내용 미리보기(9_2b). 프로젝트 노드를 클릭하면 프로젝트 요약(대화 수, 목적지 설명)을 보여준다.</li><li>하단 요약: <code>ImportSelection</code> 결과를 실시간으로 반영한다. 적용할 게 없으면 버튼을 비활성화하고 사유를 표시한다.</li><li>"상세 정보 ▼"(접힘 기본): 백업 검증 결과, 체크섬, 포맷 버전, Codex 버전, 경고 목록(개발/문제 분석용).</li></ul>
+<h3 id="s73-작업-폴더-편집-영역프로젝트-행"><span class="num">7.3</span><span class="htext">작업 폴더 편집 영역(프로젝트 행)</span><a class="anchor" href="#s73-작업-폴더-편집-영역프로젝트-행" aria-label="이 절 링크">¶</a></h3>
+<div class="table-wrap"><table><thead><tr><th>목적지 상태</th><th>아이콘/문구</th><th>컨트롤</th></tr></thead><tbody><tr><td>LinkExisting(원본 자동)</td><td>✅ "이 PC의 '○○' 프로젝트에 연결됩니다"</td><td>[다른 폴더…]</td></tr><tr><td>LinkExisting(사용자 지정)</td><td>✅ "'○○' 프로젝트에 연결됩니다(직접 지정)"</td><td>[다른 폴더…] [원래대로]</td></tr><tr><td>CreateNew(9_5)</td><td>✨ "새 프로젝트 [이름 입력칸]을 만들어 연결합니다"</td><td>[다른 폴더…] [원래대로]</td></tr><tr><td>Unregistered(9_2까지)</td><td>⚠ "Codex에 등록되지 않은 폴더입니다. 지금은 기타 대화로 들어갑니다. Codex에서 이 폴더를 한 번 연 뒤 [새로고침]하면 연결됩니다"</td><td>[다른 폴더…] [새로고침]</td></tr><tr><td>OriginalRootMissing</td><td>⚠ "원본 폴더가 이 PC에 없습니다. 폴더를 지정하지 않으면 기타 대화로 들어갑니다"</td><td>[폴더 선택…]</td></tr><tr><td>AmbiguousRoot</td><td>⚠ "이 폴더가 여러 프로젝트에 등록돼 있습니다. 연결할 프로젝트를 고르세요"</td><td>[프로젝트 선택 ▼]</td></tr><tr><td>CreationUnsupported</td><td>⚠ "이 Codex 버전에서는 프로젝트 자동 생성을 지원하지 않습니다. 기타 대화로 들어갑니다"</td><td>—</td></tr></tbody></table></div>
+<ul><li>9_0 판정 전 "연결됨/새 프로젝트"에는 ⓘ 툴팁을 붙인다: "Codex Desktop 사이드바 반영은 확인 중입니다".</li><li>폴더를 바꾸면 Plan을 다시 만들지 않는다. 메모리에서 목적지만 다시 계산한다(<code>ProjectTargetResolver</code>, 파일 I/O는 <code>Directory.Exists</code>뿐).</li></ul>
+<h3 id="s74-대화-배지와-체크-규칙"><span class="num">7.4</span><span class="htext">대화 배지와 체크 규칙</span><a class="anchor" href="#s74-대화-배지와-체크-규칙" aria-label="이 절 링크">¶</a></h3>
+<div class="table-wrap"><table><thead><tr><th>배지(색)</th><th>판정</th><th>기본 체크</th><th>체크 가능</th><th>오른쪽 설명</th></tr></thead><tbody><tr><td>새 대화(초록)</td><td>New</td><td>☑</td><td>O</td><td>이 PC에 없는 대화입니다. 가져옵니다</td></tr><tr><td>이어받기(파랑)</td><td>IncomingAhead</td><td>☑</td><td>O(<code>.zst</code>면 X)</td><td>이 PC에 있지만 백업이 더 깁니다. 뒤에 이어붙입니다</td></tr><tr><td>이미 있음(회색)</td><td>Identical</td><td>☐</td><td>연결 변경(9_3)만</td><td>내용이 같습니다. 이 PC 위치: ○○ / 기타 대화</td></tr><tr><td>이 PC가 최신(회색)</td><td>LocalAhead</td><td>☐</td><td>X</td><td>이 PC 쪽이 더 깁니다. 건너뜁니다</td></tr><tr><td>충돌(주황)</td><td>Diverged</td><td>☐</td><td>X</td><td>양쪽이 다르게 이어졌습니다. 이번 버전에서는 가져올 수 없습니다(다른 대화는 가져올 수 있음)</td></tr><tr><td>확인 불가(빨강)</td><td>Unverifiable</td><td>☐</td><td>X</td><td>이 PC 데이터가 불완전해 비교할 수 없습니다</td></tr><tr><td>자동 포함(흐림)</td><td>선택 대화의 조상</td><td>자동</td><td>X</td><td>선택한 대화에 필요한 원본 대화라 함께 가져옵니다</td></tr></tbody></table></div>
+<h3 id="s75-확인-대화상자"><span class="num">7.5</span><span class="htext">확인 대화상자</span><a class="anchor" href="#s75-확인-대화상자" aria-label="이 절 링크">¶</a></h3>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>다음 내용을 Codex에 적용합니다.
+
+  새로 가져올 대화   3개
+  이어받을 대화      1개
+  연결만 바꿀 대화   1개
+  새로 만들 프로젝트 1개: &quot;한글패치&quot; (D:\Work\한글패치)
+  기타 대화로 들어갈 대화 1개
+
+적용 전에 현재 상태의 복구 지점(Snapshot)을 만듭니다.
+실패하면 자동으로 되돌립니다. Codex가 완전히 종료되어 있어야 합니다.
+
+                                   [취소]  [적용]</code></pre></figure>
+<h3 id="s76-결과-화면"><span class="num">7.6</span><span class="htext">결과 화면</span><a class="anchor" href="#s76-결과-화면" aria-label="이 절 링크">¶</a></h3>
+<figure class="block diagram"><figcaption><span>텍스트</span><button type="button" class="copy" aria-label="내용 복사">복사</button></figcaption><pre><code>✅ 가져오기 완료 · 2026-09-30 15:20
+새로 가져옴 3 · 이어받음 1 · 연결 변경 1 · 건너뜀 2 · 새 프로젝트 1
+
+한글패치  → D:\Work\한글패치  (새로 만듦)
+  ✅ b버전 한글패치 제작              연결 변경(기타 대화 → 한글패치)
+기타 대화
+  ✅ 다른 대화                         새로 가져옴 · 원본 폴더 없음
+
+복구 지점 20260930-062034-…    [이 가져오기 되돌리기](9_4)
+ⓘ Codex를 실행하면 가져온 대화가 표시됩니다.(9_0 결과에 따라 문구 확정)
+
+[목록에서 보기]  [닫기]</code></pre></figure>
+<ul><li><code>NothingToDo</code>: "적용할 변경이 없었습니다. 선택한 대화는 모두 이미 이 PC에 있습니다" + 각 대화의 현재 위치 목록. 스크린샷 상황이 이 경우다.</li><li><code>NotReady</code>/<code>RolledBack</code>/<code>Cancelled</code>/<code>Critical</code>: §9 문구 + 해결 방법 + (가능하면) [다시 시도].</li></ul>
+<h3 id="s77-메인-화면-연동"><span class="num">7.7</span><span class="htext">메인 화면 연동</span><a class="anchor" href="#s77-메인-화면-연동" aria-label="이 절 링크">¶</a></h3>
+<ul><li><code>[목록에서 보기]</code>를 누르면 카탈로그를 새로고침하고, 가져온 대화들을 선택·펼침·스크롤해 3초간 강조한다.</li><li>메인 하단 버튼: <code>[백업 내보내기] [백업 가져오기] [가져오기 기록]</code>. 문구를 "불러오기"에서 <strong>"가져오기"</strong>로 통일한다.</li></ul>
+<h2 id="s8-안전성-불변식-phase-9-전체에서-깨지면-안-됨"><span class="num">§8</span><span class="htext">안전성 불변식 (Phase 9 전체에서 깨지면 안 됨)</span><a class="anchor" href="#s8-안전성-불변식-phase-9-전체에서-깨지면-안-됨" aria-label="이 절 링크">¶</a></h2>
+<ol><li>분석, 미리보기, 선택 변경, 폴더 변경, 기록 조회는 <strong>Codex Home에 쓰기 0건</strong>이다(테스트로 해시 고정).</li><li>모든 쓰기는 <code>RestoreExecutor</code> 파이프라인 안에서 한다. Snapshot 없이는 쓰지 않고, 실패하면 Rollback한다.</li><li><code>threads.project_id</code>에는 <strong>실존 <code>projects.id</code>(또는 같은 트랜잭션에서 만든 id)만</strong> 쓴다.</li><li>같은 canonical 루트로 프로젝트를 <strong>중복 생성하지 않는다</strong>(fresh 재조회 + idempotency key + 트랜잭션 내 재확인).</li><li>rollout 바이트는 기존 규칙(New는 원본 그대로 복사, Update는 검증된 append) 외에는 바꾸지 않는다. 연결 변경은 rollout을 건드리지 않는다.</li><li>global-state(<code>.codex-global-state.json</code>)는 9_0 판정과 별도 승인 전까지 <strong>쓰지 않는다</strong>.</li><li>Codex가 실행 중이면 어떤 쓰기도 시작하지 않는다(시작 시 + 첫 mutation 직전 이중 확인, 기존 규칙).</li><li>되돌리기는 "이 Apply 이후 변경 없음"이 증명될 때만 한다. DB 파일 통째 복원을 하지 않는다.</li><li>frozen contract(Preview/Plan/Relation)의 기존 필드 의미는 바꾸지 않는다. <code>UserChoices=null</code>이면 0.1.3과 같은 결과가 나와야 한다.</li><li>로그에 대화 원문, 제목, 전체 경로를 남기지 않는다(<code>Redact</code> 규칙 유지).</li></ol>
+<h2 id="s9-사용자-메시지-카탈로그"><span class="num">§9</span><span class="htext">사용자 메시지 카탈로그</span><a class="anchor" href="#s9-사용자-메시지-카탈로그" aria-label="이 절 링크">¶</a></h2>
+<div class="table-wrap"><table><thead><tr><th>상황</th><th>문구</th><th>해결 방법 안내</th></tr></thead><tbody><tr><td>백업 손상</td><td>백업 파일이 손상되었습니다(체크섬 불일치: ○○).</td><td>원본 PC에서 다시 내보내 주세요</td></tr><tr><td>지원 안 하는 포맷</td><td>이 백업은 지원하지 않는 형식(버전 N)입니다.</td><td>최신 버전 프로그램으로 열어 주세요</td></tr><tr><td>Codex 실행 중</td><td>Codex가 실행 중이라 가져올 수 없습니다.</td><td>Codex를 완전히 종료한 뒤 [다시 시도]</td></tr><tr><td>모두 이미 있음</td><td>선택한 대화는 모두 이미 이 PC에 있습니다.</td><td>위치: 목록 표시. 연결을 바꾸려면 "연결만 변경"(9_3)</td></tr><tr><td>원본 폴더 없음</td><td>원본 폴더가 이 PC에 없습니다. 지정하지 않으면 기타 대화로 들어갑니다.</td><td>[폴더 선택…]</td></tr><tr><td>미등록 폴더(9_2까지)</td><td>Codex에 등록되지 않은 폴더입니다. 지금은 기타 대화로 들어갑니다.</td><td>Codex에서 폴더를 연 뒤 [새로고침]</td></tr><tr><td>충돌 대화 포함</td><td>'○○'는 양쪽이 다르게 이어져 가져올 수 없습니다. 체크를 해제하면 나머지를 가져올 수 있습니다.</td><td>—</td></tr><tr><td>필수 조상 문제</td><td>'○○'에 필요한 원본 대화 '△△'를 확인할 수 없어 함께 가져올 수 없습니다.</td><td>—</td></tr><tr><td>백업이 그 사이 바뀜</td><td>미리보기 이후 백업 파일이 바뀌었습니다.</td><td>다시 열어 주세요</td></tr><tr><td>이 PC 상태가 바뀜</td><td>미리보기 이후 이 PC의 Codex 데이터가 바뀌었습니다.</td><td>[다시 분석]</td></tr><tr><td>자동 복구됨</td><td>적용 중 문제가 생겨 이전 상태로 되돌렸습니다. 기존 데이터는 그대로입니다.</td><td>로그 위치 안내</td></tr><tr><td>자동 복구 실패</td><td>[치명] 자동 복구에 실패했습니다. 복구 지점 ○○로 수동 복구가 필요합니다.</td><td>[이전 상태로 복구]</td></tr><tr><td>되돌리기 불가(변경됨)</td><td>가져온 뒤 이 대화가 Codex에서 계속 사용되어 되돌릴 수 없습니다.</td><td>—</td></tr><tr><td>되돌리기 불가(구버전)</td><td>이 기록은 이전 버전에서 만들어져 되돌리기를 지원하지 않습니다.</td><td>—</td></tr></tbody></table></div>
+<h2 id="s10-로깅"><span class="num">§10</span><span class="htext">로깅</span><a class="anchor" href="#s10-로깅" aria-label="이 절 링크">¶</a></h2>
+<ul><li>레벨/형식은 기존 <code>FileLogger</code>를 따른다.</li><li>새 이벤트: <code>ImportWorkspace.Opened/Analyzed(counts)/SelectionChanged(counts only)/TargetChanged(reason enum)/Apply.Started/Finished(outcome, snapshotId)/Undo.*</code>.</li><li>경로는 <code>Redact.Path</code>, thread/project ID는 해시 12자로 남긴다. 제목과 원문은 기록하지 않는다.</li></ul>
+<h2 id="s11-테스트-계획"><span class="num">§11</span><span class="htext">테스트 계획</span><a class="anchor" href="#s11-테스트-계획" aria-label="이 절 링크">¶</a></h2>
+<p>모든 Core 테스트는 합성 fixture(<code>TestCodexHomeBuilder</code>, <code>tests/Fixtures</code>)를 쓴다. 실제 사용자 데이터는 넣지 않는다.</p>
+<h3 id="s111-9_1"><span class="num">11.1</span><span class="htext">9_1</span><a class="anchor" href="#s111-9_1" aria-label="이 절 링크">¶</a></h3>
+<ul><li>ProjectDirectory: DB 전용 / 레거시 전용 / 매핑으로 합쳐짐 / 매핑 없이 루트로 합쳐짐 / 같은 루트에 DB 2개 → Ambiguous / 루트 실존 판정.</li><li>카탈로그: 레거시 배정 대화와 cwd 폴백 대화가 <strong>한 그룹</strong>으로 합쳐짐(결함 D RED→GREEN).</li><li>ProjectTargetResolver: 등록(대화 0개) → LinkExisting(결함 A RED), 원본 실존·미등록 → Unregistered 사유(결함 B), 원본 없음, 사용자 지정 각각.</li><li>Planner/Writer: 레거시 ID 프로젝트로 지정 → <code>threads.project_id = DbProjectId</code>, <strong>Rollback 없음</strong>(결함 C RED: 현재 RolledBack 재현).</li><li>Preflight: LinkExisting 대상 프로젝트가 Plan 이후 삭제됨 → LocalStateChanged.</li><li>회귀: 기존 531건 전부 GREEN.</li></ul>
+<h3 id="s112-9_2"><span class="num">11.2</span><span class="htext">9_2</span><a class="anchor" href="#s112-9_2" aria-label="이 절 링크">¶</a></h3>
+<ul><li>ImportSelection: 기본 체크, 제외 → Skip(UserExcluded), 조상 자동 포함, Diverged 제외 시 적용 가능, closure에 Blocked면 불가, 요약 개수.</li><li>ImportPlanBuilder: <code>UserChoices=null</code>이면 기존 결과와 동일(스냅샷 비교), 선택 반영, identity pinning 유지.</li><li>App: 3상태 체크, 검색 필터가 선택을 유지하는지, 0개 비활성 + 사유, 폴더 변경 후 요약 갱신, 상태 머신 전이, Codex 실행 중 배너, NothingToDo 결과 문구(스크린샷 시나리오 재현 테스트).</li></ul>
+<h3 id="s113-9_2b"><span class="num">11.3</span><span class="htext">9_2b</span><a class="anchor" href="#s113-9_2b" aria-label="이 절 링크">¶</a></h3>
+<ul><li>BackupRolloutContentSource로 만든 transcript = 같은 파일의 로컬 transcript(메시지 수와 해시 동일), 세그먼트/분기/<code>.zst</code> 포함.</li><li>미리보기 중 Codex Home 쓰기 0건, temp 파일 0건. 선택을 빠르게 바꿀 때 취소 처리. FlowDocument 재활용 스트레스(기존 테스트 패턴).</li></ul>
+<h3 id="s114-9_5"><span class="num">11.4</span><span class="htext">9_5</span><a class="anchor" href="#s114-9_5" aria-label="이 절 링크">¶</a></h3>
+<ul><li>미등록 폴더 → 프로젝트 생성 + 연결 + cwd, 공식 SQL 불변식(position=MAX+1, 루트 position 0, idempotency 행).</li><li>같은 백업 재가져오기 → 프로젝트 재사용(중복 0). 계획 이후 누군가 같은 루트를 등록 → LinkExisting으로 전환.</li><li>같은 폴더로 지정된 백업 프로젝트 2개 → 생성 1회. fault injection(생성 직후, thread INSERT 후, 커밋 직후) → Rollback 후 프로젝트 행 없음.</li><li>스키마 게이트 실패 → 생성 생략 + 기타 대화 + 경고, Apply 자체는 성공.</li><li>크래시 시뮬레이션(CrashSim) 1건: 생성 트랜잭션 중 강제 종료 → 복구.</li></ul>
+<h3 id="s115-9_3-9_4"><span class="num">11.5</span><span class="htext">9_3 / 9_4</span><a class="anchor" href="#s115-9_3-9_4" aria-label="이 절 링크">¶</a></h3>
+<ul><li>연결 변경: expected project 불일치 → Rollback, rollout 파일 무변경.</li><li>되돌리기: 변경 없음 → 성공(행/파일 원복, 다른 thread 무영향), 가져온 대화를 이어 씀 → 거부, fingerprint 없는 구버전 기록 → 불가 표시, 되돌리기 도중 실패 → 되돌리기의 Rollback.</li><li>Snapshot 정리: Prepared/Applying은 삭제 안 함.</li></ul>
+<h3 id="s116-e2e스크래치패드-복제본-원본-해시-불변-확인"><span class="num">11.6</span><span class="htext">E2E(스크래치패드 복제본, 원본 해시 불변 확인)</span><a class="anchor" href="#s116-e2e스크래치패드-복제본-원본-해시-불변-확인" aria-label="이 절 링크">¶</a></h3>
+<p>기존 PC A→B 하네스(42항목)에 다음 케이스를 추가한다: Case 0~4(재지정) + 선택 일부 제외 + 새 프로젝트 생성 + 연결 변경 + 되돌리기. Codex app-server 검증은 <strong>복제본 <code>rollout_path</code>를 복제본 경로로 먼저 바꾼 뒤</strong> <code>thread/list</code>/<code>thread/read</code>만 쓴다(resume 금지).</p>
+<h3 id="s117-테스트-환경결함-i"><span class="num">11.7</span><span class="htext">테스트 환경(결함 I)</span><a class="anchor" href="#s117-테스트-환경결함-i" aria-label="이 절 링크">¶</a></h3>
+<p><code>MainViewModelApplyTests</code>는 <code>RestoreExecutor</code> 호출에 ProcessGuard lister를 주입받도록 바꾼다(internal 경로 노출). <code>CrashRecoveryIntegrationTests</code>의 자식 프로세스에는 <code>--process-guard=none</code> 테스트 전용 인자를 추가한다. 실제 ProcessGuard 동작은 <code>CodexProcessGuardTests</code>가 계속 검증한다.</p>
+<h2 id="s12-문서-버전-인계"><span class="num">§12</span><span class="htext">문서 · 버전 · 인계</span><a class="anchor" href="#s12-문서-버전-인계" aria-label="이 절 링크">¶</a></h2>
+<ul><li>버전: 9_2 완료 시 <code>0.2.0</code>(UI와 기능 변화). 이후 단계마다 minor/patch를 올린다.</li><li>문서 갱신<ul><li><code>docs/import-preview-phase6.md</code>: <strong>Phase 9 addendum</strong>(ImportPreview/ImportPlan 추가 필드, <code>UserChoices</code>, <code>ProjectTarget</code> semantics, frozen 범위 명시).</li><li><code>docs/safe-restore-phase7.md</code>: §13 Phase 9(프로젝트 생성/연결 변경/되돌리기, 새 불변식).</li><li><code>docs/codex-storage-format.md</code>: §5 프로젝트 3중 구조에 레거시↔DB 매핑, 외래키, 9_0 실측 결과.</li><li><code>docs/project-status-and-handoff.md</code>: 단계마다 갱신(CLAUDE.md §39).</li><li><code>README.md</code>, <code>docs/dist-readme.txt</code>: 사용 방법(가져오기 화면) 갱신.</li></ul></li><li>커밋: 단계별로 사용자가 직접 한다(CLAUDE.md §32).</li></ul>
+<h2 id="s13-위험-미해결-질문"><span class="num">§13</span><span class="htext">위험 · 미해결 질문</span><a class="anchor" href="#s13-위험-미해결-질문" aria-label="이 절 링크">¶</a></h2>
+<div class="table-wrap"><table><thead><tr><th>위험/질문</th><th>대응</th></tr></thead><tbody><tr><td>Desktop이 DB 연결을 무시할 수 있음(결함 E)</td><td>9_0으로 판정. (b)/(c)면 9_5a 별도 설계·승인</td></tr><tr><td>Codex 버전 업으로 projects 스키마 변경</td><td>스키마 게이트 → 생성만 포기(기타 대화)</td></tr><tr><td>Desktop migration(<code>pendingThreadAssignmentIds</code>)과 우리 쓰기의 경합</td><td>Codex 종료 상태에서만 쓰기. 9_0 실험 7단계에서 migration 후 상태 확인</td></tr><tr><td>같은 폴더의 중복 프로젝트(Ambiguous)가 실제로 있음(실측 2건)</td><td>자동 연결하지 않고 사용자 선택</td></tr><tr><td>대형 백업에서 분석 시간</td><td>기존 스트리밍 유지, 분석 중 진행률과 취소. 선택 변경은 메모리 연산만</td></tr><tr><td>되돌리기의 역연산 정확성</td><td>fingerprint 기반 사전 검증 + 역연산 자체를 Snapshot/Rollback으로 보호</td></tr><tr><td>레거시 전용 프로젝트(DB 미migration)가 생길 수 있음</td><td>연결하지 않고 CreateNew(9_5)/기타 대화로 처리</td></tr></tbody></table></div>
+<h2 id="s14-부록-근거"><span class="num">§14</span><span class="htext">부록: 근거</span><a class="anchor" href="#s14-부록-근거" aria-label="이 절 링크">¶</a></h2>
+<h3 id="s141-실측이-pc-읽기-전용"><span class="num">14.1</span><span class="htext">실측(이 PC, 읽기 전용)</span><a class="anchor" href="#s141-실측이-pc-읽기-전용" aria-label="이 절 링크">¶</a></h3>
+<ul><li><code>threads</code> 416행 중 <code>project_id</code> 채워진 행 0개. <code>projects</code> 46개, <code>project_roots</code> 53개.</li><li>global-state: <code>projectsMigrated=true</code>, <code>threadAssignmentsMigrated=false</code>, <code>pendingThreadAssignmentIds</code> 12개, <code>thread-project-assignments</code> 72건(프로젝트 26개, 전부 레거시 ID, 전부 DB ID로 매핑됨).</li><li>카탈로그 배정 출처: GlobalStateAssignment 72 · CwdFallback 42 · Unassigned 12. 같은 루트를 공유하는 카탈로그 프로젝트 묶음 2건.</li><li><code>threads.project_id REFERENCES projects(id) ON DELETE SET NULL</code>.</li></ul>
+<h3 id="s142-복제본-e2e"><span class="num">14.2</span><span class="htext">복제본 E2E</span><a class="anchor" href="#s142-복제본-e2e" aria-label="이 절 링크">¶</a></h3>
+<ul><li>기본 시나리오 42항목 PASS(New 3 + IncomingAhead 1, 내용/바이트 동일, 재가져오기 NoOp, stale plan 거부, app-server 인식·resume).</li><li>Case 0: 원본 경로가 실존하지만 대화 0개 프로젝트 → NotFound, 기타 대화.</li><li>Case 1: 미등록 폴더 지정 → 무시됨.</li><li>Case 2: 대화 있는 DB ID 프로젝트 → 정상.</li><li>Case 3: 등록됐지만 대화 0개 프로젝트 지정 → 무시됨.</li><li><strong>Case 4: 레거시 ID 프로젝트 지정 → RolledBack</strong>.</li></ul>
+<h3 id="s143-공식-소스openaicodex-bcd6d9ab"><span class="num">14.3</span><span class="htext">공식 소스(<code>openai/codex</code> <code>bcd6d9ab</code>)</span><a class="anchor" href="#s143-공식-소스openaicodex-bcd6d9ab" aria-label="이 절 링크">¶</a></h3>
+<ul><li><code>codex-rs/state/src/runtime/projects.rs</code> <code>create_project</code>: <code>BEGIN IMMEDIATE</code> → idempotency 조회 → thread 존재 확인 → <code>Uuid::now_v7()</code> → <code>MAX(position)+1</code> → <code>INSERT projects(metadata JSON)</code> → <code>replace_roots</code>(position 순서) → <code>UPDATE threads SET project_id</code> → <code>INSERT project_idempotency_keys</code>.</li><li><code>codex-rs/app-server/src/request_processors/projects.rs</code>: <code>validate_name</code>(trim, 비어 있으면 거부), <code>validate_idempotency_key</code>(≤512바이트), <code>validate_roots</code>(절대경로, 논리/canonical 중복 거부, <code>path.display()</code> 저장).</li><li><code>app-server-protocol/src/protocol/v2/project.rs</code>: <code>ProjectCreateParams{name, roots, metadata?, idempotencyKey}</code>, <code>ProjectImportParams{…, threads?}</code>.</li><li><code>app-server-protocol/src/protocol/v2/thread.rs</code>: <code>ThreadMetadataUpdateParams.projectId</code>(experimental: 빈 문자열이면 해제, 기존 프로젝트 ID면 배정).</li></ul>
+<footer class="gen"><span>이 HTML은 <code>docs/import-ux-redesign-phase9.md</code>에서 <code>scripts/render-docs.py</code>로 생성했습니다. .md를 고친 뒤 다시 생성하세요.</span><a href="#top" id="to-top">맨 위로</a></footer>
+</div>
+</main>
+</div>
+<script>
+(function () {
+  var root = document.documentElement, key = 'cbm-doc-theme';
+  try { var saved = localStorage.getItem(key); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
+  document.getElementById('theme').addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme');
+    var dark = cur ? cur === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next = dark ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem(key, next); } catch (e) {}
+  });
+  document.getElementById('to-top').addEventListener('click', function (e) { e.preventDefault(); window.scrollTo(0, 0); });
+  if (window.matchMedia('(max-width: 960px)').matches) { document.getElementById('toc-details').removeAttribute('open'); }
+
+  document.querySelectorAll('button.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = b.closest('figure').querySelector('code').innerText;
+      var done = function () { b.textContent = '복사됨'; setTimeout(function () { b.textContent = '복사'; }, 1400); };
+      var fallback = function () {
+        var r = document.createRange(); r.selectNodeContents(b.closest('figure').querySelector('code'));
+        var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = '선택됨';
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, fallback); } else { fallback(); }
+    });
+  });
+
+  var links = {}; document.querySelectorAll('.toc a').forEach(function (a) { links[a.getAttribute('href').slice(1)] = a; });
+  var heads = Array.prototype.slice.call(document.querySelectorAll('main h2[id], main h3[id]')).filter(function (h) { return links[h.id]; });
+  if ('IntersectionObserver' in window && heads.length) {
+    var current = null;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) { if (en.isIntersecting) { current = en.target.id; } });
+      if (!current) return;
+      Object.keys(links).forEach(function (k) { links[k].classList.toggle('active', k === current); });
+    }, { rootMargin: '0px 0px -70% 0px' });
+    heads.forEach(function (h) { io.observe(h); });
+  }
+})();
+</script>
+</body>
+</html>

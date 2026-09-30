@@ -4,6 +4,15 @@
 남은 것, 주의할 것을 정리한다. 새 세션은 `CLAUDE.md` 다음, 다른 어떤 코드를 읽기 전에 이 문서부터
 읽는다(§ "구현 시 참조 순서" 갱신 참고).
 
+> **Phase 9 진행 중(2026-09-30~)** — 백업 가져오기 재설계, 작업 폴더 연결, 자동 프로젝트 생성.
+> 설계: `docs/import-ux-redesign-phase9.md` · 구현 단계와 체크리스트: `docs/phase9-implementation-plan.md`
+> (둘 다 `.html` 동봉, `python scripts/render-docs.py <md>`로 생성).
+> 작업 방식: **관리 대화방**(설계·점검·프롬프트 작성)과 **구현 대화방**(프롬프트를 받아 구현)을 나눈다.
+> 구현 대화방은 받은 프롬프트의 작업 ID 범위만 구현하고 구현 계획 문서의 체크박스는 고치지 않는다.
+> 체크는 관리 대화방이 점검 후에 한다.
+> 설계 조사에서 새로 확인한 결함(레거시 프로젝트 ID → `threads.project_id` 외래키 위반 → Apply Rollback 등)은
+> 설계 문서 §1.2에 있다. 아래 본문은 Phase 8_08까지의 기록이다.
+
 마지막 갱신 기준: `Phase 08_07` 커밋(`ce5a16b`)까지 사용자가 커밋했다. `Phase 8` 커밋을 push한
 뒤 실행된 첫 GitHub Actions Windows CI(run #1)는 Restore/Backup Format 자체의 문제가 아니라
 테스트 2건의 timing 문제로 FAIL했었지만(§2 Phase 08_01 행 참고), Phase 08_01이 두 테스트를
