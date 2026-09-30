@@ -95,7 +95,7 @@
 | 단계 | 내용 | 상태 | 선행 조건 | 담당 |
 |---|---|---|---|---|
 | 9_P | 준비 작업 | 🟨 점검 중 | — | 사용자 + 관리 |
-| 9_1 | 프로젝트 식별 정리 · 결함 A~D, I 수정 | 🟦 구현 중 | 9_P-01 | 구현 |
+| 9_1 | 프로젝트 식별 정리 · 결함 A~D, I 수정 | 🟦 구현 중 | — | 구현 |
 | 9_0-A | Desktop 반영 실험 1 (DB 연결만) | ⛔ 보류 | 9_1 | 사용자 + 관리 |
 | 9_2 | 가져오기 작업 공간(새 화면) + 사용자 선택 | ⬜ 대기 | 9_1 | 구현 |
 | 9_2b | 백업 속 대화 내용 미리보기 | ⬜ 대기 | 9_2 | 구현 |
@@ -112,8 +112,8 @@
 
 **목표**: 구현을 시작하기 전에 기준 상태를 정리한다.
 
-- [ ] **9_P-01** 설계 문서 3종(`import-ux-redesign-phase9.md/.html`, `phase9-implementation-plan.md/.html`)과 `scripts/render-docs.py`를 사용자가 커밋
-- [ ] **9_P-02** 관리 대화방 검증 중 원본 rollout 3개에 덧붙은 `thread_settings_applied` 이벤트 처리 결정(복원 / 유지). 복원이면 관리 대화방이 사본을 백업한 뒤 원래 길이로 truncate하고 해시 확인
+- [x] **9_P-01** 설계 문서 3종(`import-ux-redesign-phase9.md/.html`, `phase9-implementation-plan.md/.html`)과 `scripts/render-docs.py`를 사용자가 커밋 — `a0eab0c`
+- [x] **9_P-02** 관리 대화방 검증 중 원본 rollout 3개에 덧붙은 `thread_settings_applied` 이벤트 처리 결정(복원 / 유지). 복원이면 관리 대화방이 사본을 백업한 뒤 원래 길이로 truncate하고 해시 확인 — **복원 완료**(2026-09-30): 3개 모두 사고 전 사본과 SHA-256 일치, 복원 전 파일은 `%LOCALAPPDATA%\CodexBackupManager\manual-restore-20260930\` 보관, 핵심 파일 4종 해시 불변
 - [x] **9_P-03** 기준선 기록: 현재 `main` 커밋, 전체 테스트 531건 통과(Codex 종료 상태), 앱 버전 0.1.3 — `54904e8`, 531/531(2026-09-30, Codex 종료 후 재실행), `Directory.Build.props` 0.1.3 확인
 - [ ] **9_P-04** 사용자가 이후 확인에 쓸 앱을 최신 빌드(0.1.3 이상)로 교체(현재 실행 중인 앱은 0.1.1)
 
@@ -132,31 +132,36 @@
 `Backup/Import/ImportPreviewBuilder.cs`, `Backup/Import/ImportPlanPreflightValidator.cs`, `Restore/RestoreOperationPlanner.cs`,
 `App/ViewModels/ImportPreviewViewModel.cs`, 관련 테스트.
 
-> **프롬프트 분할**: 9_1a = 9_1-01~05 + T1, T2, T7(부분) (`docs/phase9-prompts/9_1a.md`) · 9_1b = 9_1-06~10 + T3~T6, T7 · 9_1-T8(복제본 E2E)은 관리 대화방이 점검 때 수행.
+> **프롬프트 분할**: 9_1a = 9_1-01~05 + T1, T2, T7(부분) (`docs/phase9-prompts/9_1a.md`, **점검 완료**) · 9_1b = 9_1-06~11 + T3~T6, T9, T7 (`docs/phase9-prompts/9_1b.md`, **점검 완료**) · 후속 9_1-12~14는 9_2-1 프롬프트에 포함 · 9_1-T8(복제본 E2E)은 관리 대화방이 점검 때 수행.
 
 ### 5.1 작업
 
-- [ ] **9_1-01** (결함 I) 호스트의 Codex 실행 여부에 의존하는 테스트 7건 격리. `MainViewModelApplyTests`는 ProcessGuard lister 주입, `CrashRecoveryIntegrationTests` 자식 프로세스는 테스트 전용 `--process-guard=none`. 실제 가드는 `CodexProcessGuardTests`로 계속 검증
-- [ ] **9_1-02** `GlobalStateReader`에 `app-server-project-id-by-legacy-project-id-by-host["local:<현재 Home>"]` 레거시→DB 매핑 읽기 추가(host key는 현재 Home canonical로 선택)
-- [ ] **9_1-03** Domain에 `KnownProject`, `KnownProjectRoot`, `ProjectDirectory`, `ProjectLookupResult(Found/Ambiguous/None)` 추가
-- [ ] **9_1-04** `ProjectDirectoryBuilder`: DB 프로젝트 기준 생성 → 레거시 ID를 매핑으로 합침 → 매핑 없으면 canonical 루트가 같은 DB 프로젝트가 정확히 1개일 때만 합침 → 루트 실존(`Directory.Exists`) 판정
-- [ ] **9_1-05** `CodexCatalog.ProjectDirectory` 노출(기존 생성자 유지). 트리 그룹 키를 KnownProject 기준으로 정규화해 같은 폴더의 중복 그룹 제거(결함 D). `CodexProjectResolver`의 authority 규칙은 바꾸지 않음
-- [ ] **9_1-06** `ProjectTarget`/`ProjectTargetKind`/`ProjectTargetReason` 추가, `ProjectTargetResolver` 구현(설계 §6 9_1 의사코드). 9_1에서는 CreateNew 대상도 `Uncategorized` + `*Unregistered`/`LegacyOnlyProject` 사유
-- [ ] **9_1-07** `ImportPreviewBuilder`가 `SuggestedTarget`, `LocalLocation`, `IsCompressedRollout`, `RequiredAncestorThreadIds`를 채움. `ProjectPathMapping`은 호환용으로 계속 채우되 새 판정에서 파생
-- [ ] **9_1-08** (결함 C) `RestoreOperationPlanner.ResolveLocalProjectId`를 fresh `ProjectDirectory` 기준 **`DbProjectId`만** 반환하도록 교체. 계획 목적지와 fresh 판정이 다르면 Plan 거부(`LocalStateChanged`)
-- [ ] **9_1-09** `ImportPlanPreflightValidator`: LinkExisting 대상 `DbProjectId` 존재와 폴더 실존 확인
-- [ ] **9_1-10** 임시 UI 문구 수정: 사유별 문구(설계 §9). "사용자가 지정함 → …"은 실제 LinkExisting일 때만. 미등록 폴더는 "지금은 기타 대화로 들어갑니다" 명시
+- [x] **9_1-01** (결함 I) 호스트의 Codex 실행 여부에 의존하는 테스트 7건 격리. `MainViewModelApplyTests`는 ProcessGuard lister 주입, `CrashRecoveryIntegrationTests` 자식 프로세스는 테스트 전용 `--process-guard=none`. 실제 가드는 `CodexProcessGuardTests`로 계속 검증
+- [x] **9_1-02** `GlobalStateReader`에 `app-server-project-id-by-legacy-project-id-by-host["local:<현재 Home>"]` 레거시→DB 매핑 읽기 추가(host key는 현재 Home canonical로 선택)
+- [x] **9_1-03** Domain에 `KnownProject`, `KnownProjectRoot`, `ProjectDirectory`, `ProjectLookupResult(Found/Ambiguous/None)` 추가
+- [x] **9_1-04** `ProjectDirectoryBuilder`: DB 프로젝트 기준 생성 → 레거시 ID를 매핑으로 합침 → 매핑 없으면 canonical 루트가 같은 DB 프로젝트가 정확히 1개일 때만 합침 → 루트 실존(`Directory.Exists`) 판정
+- [x] **9_1-05** `CodexCatalog.ProjectDirectory` 노출(기존 생성자 유지). 트리 그룹 키를 KnownProject 기준으로 정규화해 같은 폴더의 중복 그룹 제거(결함 D). `CodexProjectResolver`의 authority 규칙은 바꾸지 않음
+- [x] **9_1-06** `ProjectTarget`/`ProjectTargetKind`/`ProjectTargetReason` 추가, `ProjectTargetResolver` 구현(설계 §6 9_1 의사코드). 9_1에서는 CreateNew 대상도 `Uncategorized` + `*Unregistered`/`LegacyOnlyProject` 사유
+- [x] **9_1-07** `ImportPreviewBuilder`가 `SuggestedTarget`, `LocalLocation`, `IsCompressedRollout`, `RequiredAncestorThreadIds`를 채움. `ProjectPathMapping`은 호환용으로 계속 채우되 새 판정에서 파생
+- [x] **9_1-08** (결함 C) `RestoreOperationPlanner.ResolveLocalProjectId`를 fresh `ProjectDirectory` 기준 **`DbProjectId`만** 반환하도록 교체. 계획 목적지와 fresh 판정이 다르면 Plan 거부(`LocalStateChanged`)
+- [x] **9_1-09** `ImportPlanPreflightValidator`: LinkExisting 대상 `DbProjectId` 존재와 폴더 실존 확인
+- [x] **9_1-10** 임시 UI 문구 수정: 사유별 문구(설계 §9). "사용자가 지정함 → …"은 실제 LinkExisting일 때만. 미등록 폴더는 "지금은 기타 대화로 들어갑니다" 명시
+- [x] **9_1-11** (9_1a 점검에서 추가) `ProjectDirectory`/`ProjectDirectoryBuilder` 방어: 비정상 데이터(ID 충돌 등)로 생성이 실패해도 카탈로그 전체가 실패하지 않게 한다(경고 + 문제 항목 제외), 테스트 포함
+- [ ] **9_1-12** (9_1b 점검 후속) `RestoreValidator`: New Import에서 `ResolvedProjectId`가 null이면 실제 행의 `project_id`도 null인지, 값이 있으면 `cwd`가 `ResolvedTargetCwd`와 같은지 사후 검증
+- [ ] **9_1-13** (9_1b 점검 후속) 더 이상 제품 코드에서 쓰지 않는 `ProjectPathMapper`와 그 테스트 제거(고유한 검증은 `ProjectTargetResolverTests`로 이전)
+- [ ] **9_1-14** (9_1b 점검 후속) 자동 LinkExisting의 `FolderPath`/`TargetProjectPath`(→ cwd)를 백업 원본 문자열이 아니라 이 PC `project_roots`에 저장된 루트 표기로 쓴다(canonical은 같아도 표기가 다를 수 있음)
 
 ### 5.2 테스트
 
-- [ ] **9_1-T1** ProjectDirectory: DB 전용 / 레거시 전용 / 매핑 합침 / 루트로 합침 / 같은 루트 DB 2개 → Ambiguous / 루트 실존
-- [ ] **9_1-T2** (결함 D, RED→GREEN) 레거시 배정 대화와 cwd 폴백 대화가 같은 폴더면 카탈로그 한 그룹
-- [ ] **9_1-T3** (결함 A, RED→GREEN) 대화 0개 등록 프로젝트로 자동 연결과 수동 지정 → Apply 후 `threads.project_id = DbProjectId`, `cwd` remap
-- [ ] **9_1-T4** (결함 B) 원본 폴더가 실존하고 미등록 → `OriginalRootExistsUnregistered`, 원본 없음 → `OriginalRootMissing`
-- [ ] **9_1-T5** (결함 C, RED→GREEN) 레거시 ID로만 알려진 프로젝트 폴더로 지정 → **RolledBack이 아니라 Succeeded**, `project_id`는 매핑된 DB ID
-- [ ] **9_1-T6** Preflight: Plan 이후 대상 프로젝트 삭제 → `LocalStateChanged`
-- [ ] **9_1-T7** 회귀: 기존 테스트 전체 GREEN(Codex 실행 중이어도 GREEN — 9_1-01 효과 확인)
-- [ ] **9_1-T8** 복제본 E2E: 관리 대화방 하네스 Case 0~4 재실행. Case 0/1/3은 사유 표시가 정확하고, Case 3/4는 실제 연결되며, 원본 해시 불변
+- [x] **9_1-T1** ProjectDirectory: DB 전용 / 레거시 전용 / 매핑 합침 / 루트로 합침 / 같은 루트 DB 2개 → Ambiguous / 루트 실존
+- [x] **9_1-T2** (결함 D, RED→GREEN) 레거시 배정 대화와 cwd 폴백 대화가 같은 폴더면 카탈로그 한 그룹
+- [x] **9_1-T3** (결함 A, RED→GREEN) 대화 0개 등록 프로젝트로 자동 연결과 수동 지정 → Apply 후 `threads.project_id = DbProjectId`, `cwd` remap
+- [x] **9_1-T4** (결함 B) 원본 폴더가 실존하고 미등록 → `OriginalRootExistsUnregistered`, 원본 없음 → `OriginalRootMissing`
+- [x] **9_1-T5** (결함 C, RED→GREEN) 레거시 ID로만 알려진 프로젝트 폴더로 지정 → **RolledBack이 아니라 Succeeded**, `project_id`는 매핑된 DB ID
+- [x] **9_1-T6** Preflight: Plan 이후 대상 프로젝트 삭제 → `LocalStateChanged`
+- [x] **9_1-T7** 회귀: 기존 테스트 전체 GREEN(Codex 실행 중이어도 GREEN — 9_1-01 효과 확인)
+- [x] **9_1-T8** 복제본 E2E: 관리 대화방 하네스 Case 0~4 재실행. Case 0/1/3은 사유 표시가 정확하고, Case 3/4는 실제 연결되며, 원본 해시 불변
+- [x] **9_1-T9** (9_1a 점검에서 추가) 9_1a 이전에 만든 백업(manifest 프로젝트 ID가 레거시 ID) → 새 코드의 Preview가 루트 기준으로 올바르게 매핑, 원시 ID 불일치로 실패하지 않음
 
 ### 5.3 완료 조건
 위 작업과 테스트가 모두 체크되고, 설계와 다른 결정이 있으면 설계 문서에 반영됐다.
@@ -184,39 +189,44 @@
 **설계 참조**: §3, §5.2~5.3, §6 "9_2", §7 전체, §9.
 **범위 밖**: 대화 내용 미리보기(9_2b), 프로젝트 생성(9_5), 연결 변경(9_3), 되돌리기(9_4).
 
+> **프롬프트 분할**: 9_2-1 = Core(9_2-01~06, 9_2-21, T1, T2, T7) + 9_1-12~14 (`docs/phase9-prompts/9_2-1.md`) · 9_2-2 = 화면(9_2-07~20, T3~T6)
+
 ### 7.1 Core
 
 - [ ] **9_2-01** `ImportUserChoices`/`ProjectTargetDecision` 추가
 - [ ] **9_2-02** `ImportSelection.Compute(preview, choices)`: 선택 가능 여부, 조상 closure, 대화별 최종 동작, 차단 사유, 요약 개수(순수 로직, I/O 없음)
-- [ ] **9_2-03** `ImportPlan` addendum: `ImportSkipReason`, `TargetProjectKey`, `ResolvedTarget`, `UserChoices`(설계 §5.3)
+- [ ] **9_2-03** `ImportPlan` addendum: `ImportSkipReason`, `TargetProjectKey`, `ResolvedTarget`, `UserChoices`(설계 §5.3) — 단 `ImportPlanProject.ResolvedTarget`은 9_1b(9_1-08)에서 먼저 추가
 - [ ] **9_2-04** `ImportPlanBuilder.Build(preview, path, choices)` 오버로드. 기존 시그니처는 `UserChoices=null`로 기존과 같은 결과
 - [ ] **9_2-05** Diverged/Unverifiable을 체크 해제하면 나머지는 적용 가능, closure에 걸리면 계속 차단
 - [ ] **9_2-06** `ProjectTargetResolver`를 사용자 폴더 변경에 즉시 재계산(메모리 + `Directory.Exists`만)
+- [ ] **9_2-21** (9_1b 점검에서 추가) 사용자가 제외한 대화(`UserExcluded`)는 Preflight 사전조건 검사와 Planner 쓰기 대상에서 모두 빠진다(제외 대화의 로컬 변화가 나머지 적용을 막지 않음, 제외 대화의 rollout·행은 쓰기 0건)
 
 ### 7.2 App
 
-- [ ] **9_2-07** `ImportWorkspaceViewModel` 상태 머신(Closed/Opening/Analyzing/Failed/Editing/Confirming/Applying/Result, 설계 §7.1)
+- [ ] **9_2-07** `ImportWorkspaceViewModel` 상태 머신(Closed/Opening/**WaitingForCodexExit**/Analyzing/Failed/Editing/Confirming/Applying/Result, 설계 §7.1)
 - [ ] **9_2-08** 기존 Import 상태와 명령을 `MainViewModel`에서 Workspace로 이관. MainViewModel은 진입/복귀/강조만
 - [ ] **9_2-09** 트리: `ImportProjectNodeViewModel`(3상태 체크 + 작업 폴더 영역), `ImportConversationNodeViewModel`(배지 + 체크), 조상 자동 포함 흐림 표시
 - [ ] **9_2-10** 작업 폴더 영역: 목적지 상태 7종 표시와 컨트롤(설계 §7.3, 9_2에서는 CreateNew 행 대신 A안 문구)
 - [ ] **9_2-11** 배지와 기본 체크 규칙(설계 §7.4), 검색 필터(선택 유지), `[새 대화만] [전체 선택] [모두 해제]`
 - [ ] **9_2-12** 오른쪽 상세 패널(상태 설명, 이 PC 위치, 원본 정보). 내용 미리보기 자리만 확보
 - [ ] **9_2-13** 하단 실시간 요약 + `[대화 N개 가져오기]` 버튼(0개면 비활성 + 사유)
-- [ ] **9_2-14** Codex 실행 감시(활성화 시점과 5초 주기) → 배너 + 버튼 비활성 사유
+- [ ] **9_2-14** Codex 실행 정책 B(설계 §7.1): 파일 선택 직후 실행 중이면 분석하지 않고 종료 안내 + [다시 확인], Editing 중 감시(활성화 시점과 5초 주기) → 배너 + 버튼 비활성 + [다시 분석](선택 유지)
 - [ ] **9_2-15** 확인 대화상자(설계 §7.5)
 - [ ] **9_2-16** 결과 화면(설계 §7.6). `NothingToDo`면 각 대화의 현재 위치 목록, 실패 유형별 문구와 [다시 시도]
 - [ ] **9_2-17** `[목록에서 보기]`: 카탈로그 새로고침 + 가져온 대화 선택, 펼침, 강조
 - [ ] **9_2-18** 문구 통일: "불러오기" → "가져오기", 내부 용어 나열 제거, "상세 정보 ▼"에 개발용 정보
 - [ ] **9_2-19** 메시지 카탈로그(설계 §9) 적용
+- [ ] **9_2-20** 내보내기 시작 전 Codex 실행 중이면 안내 문구(차단하지 않음, 설계 §7.1 정책 표)
 
 ### 7.3 테스트
 
 - [ ] **9_2-T1** ImportSelection: 기본 체크, 제외 → Skip(UserExcluded), 조상 자동 포함, Diverged 제외 시 적용 가능, closure Blocked면 불가, 요약 개수
 - [ ] **9_2-T2** ImportPlanBuilder: `UserChoices=null` 결과가 기존과 동일(스냅샷 비교), 선택 반영, identity pinning 유지
-- [ ] **9_2-T3** App: 3상태 체크, 검색 중 선택 유지, 0개 비활성과 사유, 폴더 변경 후 요약 갱신, 상태 전이, Codex 실행 배너
+- [ ] **9_2-T3** App: 3상태 체크, 검색 중 선택 유지, 0개 비활성과 사유, 폴더 변경 후 요약 갱신, 상태 전이, Codex 실행 배너, **Codex 실행 중이면 분석 자체를 시작하지 않음(Analyzing 진입 0회)**, [다시 분석] 후 선택 유지
 - [ ] **9_2-T4** 스크린샷 시나리오 재현: 이미 있는(기타 대화) 대화 1개짜리 백업 → 버튼 비활성 + "이미 이 PC에 있음 · 위치: 기타 대화" 표시
 - [ ] **9_2-T5** 분석, 선택 변경, 폴더 변경 중 Codex Home 쓰기 0건(해시 고정 테스트)
 - [ ] **9_2-T6** 전체 테스트 GREEN + 사용자 GUI 수동 확인(관리 대화방이 확인 목록 제공)
+- [ ] **9_2-T7** (Core E2E, Restore.Tests) Diverged/Unverifiable 대화를 제외한 선택 → 나머지 Apply 성공 + 제외 대화의 파일·행 무변경, 제외한 New 대화의 rollout 미생성, 필수 조상 자동 포함 후 적용 성공
 
 ---
 
@@ -317,9 +327,20 @@
 | 2026-09-30 | 9_P-03 | 확인 | main `54904e8`, 테스트 531/531, 버전 0.1.3 |
 | 2026-09-30 | 9_P-01/02/04 | 사용자 대기 | 문서 미커밋, 원본 rollout 3개 여분(+3628/+2618/+2853 B) 그대로, 앱 교체 전 |
 | 2026-09-30 | 9_1a | 프롬프트 발행 | `docs/phase9-prompts/9_1a.md` |
+| 2026-09-30 | 9_P-02 | 완료 | 원본 rollout 3개 복원(사고 전 사본과 해시 일치, 복원 전 파일 보관) |
+| 2026-09-30 | 설계 | 정책 결정 | Codex 실행 정책 B: 가져오기는 Codex 종료 상태에서 시작, 보기와 내보내기는 허용(설계 §7.1) → 9_2-07/14/T3 갱신, 9_2-20 추가 |
+| 2026-09-30 | 9_P-01 | 완료 | 설계 문서 커밋 `a0eab0c` |
+| 2026-09-30 | 9_1a 점검 | **통과** | 빌드 경고 0 · 테스트 559/559(Codex 없음), 가짜 `codex` 실행 중에도 Restore 79/79 · App 99/99 직접 재현. 실측(읽기 전용, 원본 해시 불변): 카탈로그 47→46, KnownProject 46(DB 46 · 레거시 전용 0), 대화 0개 1, Ambiguous 루트 2. 복제본 Case: 0(원본 경로 실존·0대화) NotFound 유지, 1(미등록) 표시 오해 유지, 2 정상, **3(등록·0대화) 여전히 무시 → 9_1b**, **4(레거시 배정 프로젝트) RolledBack→Succeeded**(9_1a 부수 효과로 결함 C 주경로 해소, DB ID 기록 확인). 관리 대화방 정정: 설계 §1.2 D의 '중복 2건'은 Codex가 한 폴더를 여러 프로젝트로 등록한 Ambiguous였고 실제 레거시/DB 중복은 1건. 후속 추가: 9_1-11(방어), 9_1-T9(구버전 백업 호환) |
+| 2026-09-30 | 9_1b | 프롬프트 발행 | `docs/phase9-prompts/9_1b.md` |
+| 2026-10-01 | 9_1b 점검 | **통과** | 빌드 경고 0 · 테스트 599/599(가짜 `codex` 실행 중/없이 각각). 복제본 Case 0~4 전부 기대대로(0 자동 연결, 1 기타 대화+정확한 사유, 2 정상, **3 연결됨**, 4 실존 DB ID), 9_1a 이전 형식 백업으로 수행 → T9 실데이터 확인. 기본 E2E 42/42(하네스의 원시 ID 비교를 그룹 소속 판정으로 수정 후), 원본 해시 불변, 줄바꿈 혼합 없음. 결정: Q1 루트 없는 등록 프로젝트→OriginalRootMissing(기타 대화) 수용, Q2 원본 없음 Plan은 Apply 때 재판정 안 함 수용, Q3 사후 검증 강화(9_1-12), Q4 `ProjectPathMapper` 제거(9_1-13), Q5 수용(T9는 관리 대화방이 실데이터로 확인). 관리 대화방 발견: 자동 연결 cwd가 백업 원본 표기를 씀 → 9_1-14. 9_2-21·9_2-T7 추가 |
+| 2026-10-01 | 9_2-1 | 프롬프트 발행 | `docs/phase9-prompts/9_2-1.md` |
 
 ## 14. 변경 이력
 
 | 날짜 | 변경 |
 |---|---|
 | 2026-09-30 | 최초 작성(관리 대화방) |
+| 2026-09-30 | Codex 실행 정책 B 반영(9_2-07, 9_2-14, 9_2-T3 수정, 9_2-20 추가), 9_P-02/03 완료 |
+| 2026-09-30 | CLAUDE.md §19에 가져오기 Codex 종료 전제 정책 추가(사용자 승인) |
+| 2026-09-30 | 9_1a 점검 반영: 9_1-01~05·T1·T2 체크, 9_1-11·9_1-T9 추가, 9_2-03 일부를 9_1b로 이동 |
+| 2026-10-01 | 9_1b 점검 반영: 9_1-06~11·T3~T9 체크, 9_1-12~14·9_2-21·9_2-T7 추가, 9_2 프롬프트 분할(9_2-1 Core / 9_2-2 화면) |

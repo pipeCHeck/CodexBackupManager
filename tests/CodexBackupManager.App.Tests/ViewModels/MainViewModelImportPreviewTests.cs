@@ -162,7 +162,12 @@ public sealed class MainViewModelImportPreviewTests : IAsyncLifetime
 
         ImportProjectRowViewModel updatedProject = importer.CurrentImportPreview!.Projects
             .Single(p => p.DisplayName == overridableProject.DisplayName);
-        Assert.Contains("사용자가 지정함", updatedProject.PathMappingStatusText);
+        // Phase 9_1-10 — 고른 폴더(temp)는 대상 Codex Home에 등록된 프로젝트가 아니다. 예전에는 여기서도
+        // "사용자가 지정함 → …"이라고 보여줬지만 실제로는 기타 대화로 들어갔다(설계 §1.2 Case 1 표시 오해).
+        // 이제 그 문구는 실제 연결(LinkExisting)일 때만 쓰고, 미등록 폴더는 기타 대화로 들어간다고 말한다.
+        Assert.DoesNotContain("사용자가 지정함", updatedProject.PathMappingStatusText);
+        Assert.Contains("Codex에 등록되지 않은 폴더", updatedProject.PathMappingStatusText);
+        Assert.Contains("기타 대화로 들어갑니다", updatedProject.PathMappingStatusText);
         Assert.Contains("재지정", importer.ImportStatusText);
     }
 

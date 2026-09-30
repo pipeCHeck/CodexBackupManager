@@ -31,6 +31,13 @@ public sealed record CodexCatalog(
     DateTimeOffset BuiltAtUtc,
     CodexCatalogStats Stats)
 {
+    /// <summary>
+    /// 이 PC에 등록된 프로젝트 전체(대화가 0개인 프로젝트 포함, Phase 9_1-05). <see cref="Projects"/>는
+    /// 대화가 있는 그룹만 담지만, 이 목록은 SQLite 프로젝트와 레거시 프로젝트를 합친 전체다.
+    /// 카탈로그를 만들지 못한 경우(state DB 없음 등)에는 <see cref="Codex.Projects.ProjectDirectory.Empty"/>.
+    /// </summary>
+    public Codex.Projects.ProjectDirectory ProjectDirectory { get; init; } = Codex.Projects.ProjectDirectory.Empty;
+
     /// <summary><c>thread_source == "user"</c>인 전체 대화 수. 프로젝트 그룹 합계와 같다.</summary>
     public int UserConversationCount { get; } = CountUser(AllConversations);
 

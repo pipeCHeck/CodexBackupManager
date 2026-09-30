@@ -263,6 +263,9 @@
                               <TextBlock Text="{Binding MetadataDiffSummary}" Foreground="{StaticResource Warn}"
                                          FontSize="10" Margin="8,0,0,0"
                                          Visibility="{Binding HasMetadataDiff, Converter={StaticResource BoolToVisibility}}" />
+                              <TextBlock Text="{Binding LocalLocationText}" Foreground="{StaticResource Muted}"
+                                         FontSize="10" Margin="8,0,0,0"
+                                         Visibility="{Binding HasLocalLocation, Converter={StaticResource BoolToVisibility}}" />
                             </StackPanel>
                           </Grid>
                         </DataTemplate>

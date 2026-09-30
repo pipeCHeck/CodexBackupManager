@@ -284,6 +284,24 @@ public sealed class MainViewModel : ObservableObject
     /// </summary>
     internal ImportPlan? CurrentImportPlan => _currentImportPlan;
 
+    /// <summary>
+    /// Apply가 실제로 부르는 Restore 진입점(Phase 9_1-01, 테스트 전용 seam — <c>InternalsVisibleTo</c>로
+    /// App.Tests에만 보인다). 인자: (plan, codexHomePath, snapshotRoot, onStatusChanged, cancellationToken).
+    /// 기본값은 production <see cref="RestoreExecutor.Apply(ImportPlan,string,string?,IRestoreFaultInjectionHook?,Action{string}?,CancellationToken)"/>이고,
+    /// 그 안에서 <see cref="CodexProcessGuard.SystemRunningProcessLister"/>를 쓴다. 제품에는 이 값을 바꾸는
+    /// 설정/인자/환경 변수가 없다. 테스트는 호스트에서 실제로 실행 중인 Codex와 무관하게 배선만 확인하려고
+    /// 프로세스 목록만 바꾼 Restore 호출로 교체한다.
+    /// </summary>
+    internal Func<ImportPlan, string, string, Action<string>, CancellationToken, RestoreResult> RestoreApply { get; set; }
+        = static (plan, codexHomePath, snapshotRoot, onStatusChanged, cancellationToken) => RestoreExecutor.Apply(
+            plan, codexHomePath, snapshotRoot: snapshotRoot, onStatusChanged: onStatusChanged, cancellationToken: cancellationToken);
+
+    /// <summary>
+    /// [이전 상태로 복구]가 <see cref="IncompleteApplyRecoveryService.Recover"/>에 넘기는 프로세스 목록 제공자
+    /// (Phase 9_1-01, 테스트 전용 seam). 기본값은 <see cref="CodexProcessGuard.SystemRunningProcessLister"/>다.
+    /// </summary>
+    internal CodexProcessGuard.RunningProcessLister RecoveryProcessLister { get; set; } = CodexProcessGuard.SystemRunningProcessLister;
+
     /// <summary>Export가 진행 중인지. 재실행을 막고 취소 버튼 표시 여부를 결정하는 데 쓴다.</summary>
     public bool IsExporting
     {
@@ -1231,12 +1249,12 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             RestoreResult result = await Task.Run(
-                () => RestoreExecutor.Apply(
+                () => RestoreApply(
                     plan,
                     codexHomePath,
-                    snapshotRoot: _snapshotRootProvider(),
-                    onStatusChanged: status => ReportApplyStatus(status, uiContext),
-                    cancellationToken: cancellation.Token),
+                    _snapshotRootProvider(),
+                    status => ReportApplyStatus(status, uiContext),
+                    cancellation.Token),
                 cancellation.Token).ConfigureAwait(true);
 
             ApplyStatusText = DescribeApplyResult(result);
@@ -1352,7 +1370,7 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             RestoreResult result = await Task.Run(
-                () => IncompleteApplyRecoveryService.Recover(snapshotDir, expectedCodexHomePath: expectedHome)).ConfigureAwait(true);
+                () => IncompleteApplyRecoveryService.Recover(snapshotDir, RecoveryProcessLister, expectedCodexHomePath: expectedHome)).ConfigureAwait(true);
             IncompleteApplyStatusText = DescribeApplyResult(result);
             _logger.Info($"이전 Apply 복구 시도. outcome={result.Outcome}");
         }

@@ -191,6 +191,13 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
     }
 
     /// <summary>
+    /// Phase 9_1-01 — 이 테스트 프로세스 안에서 하는 Apply는 호스트에서 실제로 실행 중인 Codex와 무관해야
+    /// 한다. 프로세스 목록만 "Codex 없음"으로 주입하고 fresh catalog는 production과 같은 생성기를 쓴다.
+    /// </summary>
+    private RestoreResult ApplyWithoutHostCodex(ImportPlan plan, string codexHomePath)
+        => RestoreExecutor.Apply(plan, codexHomePath, () => [], RestoreExecutor.BuildFreshCatalog, _snapshotRoot);
+
+    /// <summary>
     /// CrashSim을 자식 프로세스로 띄우고, 지정된 지점에 도달했다는 sentinel 파일이 나타나면 실제로
     /// <see cref="Process.Kill(bool)"/>로 강제 종료한다.
     /// </summary>
@@ -211,6 +218,8 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         startInfo.ArgumentList.Add(crashPoint.ToString());
         startInfo.ArgumentList.Add(sentinelPath);
         startInfo.ArgumentList.Add(snapshotRoot);
+        // Phase 9_1-01 — 호스트에서 Codex가 실행 중이어도 자식 프로세스가 크래시 지점까지 가도록 한다.
+        startInfo.ArgumentList.Add("--process-guard=none");
 
         using Process? process = Process.Start(startInfo);
         Assert.NotNull(process);
@@ -343,7 +352,7 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         ImportPlan? retryPlan = ImportPlanBuilder.Build(retryPreview, backupPath);
         Assert.NotNull(retryPlan);
 
-        RestoreResult retryResult = RestoreExecutor.Apply(retryPlan!, _pcBHome, snapshotRoot: _snapshotRoot);
+        RestoreResult retryResult = ApplyWithoutHostCodex(retryPlan!, _pcBHome);
 
         Assert.True(retryResult.Outcome == RestoreOutcome.Succeeded, $"{retryResult.Outcome}: {retryResult.Message}");
         Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -403,7 +412,7 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         ImportPlan? planAfter = ImportPlanBuilder.Build(previewAfter, backupPath);
         Assert.NotNull(planAfter);
 
-        RestoreResult retryResult = RestoreExecutor.Apply(planAfter!, _pcBHome, snapshotRoot: _snapshotRoot);
+        RestoreResult retryResult = ApplyWithoutHostCodex(planAfter!, _pcBHome);
 
         Assert.True(retryResult.Outcome == RestoreOutcome.Succeeded, $"{retryResult.Outcome}: {retryResult.Message}");
         Assert.Contains(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -469,7 +478,7 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
             ImportPlan? plan = ImportPlanBuilder.Build(preview, backupPath);
             Assert.NotNull(plan);
 
-            RestoreResult sameHomeResult = RestoreExecutor.Apply(plan!, _pcBHome, snapshotRoot: _snapshotRoot);
+            RestoreResult sameHomeResult = ApplyWithoutHostCodex(plan!, _pcBHome);
             Assert.Equal(RestoreOutcome.NotReady, sameHomeResult.Outcome);
             Assert.Contains("다른 Codex Backup Manager 인스턴스", sameHomeResult.Message);
             Assert.Empty(TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
@@ -487,7 +496,7 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
             ImportPlan? planOther = ImportPlanBuilder.Build(previewOther, backupPath2);
             Assert.NotNull(planOther);
 
-            RestoreResult otherHomeResult = RestoreExecutor.Apply(planOther!, otherHome, snapshotRoot: _snapshotRoot);
+            RestoreResult otherHomeResult = ApplyWithoutHostCodex(planOther!, otherHome);
             Assert.True(otherHomeResult.Outcome == RestoreOutcome.Succeeded, $"{otherHomeResult.Outcome}: {otherHomeResult.Message}");
         }
         finally

@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Domain.Codex.Import;
+using CodexBackupManager.Domain.Codex.Projects;
 
 namespace CodexBackupManager.App.ViewModels;
 
@@ -24,11 +25,37 @@ public sealed class ImportConversationRowViewModel(ImportConversationPreview pre
     /// <summary>사용자에게 보여줄 한국어 상태 라벨.</summary>
     public string StatusLabel { get; } = DescribeRelation(preview.Relation);
 
-    /// <summary>metadata 차이 요약(있으면). 없으면 <c>null</c>.</summary>
+    /// <summary>
+    /// metadata 차이 요약(있으면). 없으면 <c>null</c>. Phase 9_1-10부터 "프로젝트 연결 다름"은 넣지 않는다 —
+    /// <see cref="MetadataDifferences.ProjectAssignmentDiffers"/>는 PC마다 다른 원시 프로젝트 ID를 비교한 값이라
+    /// 오해를 부른다(계산 자체는 frozen이라 그대로 둔다). 대신 <see cref="LocalLocationText"/>로 이 PC 위치를 보여준다.
+    /// </summary>
     public string? MetadataDiffSummary { get; } = DescribeMetadataDiff(preview.Metadata);
 
-    /// <summary>metadata 차이가 있는지(UI 강조 표시용).</summary>
-    public bool HasMetadataDiff { get; } = preview.Metadata.HasAny;
+    /// <summary>metadata 차이 문구가 있는지(UI 강조 표시용).</summary>
+    public bool HasMetadataDiff => MetadataDiffSummary is not null;
+
+    /// <summary>
+    /// (Phase 9_1-10) 이 대화가 이 PC에 이미 있으면 그 위치("이 PC 위치: 기타 대화" / "이 PC 위치: ○○ 프로젝트").
+    /// 이 PC에 없거나 위치 정보가 없으면 <c>null</c>.
+    /// </summary>
+    public string? LocalLocationText { get; } = DescribeLocalLocation(preview.LocalLocation);
+
+    /// <summary><see cref="LocalLocationText"/>가 있는지.</summary>
+    public bool HasLocalLocation => LocalLocationText is not null;
+
+    private static string? DescribeLocalLocation(ConversationLocalLocation? location)
+    {
+        if (location is not { ExistsLocally: true })
+        {
+            return null;
+        }
+
+        string text = location.IsUncategorized
+            ? "이 PC 위치: 기타 대화"
+            : $"이 PC 위치: {location.ProjectDisplayName ?? location.KnownProjectKey} 프로젝트";
+        return location.Archived ? text + " (보관됨)" : text;
+    }
 
     private static string DescribeRelation(RevisionRelation relation) => relation switch
     {
@@ -54,11 +81,6 @@ public sealed class ImportConversationRowViewModel(ImportConversationPreview pre
             parts.Add("작업 폴더");
         }
 
-        if (diff.ProjectAssignmentDiffers)
-        {
-            parts.Add("프로젝트 연결");
-        }
-
         if (diff.PinnedDiffers)
         {
             parts.Add("고정 여부");
@@ -79,7 +101,7 @@ public sealed class ImportConversationRowViewModel(ImportConversationPreview pre
             parts.Add("최근 사용 시각");
         }
 
-        return string.Join(", ", parts) + " 다름";
+        return parts.Count == 0 ? null : string.Join(", ", parts) + " 다름";
     }
 }
 
@@ -93,11 +115,18 @@ public sealed class ImportProjectRowViewModel
     /// View code-behind에 경로 상태를 두지 않는다).
     /// </summary>
     internal ImportProjectRowViewModel(ImportProjectPreview preview, Action<string?>? requestPathOverride)
+        : this(preview, requestPathOverride, ProjectDirectory.Empty)
+    {
+    }
+
+    internal ImportProjectRowViewModel(ImportProjectPreview preview, Action<string?>? requestPathOverride, ProjectDirectory localProjects)
     {
         ProjectId = preview.ProjectId;
         DisplayName = preview.DisplayName;
         Conversations = preview.Conversations.Select(c => new ImportConversationRowViewModel(c)).ToList();
-        PathMappingStatusText = DescribePathMapping(preview.PathMapping);
+        PathMappingStatusText = preview.SuggestedTarget is { } target
+            ? DescribeTarget(target, localProjects)
+            : DescribePathMapping(preview.PathMapping);
         CanOverridePath = preview.PathMapping.CanManuallyOverride;
         SummaryText =
             $"신규 {preview.CountOf(RevisionRelation.New)} · 동일 {preview.CountOf(RevisionRelation.Identical)} · " +
@@ -140,6 +169,37 @@ public sealed class ImportProjectRowViewModel
         ProjectPathMappingStatus.ManuallyLinked => $"사용자가 지정함 → {mapping.ResolvedLocalPath}",
         _ => string.Empty,
     };
+
+    /// <summary>
+    /// (Phase 9_1-10, 설계 §9) 목적지 판정 사유별 문구. "사용자가 지정함 → …"은 실제로 연결될 때(LinkExisting)만 쓴다.
+    /// 연결되지 않는 경우에는 "기타 대화로 들어간다"는 사실을 분명히 말한다.
+    /// </summary>
+    internal static string DescribeTarget(ProjectTarget target, ProjectDirectory localProjects)
+    {
+        string projectName = target.LinkDbProjectId is { } id && localProjects.FindById(id) is { } known
+            ? known.DisplayName
+            : "등록된";
+
+        return target.Reason switch
+        {
+            ProjectTargetReason.NotApplicable => string.Empty,
+            ProjectTargetReason.OriginalRootRegistered when target.Kind == ProjectTargetKind.LinkExisting =>
+                $"이 PC의 '{projectName}' 프로젝트에 연결됩니다 → {target.FolderPath}",
+            ProjectTargetReason.UserSelectedRegistered when target.Kind == ProjectTargetKind.LinkExisting =>
+                $"사용자가 지정함 → {target.FolderPath} · 이 PC의 '{projectName}' 프로젝트에 연결됩니다",
+            ProjectTargetReason.UserSelectedUnregistered =>
+                "Codex에 등록되지 않은 폴더입니다. 지금은 기타 대화로 들어갑니다. Codex에서 이 폴더를 한 번 연 뒤 [새로고침]하면 연결됩니다.",
+            ProjectTargetReason.OriginalRootExistsUnregistered =>
+                "원본 폴더는 이 PC에 있지만 Codex에 등록되지 않은 폴더입니다. 지금은 기타 대화로 들어갑니다. Codex에서 이 폴더를 한 번 연 뒤 [새로고침]하면 연결됩니다.",
+            ProjectTargetReason.OriginalRootMissing =>
+                "원본 폴더가 이 PC에 없습니다. 폴더를 지정하지 않으면 기타 대화로 들어갑니다.",
+            ProjectTargetReason.AmbiguousRoot =>
+                "이 폴더가 Codex에 여러 프로젝트로 등록되어 있어 자동으로 연결하지 않습니다. 지금은 기타 대화로 들어갑니다.",
+            ProjectTargetReason.LegacyOnlyProject =>
+                "이 폴더는 Codex 데스크톱의 이전 형식 프로젝트로만 등록되어 있어 지금은 연결할 수 없습니다. 기타 대화로 들어갑니다.",
+            _ => "이 PC의 프로젝트에 연결할 수 없습니다. 지금은 기타 대화로 들어갑니다.",
+        };
+    }
 }
 
 /// <summary>
@@ -180,7 +240,7 @@ public sealed class ImportPreviewViewModel
 
         foreach (ImportProjectPreview project in preview.Projects)
         {
-            Projects.Add(new ImportProjectRowViewModel(project, requestPathOverride));
+            Projects.Add(new ImportProjectRowViewModel(project, requestPathOverride, preview.LocalProjectDirectory));
         }
 
         int totalSelected = preview.Projects.Sum(p => p.Conversations.Count);

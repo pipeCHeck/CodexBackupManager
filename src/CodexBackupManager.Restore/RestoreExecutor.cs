@@ -328,7 +328,11 @@ public static class RestoreExecutor
         }
     }
 
-    private static CodexCatalog BuildFreshCatalog(string codexHomePath)
+    /// <summary>
+    /// production 진입점이 쓰는 fresh catalog 생성기. 테스트/CrashSim이 프로세스 목록만 바꾸고 나머지는
+    /// production과 같은 경로로 Apply를 돌릴 수 있도록 internal로 노출한다(Phase 9_1-01).
+    /// </summary>
+    internal static CodexCatalog BuildFreshCatalog(string codexHomePath)
     {
         var detection = new CodexDetectionService().DetectFromUserSelection(codexHomePath);
         if (detection.Installation is not { } installation)

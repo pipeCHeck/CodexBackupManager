@@ -18,6 +18,13 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodexBackupManager.Restore.Tests" />
+    <!--
+      Phase 9_1-01 — 테스트 전용. App.Tests(MainViewModel Apply 배선 테스트)와 CrashSim(크래시 시뮬레이션
+      자식 프로세스)이 프로세스 목록 제공자를 주입한 internal Apply 오버로드를 쓰기 위함이다. 배포되는
+      App 어셈블리는 여기에 넣지 않는다 — 제품에는 가드를 끄는 경로가 없다.
+    -->
+    <InternalsVisibleTo Include="CodexBackupManager.App.Tests" />
+    <InternalsVisibleTo Include="CodexBackupManager.Restore.CrashSim" />
   </ItemGroup>
 
 </Project>

@@ -60,7 +60,7 @@
 | **A** | 대화가 0개인 등록 프로젝트를 모른다. 재지정이 조용히 무시된다 | `CodexCatalog.Projects`가 대화 있는 그룹만 담는다. `ProjectPathMapper`/`RestoreOperationPlanner.ResolveLocalProjectId`가 이 목록만 본다. 복제본 Case 0/1/3 | "사용자가 지정함"으로 뜨지만 `project_id=null`, `cwd=원본` |
 | **B** | 폴더 실존 여부를 안 본다 | `ProjectPathMapper`는 문자열 비교만 한다 | 원본 폴더가 같은 경로에 있어도 "원본 경로를 찾을 수 없습니다" |
 | **C** | **레거시 프로젝트 ID를 `threads.project_id`에 쓰려다 외래키 위반 → Apply 전체 Rollback** | `threads.project_id REFERENCES projects(id)`. 카탈로그 프로젝트 ID가 global-state 레거시 ID(`0e4a4695-…`)이면 그 값이 그대로 INSERT된다. 복제본 Case 4: `RolledBack` | 이 PC에서 global-state로 배정된 대화 72개가 쓰는 프로젝트 26개가 **전부 레거시 ID**다. 이 폴더들로 가져오기를 지정하면 **항상 실패**한다 |
-| **D** | 같은 폴더가 서로 다른 프로젝트 ID로 여러 번 표시된다 | 레거시 ID와 SQLite ID를 통합하지 않는다(`app-server-project-id-by-legacy-project-id-by-host` 미사용). 실측: 같은 루트를 공유하는 카탈로그 프로젝트 묶음 2건 | 메인 목록 중복, 매핑 모호 |
+| **D** | 같은 폴더가 서로 다른 프로젝트 ID로 여러 번 표시된다 | 레거시 ID와 SQLite ID를 통합하지 않는다(`app-server-project-id-by-legacy-project-id-by-host` 미사용). 실측: 레거시/DB 중복 1건(9_1a에서 해소, 47→46). *(정정 2026-09-30: 처음 '묶음 2건'으로 적은 것은 Codex가 한 폴더를 서로 다른 DB 프로젝트 여러 개로 등록한 경우(4개·2개)이며 중복이 아니라 Ambiguous다.)* | 메인 목록 중복, 매핑 모호 |
 | **E** | Codex Desktop의 연결 정보 위치가 불확실하다 | `threadAssignmentsMigrated=false`, `threads.project_id` 채워진 행 416개 중 0개, global-state 배정 72건 | DB에 연결해도 Desktop 사이드바 반영이 미검증이다 |
 | **F** | 성공한 Import를 되돌릴 UI가 없다 | UI 명령은 `RecoverIncompleteApplyCommand`(중간 실패 복구)뿐이다 | CLAUDE.md §17 미충족 |
 | **G** | 가져오기 화면이 내부 용어 나열이다. 결과·위치 안내가 없다 | 스크린샷 | 사용자가 성공/실패와 위치를 알 수 없다 |
@@ -212,6 +212,33 @@ ImportResultViewModel(결과 + 어디로 들어갔는지 + 되돌리기 가능 �
 대화가 레거시 ID로 배정돼 있어도 매핑되는 DB 프로젝트와 같은 그룹에 모인다. 그룹 `ProjectId`는
 `DbProjectId ?? 레거시 ID`로 둔다. 기존 ViewModel이 쓰는 속성 이름은 바꾸지 않는다.
 (판정 로직 `CodexProjectResolver`의 authority 규칙은 그대로다. 결과 ID를 KnownProject로 정규화하는 단계만 추가한다.)
+
+### 4.4 9_1a 구현으로 확정된 사항 (2026-09-30 점검)
+
+- `ProjectDirectory`는 record가 아니라 sealed class다(생성자에서 만든 조회 인덱스를 `with` 복사로 어긋나게 하지 않기 위함).
+  `FindByKey`, `KnownProject.PrimaryId`(`DbProjectId ?? 레거시 원시 ID`), `IsLegacyOnly`가 추가됐다.
+- 카탈로그 그룹의 `ProjectEntry.ProjectId`는 `KnownProject.PrimaryId`다(`"legacy:"` 접두 Key는 밖으로 내보내지 않는다).
+- 보강 규칙: 존재하지 않는 DB ID를 가리키는 매핑은 "매핑 없음"으로 취급해 루트 규칙으로 판단한다. `local-projects`에 없는
+  레거시 ID라도 매핑 대상 DB가 실존하면 그 프로젝트의 레거시 ID로 등록한다. 레거시 ID 문자열이 DB ID와 같으면 같은 프로젝트다.
+- **ID는 PC마다 다르다(원칙).** `ConversationEntry.Project.ProjectId`(원시 배정)와 그룹 `ProjectEntry.ProjectId`는 다를 수 있다.
+  Export manifest에서 `projects[].projectId`(그룹 ID)와 대화의 `resolvedProjectId`(원시)가 다를 수 있다. 이 차이를 어디서도
+  연결 판정에 쓰지 않는다. 대상 PC에서의 연결은 **항상 루트 경로 → 대상 PC의 ProjectDirectory**로만 판정한다.
+  `MetadataDifferences.ProjectAssignmentDiffers`(원시 ID 비교)는 frozen이라 계산은 유지하되, 화면에서는 이 값 대신
+  `LocalLocation`(이 PC의 현재 위치)과 목적지를 비교해 보여준다(9_1b/9_2).
+- 구버전 백업(9_1a 이전 Export, manifest 프로젝트 ID가 레거시 ID)도 루트 기준 판정이라 그대로 동작해야 한다(9_1-T9).
+
+### 4.5 9_1b 구현으로 확정된 사항 (2026-10-01 점검)
+
+- `ProjectPathMapping.Status`의 Phase 6 의미는 그대로다. 자동 판정은 LinkExisting일 때만 `AutoLinked`, 나머지는 `NotFound`다.
+  수동 재지정은 항상 `ManuallyLinked`(= 사용자가 폴더를 골랐다)다. **실제 연결 여부의 기준은 `ProjectTarget`**(`SuggestedTarget` / `ResolvedTarget`)이다.
+- `ImportPreview.LocalProjectDirectory`(init)를 둔다. 수동 재지정도 같은 기준으로 다시 판정한다. `SuggestedTarget`/`ResolvedTarget`은 nullable이다(기존 생성자 호환).
+- Plan의 목적지는 Apply 시점에 fresh `ProjectDirectory`로 다시 판정한다. Kind와 LinkDbProjectId가 다르면 Operation Plan을 거부한다(쓰기 0건).
+  **예외: 판정할 폴더가 없던 목적지(OriginalRootMissing)는 다시 판정하지 않는다.** 그 사이 원본 폴더가 생겨도 미리보기대로 기타 대화로 들어간다.
+- **등록된 프로젝트라도 루트 폴더가 이 PC에 없으면 OriginalRootMissing(기타 대화)이다.** 예전에는 AutoLinked 후 Preflight
+  `TargetPathUnavailable`로 Apply 전체가 막혔다. 사용자는 9_2 화면에서 다른 폴더를 고를 수 있다.
+- Preflight: LinkExisting 대상 DB 프로젝트가 사라지면 `LocalStateChanged`, 폴더가 사라지면 `TargetPathUnavailable`이다.
+- Restore 테스트 fixture(`TestCodexHomeBuilder`)는 실측 스키마의 `projects`/`project_roots`/`project_idempotency_keys`와
+  `threads.project_id` 외래키를 가진다. 번들 e_sqlite3는 `foreign_keys` 기본값이 1이다. 그래서 가짜 프로젝트 ID는 즉시 FK 위반으로 드러난다.
 
 ---
 
@@ -556,9 +583,11 @@ Apply 전체를 막지는 않는다.
 ### 7.1 화면 상태 머신(`ImportWorkspaceViewModel.State`)
 
 ```text
-Closed ──[백업 불러오기]──▶ Opening(파일 선택)
+Closed ──[백업 가져오기]──▶ Opening(파일 선택)
 Opening ──취소──▶ Closed
-Opening ──파일 선택──▶ Analyzing(검증·비교 중, 진행률 + [취소])
+Opening ──파일 선택──▶ WaitingForCodexExit(Codex 실행 중일 때만: 안내 + [다시 확인] [닫기])
+WaitingForCodexExit ──Codex 종료 확인──▶ Analyzing
+Opening ──파일 선택(Codex 꺼져 있음)──▶ Analyzing(검증·비교 중, 진행률 + [취소])
 Analyzing ──실패──▶ Failed(원인·해결 방법, [다른 파일 선택] [닫기])
 Analyzing ──성공──▶ Editing(트리/선택/폴더/미리보기)
 Editing ──[N개 가져오기]──▶ Confirming(요약 대화상자)
@@ -567,10 +596,25 @@ Confirming ──확인──▶ Applying(단계 표시 + [적용 취소])
 Applying ──▶ Result(Succeeded | NothingToDo | NotReady | Cancelled | RolledBack | Critical)
 Result ──[목록에서 보기]/[닫기]──▶ Closed(메인 새로고침 + 강조)
 Result(NotReady: Codex 실행 중 등) ──[다시 시도]──▶ Editing(선택 유지, Plan 재생성)
+Editing ──Codex가 켜짐 감지──▶ Editing(잠김: 배너 + 가져오기 비활성, Codex 종료 후 [다시 분석])
 ```
 
-Editing 상태에서 Codex 실행 여부를 창 활성화 시점과 5초 주기(읽기 전용 프로세스 목록)로 확인한다.
-실행 중이면 상단에 경고 배너를 띄우고 가져오기 버튼을 비활성화한다. 사유는 버튼 옆에 적는다.
+**Codex 실행 정책(2026-09-30 결정, "B안")**
+
+| 기능 | Codex 실행 중일 때 |
+|---|---|
+| 대화 목록 보기 · 대화 내용 보기 | 허용(읽기 전용, 기존과 같음) |
+| 내보내기 | 허용. 시작 전에 "Codex에서 사용 중인 대화는 내보내기 도중 바뀌면 실패할 수 있습니다"라고 안내한다(차단하지 않음) |
+| **가져오기(분석 · 미리보기 · 적용 전체)** | **시작하지 않는다.** 파일을 고른 직후 Codex 실행 여부를 확인한다. 실행 중이면 분석 없이 "Codex를 종료한 뒤 [다시 확인]" 화면을 보여준다 |
+| 가져오기 기록 · 되돌리기(9_4) | 목록 보기는 허용, 되돌리기 실행은 종료 필요 |
+
+이유: 켜진 채로 분석하면 그 사이 Codex가 대화를 이어 써서, [적용] 순간 "이 PC 데이터가 바뀌었습니다"(`LocalStateChanged`)로
+거절되는 헷갈리는 실패가 생긴다. 분석 전부터 종료 상태를 요구하면 이런 실패가 원천적으로 줄어든다.
+`RestoreExecutor`의 이중 확인(시작 시 + 첫 쓰기 직전)은 그대로 유지한다. 화면 정책은 편의를 위한 것이고 최종 안전장치는 여전히 Core가 맡는다.
+
+Editing 상태에서도 Codex 실행 여부를 창 활성화 시점과 5초 주기(읽기 전용 프로세스 목록)로 계속 확인한다.
+도중에 Codex가 켜지면 상단 배너를 띄우고 가져오기 버튼을 비활성화한다. 분석 결과가 낡았을 수 있으므로
+Codex를 종료한 뒤 **[다시 분석]**을 누르게 한다. 사용자 선택과 폴더 지정은 유지하고 분석만 다시 한다.
 
 ### 7.2 레이아웃(Editing)
 
@@ -737,7 +781,9 @@ Editing 상태에서 Codex 실행 여부를 창 활성화 시점과 5초 주기(
 |---|---|---|
 | 백업 손상 | 백업 파일이 손상되었습니다(체크섬 불일치: ○○). | 원본 PC에서 다시 내보내 주세요 |
 | 지원 안 하는 포맷 | 이 백업은 지원하지 않는 형식(버전 N)입니다. | 최신 버전 프로그램으로 열어 주세요 |
-| Codex 실행 중 | Codex가 실행 중이라 가져올 수 없습니다. | Codex를 완전히 종료한 뒤 [다시 시도] |
+| Codex 실행 중(가져오기 시작 시) | 가져오기는 Codex를 종료한 상태에서만 할 수 있습니다. | Codex를 완전히 종료한 뒤 [다시 확인] |
+| Codex가 도중에 켜짐 | Codex가 실행되어 분석 결과가 바뀌었을 수 있습니다. | Codex를 종료한 뒤 [다시 분석] |
+| Codex 실행 중(내보내기) | Codex에서 사용 중인 대화는 내보내기 도중 바뀌면 실패할 수 있습니다. | 실패하면 Codex를 종료하고 다시 내보내기 |
 | 모두 이미 있음 | 선택한 대화는 모두 이미 이 PC에 있습니다. | 위치: 목록 표시. 연결을 바꾸려면 "연결만 변경"(9_3) |
 | 원본 폴더 없음 | 원본 폴더가 이 PC에 없습니다. 지정하지 않으면 기타 대화로 들어갑니다. | [폴더 선택…] |
 | 미등록 폴더(9_2까지) | Codex에 등록되지 않은 폴더입니다. 지금은 기타 대화로 들어갑니다. | Codex에서 폴더를 연 뒤 [새로고침] |
@@ -839,7 +885,7 @@ Codex app-server 검증은 **복제본 `rollout_path`를 복제본 경로로 먼
 - `threads` 416행 중 `project_id` 채워진 행 0개. `projects` 46개, `project_roots` 53개.
 - global-state: `projectsMigrated=true`, `threadAssignmentsMigrated=false`, `pendingThreadAssignmentIds` 12개,
   `thread-project-assignments` 72건(프로젝트 26개, 전부 레거시 ID, 전부 DB ID로 매핑됨).
-- 카탈로그 배정 출처: GlobalStateAssignment 72 · CwdFallback 42 · Unassigned 12. 같은 루트를 공유하는 카탈로그 프로젝트 묶음 2건.
+- 카탈로그 배정 출처: GlobalStateAssignment 72 · CwdFallback 42 · Unassigned 12. 같은 루트를 공유하는 카탈로그 프로젝트 묶음 2건(→ 정정: Codex 자체의 다중 등록, Ambiguous. 레거시/DB 중복은 별도 1건).
 - `threads.project_id REFERENCES projects(id) ON DELETE SET NULL`.
 
 ### 14.2 복제본 E2E
@@ -848,7 +894,7 @@ Codex app-server 검증은 **복제본 `rollout_path`를 복제본 경로로 먼
 - Case 1: 미등록 폴더 지정 → 무시됨.
 - Case 2: 대화 있는 DB ID 프로젝트 → 정상.
 - Case 3: 등록됐지만 대화 0개 프로젝트 지정 → 무시됨.
-- **Case 4: 레거시 ID 프로젝트 지정 → RolledBack**.
+- **Case 4: 레거시 ID 프로젝트 지정 → RolledBack**. *(9_1a 이후: 그룹 ID가 DB ID로 정규화되어 Succeeded, `threads.project_id`=실존 DB ID 확인)*
 
 ### 14.3 공식 소스(`openai/codex` `bcd6d9ab`)
 - `codex-rs/state/src/runtime/projects.rs` `create_project`: `BEGIN IMMEDIATE` → idempotency 조회 → thread 존재 확인 → `Uuid::now_v7()` →

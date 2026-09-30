@@ -56,7 +56,10 @@ public static class ImportPlanBuilder
         foreach (ImportProjectPreview project in preview.Projects)
         {
             string? targetPath = project.PathMapping.ResolvedLocalPath;
-            projects.Add(new ImportPlanProject(project.ProjectId, project.DisplayName, project.PathMapping.Status, targetPath));
+            projects.Add(new ImportPlanProject(project.ProjectId, project.DisplayName, project.PathMapping.Status, targetPath)
+            {
+                ResolvedTarget = project.SuggestedTarget,
+            });
 
             foreach (ImportConversationPreview conversation in project.Conversations)
             {

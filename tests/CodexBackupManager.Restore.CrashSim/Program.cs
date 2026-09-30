@@ -7,15 +7,23 @@ using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Restore;
 
+// Phase 9_1-01 — 테스트 전용 인자. 이 자식 프로세스가 호스트에서 실제로 실행 중인 Codex와 무관하게
+// 크래시 지점까지 도달하도록, 실제 프로세스 목록 대신 "Codex 없음" 목록을 쓴다. CrashSim은 테스트
+// 전용 exe이며 배포되지 않는다(제품 App에는 이런 인자가 없다). 가드 자체의 동작은
+// CodexProcessGuardTests가 검증한다.
+const string NoProcessGuardArgument = "--process-guard=none";
+bool noProcessGuard = Array.IndexOf(args, NoProcessGuardArgument) >= 0;
+args = Array.FindAll(args, a => !string.Equals(a, NoProcessGuardArgument, StringComparison.Ordinal));
+
 if (args.Length < 1)
 {
-    Console.Error.WriteLine("usage: CrashSim apply|lock-hold ...");
+    Console.Error.WriteLine("usage: CrashSim apply|lock-hold ... [--process-guard=none]");
     return 2;
 }
 
 return args[0] switch
 {
-    "apply" => RunApply(args),
+    "apply" => RunApply(args, noProcessGuard),
     "lock-hold" => RunLockHold(args),
     _ => Unknown(args[0]),
 };
@@ -26,7 +34,7 @@ static int Unknown(string command)
     return 2;
 }
 
-static int RunApply(string[] args)
+static int RunApply(string[] args, bool noProcessGuard)
 {
     if (args.Length < 5)
     {
@@ -64,8 +72,14 @@ static int RunApply(string[] args)
 
     var hook = new CrashAtPointHook(crashPoint, sentinelFilePath);
 
-    // production 진입점을 그대로 쓴다 — 실제 앱이 부르는 것과 동일한 경로다.
-    RestoreResult result = RestoreExecutor.Apply(plan, codexHomePath, snapshotRoot: snapshotRoot, faultInjection: hook);
+    // 기본은 production 진입점을 그대로 쓴다 — 실제 앱이 부르는 것과 동일한 경로다.
+    // --process-guard=none이면 프로세스 목록만 "Codex 없음"으로 바꾸고, fresh catalog 생성을 포함한
+    // 나머지는 production과 같은 코드(RestoreExecutor.BuildFreshCatalog)를 쓴다.
+    RestoreResult result = noProcessGuard
+        ? RestoreExecutor.Apply(
+            plan, codexHomePath, static () => [], RestoreExecutor.BuildFreshCatalog,
+            snapshotRoot: snapshotRoot, faultInjection: hook)
+        : RestoreExecutor.Apply(plan, codexHomePath, snapshotRoot: snapshotRoot, faultInjection: hook);
 
     // 정상적으로 여기까지 실행이 돌아왔다면(=crashPoint에서 멈추지 않았다면) 부모가 기대한 시나리오가
     // 아니다 — 부모가 이 출력으로 그 사실을 알 수 있게 한다.

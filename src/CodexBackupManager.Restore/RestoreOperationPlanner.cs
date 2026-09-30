@@ -11,6 +11,7 @@ using CodexBackupManager.Codex.Rollout;
 using CodexBackupManager.Codex.Threads;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Import;
+using CodexBackupManager.Domain.Codex.Projects;
 using CodexBackupManager.Domain.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Threads;
 using CodexBackupManager.Domain.Paths;
@@ -73,6 +74,14 @@ public static class RestoreOperationPlanner
         if (!schema.IsCompatible)
         {
             return Reject($"현재 state DB 스키마와 호환되지 않습니다: {string.Join(", ", schema.MissingColumns)}");
+        }
+
+        // Phase 9_1-08 — Plan에 freeze된 프로젝트 목적지가 지금(fresh 카탈로그) 판정과 같은지 확인한다. 다르면
+        // (연결 대상이 사라졌거나, 기타 대화로 계획했던 폴더가 그 사이 등록됐거나) 사용자가 본 미리보기와 다른
+        // 결과가 되므로 계획 자체를 거부한다. ResolvedTarget이 없는 이전 방식 Plan은 이 확인을 하지 않는다.
+        if (FindChangedProjectTarget(plan, freshLocalCatalog) is not null)
+        {
+            return Reject(ProjectTargetChangedMessage);
         }
 
         BackupReader reader = pinnedBackup.Reader;
@@ -462,6 +471,41 @@ public static class RestoreOperationPlanner
             ts.Year.ToString("D4"), ts.Month.ToString("D2"), ts.Day.ToString("D2"));
     }
 
+    /// <summary>Plan 목적지와 fresh 판정이 다를 때의 거부 사유(사용자 원문 없음).</summary>
+    internal const string ProjectTargetChangedMessage = "미리보기 이후 이 PC의 프로젝트 구성이 바뀌었습니다.";
+
+    /// <summary>
+    /// Phase 9_1-08 — freeze된 목적지(<see cref="ImportPlanProject.ResolvedTarget"/>)를 fresh 카탈로그의
+    /// <see cref="CodexCatalog.ProjectDirectory"/>로 같은 규칙(<see cref="ProjectTargetResolver.ResolveFolder"/>)으로 다시 판정해
+    /// <see cref="ProjectTarget.SameOutcomeAs"/>(Kind, LinkDbProjectId)가 아닌 첫 프로젝트를 돌려준다. 없으면 <c>null</c>.
+    /// </summary>
+    internal static ImportPlanProject? FindChangedProjectTarget(ImportPlan plan, CodexCatalog freshLocalCatalog)
+    {
+        foreach (ImportPlanProject project in plan.Projects)
+        {
+            if (project.ResolvedTarget is not { FolderPath: { } folder } frozen ||
+                frozen.Reason == ProjectTargetReason.NotApplicable)
+            {
+                continue; // 이전 방식 Plan, 판정할 폴더가 없던 목적지(원본 없음), 기타 대화 그룹
+            }
+
+            ProjectTarget fresh = ProjectTargetResolver.ResolveFolder(
+                folder, project.PathStatus == ProjectPathMappingStatus.ManuallyLinked, freshLocalCatalog.ProjectDirectory);
+            if (!fresh.SameOutcomeAs(frozen))
+            {
+                return project;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Phase 9_1-08(결함 C) — <c>threads.project_id</c>에 쓸 ID. fresh 카탈로그의 <see cref="CodexCatalog.ProjectDirectory"/>에서
+    /// 대상 폴더와 루트가 정확히 같은 프로젝트가 <b>하나</b>이고 그 프로젝트에 DB ID가 있을 때만 그 ID다
+    /// (<c>threads.project_id REFERENCES projects(id)</c>). 레거시 전용/Ambiguous/없음이면 <c>null</c>(기타 대화).
+    /// 대화가 0개인 등록 프로젝트도 여기서 찾는다(결함 A — 이전에는 대화가 있는 카탈로그 그룹만 봤다).
+    /// </summary>
     private static string? ResolveLocalProjectId(string? targetProjectPath, CodexCatalog freshLocalCatalog)
     {
         if (targetProjectPath is null || !CanonicalPath.TryCreate(targetProjectPath, out CanonicalPath? canonicalTarget, out _))
@@ -469,19 +513,8 @@ public static class RestoreOperationPlanner
             return null;
         }
 
-        foreach (ProjectEntry project in freshLocalCatalog.Projects)
-        {
-            foreach (string rootPath in project.RootPaths)
-            {
-                if (CanonicalPath.TryCreate(rootPath, out CanonicalPath? canonicalRoot, out _) &&
-                    canonicalRoot!.Equals(canonicalTarget!))
-                {
-                    return project.ProjectId;
-                }
-            }
-        }
-
-        return null;
+        ProjectLookupResult lookup = freshLocalCatalog.ProjectDirectory.FindByRoot(canonicalTarget!);
+        return lookup.Kind == ProjectLookupKind.Found ? lookup.Project!.DbProjectId : null;
     }
 
     private static string HashEntry(BackupReader reader, string entryPath)

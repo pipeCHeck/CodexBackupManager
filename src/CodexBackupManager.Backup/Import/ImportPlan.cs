@@ -100,7 +100,15 @@ public sealed record ImportPlanProject(
     string? ProjectId,
     string DisplayName,
     ProjectPathMappingStatus PathStatus,
-    string? TargetProjectPath);
+    string? TargetProjectPath)
+{
+    /// <summary>
+    /// (Phase 9_1-08) Plan 생성 시점에 확정된 목적지(<see cref="ImportProjectPreview.SuggestedTarget"/>를 그대로 freeze).
+    /// Apply는 fresh 카탈로그로 같은 폴더를 다시 판정해 <see cref="ProjectTarget.SameOutcomeAs"/>가 아니면 적용을 거부한다.
+    /// 9_1a 이전 방식으로 만든 Plan이면 <c>null</c>(그때는 <see cref="TargetProjectPath"/>만으로 판단한다).
+    /// </summary>
+    public ProjectTarget? ResolvedTarget { get; init; }
+}
 
 /// <summary>
 /// <see cref="ImportPreview"/>를 실제 Apply(Phase 7)가 받아 쓸 수 있는 형태로 <b>freeze</b>한 결과.

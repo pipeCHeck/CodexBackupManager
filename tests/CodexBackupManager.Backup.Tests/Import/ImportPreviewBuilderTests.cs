@@ -491,9 +491,15 @@ public sealed class ImportPreviewBuilderTests : IDisposable
     {
         string t = NewId();
         string aFile = WriteRollout(_pcADir, t, null, Line(0, "hello"));
+
+        // Phase 9_1b — 자동 연결은 이제 "이 PC에 실존하는 폴더 + 이 PC ProjectDirectory에 등록된 DB 프로젝트"일 때만
+        // 된다(결함 A/B). 공유 경로는 실제 temp 폴더로 만들고, 로컬 등록 프로젝트는 ProjectDirectory로 준다.
+        string sharedPath = Path.Combine(_pcBDir, "shared-path");
+        Directory.CreateDirectory(sharedPath);
+
         ConversationEntry entry = MakeEntry(t, projectId: "proj-a");
         var pcA = new CodexCatalog(
-            [new ProjectEntry("proj-a", "Project A", [@"C:\Shared\Path"], [entry])],
+            [new ProjectEntry("proj-a", "Project A", [sharedPath], [entry])],
             [entry],
             new Dictionary<string, ThreadChain> { [t] = Chain(t, [Ref(t, null, aFile)]) },
             [], DateTimeOffset.UtcNow, new CodexCatalogStats(1, 1, 1, TimeSpan.Zero, TimeSpan.Zero));
@@ -501,9 +507,16 @@ public sealed class ImportPreviewBuilderTests : IDisposable
 
         // 로컬 PC에 같은 canonical path를 가진 프로젝트가 있어 자동 연결되는 상황을 만든다.
         var localCatalog = new CodexCatalog(
-            [new ProjectEntry("local-proj", "Local Project", [@"C:\Shared\Path"], [])],
-            [], new Dictionary<string, ThreadChain>(), [], DateTimeOffset.UtcNow,
-            new CodexCatalogStats(0, 0, 1, TimeSpan.Zero, TimeSpan.Zero));
+            [], [], new Dictionary<string, ThreadChain>(), [], DateTimeOffset.UtcNow,
+            new CodexCatalogStats(0, 0, 0, TimeSpan.Zero, TimeSpan.Zero))
+        {
+            ProjectDirectory = new ProjectDirectory(
+            [
+                new KnownProject(
+                    "local-proj", "local-proj", new HashSet<string>(), "Local Project",
+                    [new KnownProjectRoot(sharedPath, Domain.Paths.CanonicalPath.Create(sharedPath), true)], 0),
+            ]),
+        };
 
         ImportPreview preview = ImportPreviewBuilder.Build(backupPath, localCatalog);
         ImportProjectPreview project = Assert.Single(preview.Projects);

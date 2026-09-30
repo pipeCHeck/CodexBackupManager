@@ -14,6 +14,7 @@ using CodexBackupManager.Codex.Threads;
 using CodexBackupManager.Codex.Titles;
 using CodexBackupManager.Domain.Codex;
 using CodexBackupManager.Domain.Codex.Catalog;
+using CodexBackupManager.Domain.Codex.Projects;
 using CodexBackupManager.Domain.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Sessions;
 using CodexBackupManager.Domain.Codex.Threads;
@@ -124,11 +125,52 @@ public static class CodexCatalogBuilder
             });
         }
 
-        List<ProjectEntry> projects = BuildProjectGroups(allConversations, rootCandidates, stateProjectNames, projectGraph);
+        // Phase 9_1-05 — 이 PC에 등록된 프로젝트 전체(대화 0개 포함)를 하나의 식별 규칙으로 합친다.
+        // CodexProjectResolver의 판정(원시 ID)은 그대로 두고, 그룹을 만들 때만 KnownProject.Key로 정규화한다.
+        IReadOnlyDictionary<string, string> legacyToDb = GlobalStateReader.ReadLegacyProjectIdMapping(
+            Path.Combine(root, CodexHomeLayout.GlobalStateFileName), installation.Home, out string? mappingWarning);
+        if (mappingWarning is not null)
+        {
+            warnings.Add($"글로벌 상태 읽기 경고: {mappingWarning}");
+        }
+
+        // Phase 9_1-11 — 비정상 데이터로 프로젝트 목록을 만들지 못해도 카탈로그 전체는 실패시키지 않는다.
+        // 충돌 항목은 Builder가 제외하고 경고를 남긴다. 그래도 실패하면(예상 밖) 빈 목록 + 경고다.
+        ProjectDirectory projectDirectory;
+        try
+        {
+            projectDirectory = ProjectDirectoryBuilder.Build(
+                stateProjects, stateProjectRoots, projectGraph?.LocalProjects, legacyToDb,
+                CountUserConversationsByRawProjectId(allConversations), warnings);
+        }
+        catch (ArgumentException)
+        {
+            projectDirectory = ProjectDirectory.Empty;
+            warnings.Add("프로젝트 목록을 만들 수 없어 프로젝트 연결 정보 없이 계속합니다.");
+        }
+
+        List<ProjectEntry> projects = BuildProjectGroups(allConversations, rootCandidates, stateProjectNames, projectGraph, projectDirectory);
 
         totalStopwatch.Stop();
         var stats = new CodexCatalogStats(files.Count, threadRows.Count, projects.Count, scanStopwatch.Elapsed, totalStopwatch.Elapsed);
-        return new CodexCatalog(projects, allConversations, chains, warnings, DateTimeOffset.UtcNow, stats);
+        return new CodexCatalog(projects, allConversations, chains, warnings, DateTimeOffset.UtcNow, stats)
+        {
+            ProjectDirectory = projectDirectory,
+        };
+    }
+
+    private static Dictionary<string, int> CountUserConversationsByRawProjectId(List<ConversationEntry> allConversations)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (ConversationEntry entry in allConversations)
+        {
+            if (entry.IsUserConversation && entry.Project.ProjectId is { } projectId)
+            {
+                counts[projectId] = counts.TryGetValue(projectId, out int count) ? count + 1 : 1;
+            }
+        }
+
+        return counts;
     }
 
     private static List<CodexProjectResolver.RootCandidate> BuildRootCandidates(
@@ -162,11 +204,19 @@ public static class CodexCatalogBuilder
         return candidates;
     }
 
+    /// <remarks>
+    /// Phase 9_1-05(결함 D) — 그룹 키는 원시 배정 ID가 아니라 <see cref="KnownProject.Key"/>다. 레거시 ID로
+    /// 배정된 대화와 DB ID/cwd 폴백으로 배정된 대화가 같은 프로젝트면 한 그룹이 된다. 그룹의
+    /// <see cref="ProjectEntry.ProjectId"/>는 <see cref="KnownProject.PrimaryId"/>(<c>DbProjectId ?? 레거시 ID</c>)이고,
+    /// 이름/루트도 그 <see cref="KnownProject"/>에서 가져온다. 어떤 프로젝트 목록에도 없는 원시 ID
+    /// (예: 삭제된 프로젝트를 가리키는 배정)는 예전처럼 그 ID 그대로 그룹을 만든다.
+    /// </remarks>
     private static List<ProjectEntry> BuildProjectGroups(
         List<ConversationEntry> allConversations,
         List<CodexProjectResolver.RootCandidate> rootCandidates,
         Dictionary<string, string?> stateProjectNames,
-        GlobalStateReader.ProjectGraph? projectGraph)
+        GlobalStateReader.ProjectGraph? projectGraph,
+        ProjectDirectory projectDirectory)
     {
         var byProject = new Dictionary<string, List<ConversationEntry>>(StringComparer.Ordinal);
         var uncategorized = new List<ConversationEntry>();
@@ -178,12 +228,13 @@ public static class CodexCatalogBuilder
                 continue; // guardian_review/subagent는 기본 목록에 독립 항목으로 노출하지 않는다.
             }
 
-            if (entry.Project.ProjectId is { } projectId)
+            if (entry.Project.ProjectId is { } rawProjectId)
             {
-                if (!byProject.TryGetValue(projectId, out List<ConversationEntry>? list))
+                string groupKey = projectDirectory.FindById(rawProjectId)?.Key ?? rawProjectId;
+                if (!byProject.TryGetValue(groupKey, out List<ConversationEntry>? list))
                 {
                     list = [];
-                    byProject[projectId] = list;
+                    byProject[groupKey] = list;
                 }
 
                 list.Add(entry);
@@ -195,12 +246,21 @@ public static class CodexCatalogBuilder
         }
 
         var result = new List<ProjectEntry>();
-        foreach ((string projectId, List<ConversationEntry> conversations) in byProject)
+        foreach ((string groupKey, List<ConversationEntry> conversations) in byProject)
         {
             List<ConversationEntry> sorted = conversations
                 .OrderBy(c => c.CreatedAtUtc ?? DateTimeOffset.MinValue)
                 .ToList();
 
+            if (projectDirectory.FindByKey(groupKey) is { } known)
+            {
+                List<string> knownRoots = known.Roots.Select(r => r.DisplayPath).ToList();
+                result.Add(new ProjectEntry(known.PrimaryId, known.DisplayName, knownRoots, sorted));
+                continue;
+            }
+
+            // 프로젝트 목록 어디에도 없는 원시 ID — 예전 규칙 그대로.
+            string projectId = groupKey;
             List<string> roots = rootCandidates
                 .Where(c => string.Equals(c.ProjectId, projectId, StringComparison.Ordinal))
                 .Select(c => c.Root.Display)

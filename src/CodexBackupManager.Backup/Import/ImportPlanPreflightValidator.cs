@@ -9,6 +9,7 @@ using CodexBackupManager.Codex.Revisions;
 using CodexBackupManager.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Import;
+using CodexBackupManager.Domain.Codex.Projects;
 using CodexBackupManager.Domain.Codex.Threads;
 using CodexBackupManager.Domain.Paths;
 
@@ -102,9 +103,20 @@ public static class ImportPlanPreflightValidator
             }
         }
 
+        // Phase 9_1-09 — 연결하기로 freeze한 DB 프로젝트가 지금도 이 PC에 있는지. 없어졌다면 로컬 Codex 상태가
+        // 미리보기 이후 바뀐 것이다(LocalStateChanged — 폴더 자체의 문제가 아니다).
         foreach (ImportPlanProject project in plan.Projects)
         {
-            Result? pathResult = CheckTargetPath(project);
+            Result? linkResult = CheckLinkTargetStillRegistered(project, currentLocalCatalog);
+            if (linkResult is not null)
+            {
+                return linkResult;
+            }
+        }
+
+        foreach (ImportPlanProject project in plan.Projects)
+        {
+            Result? pathResult = CheckTargetPath(project) ?? CheckLinkTargetFolder(project);
             if (pathResult is not null)
             {
                 return pathResult;
@@ -198,6 +210,37 @@ public static class ImportPlanPreflightValidator
         }
 
         return null;
+    }
+
+    private static Result? CheckLinkTargetStillRegistered(ImportPlanProject project, CodexCatalog currentLocalCatalog)
+    {
+        if (project.ResolvedTarget is not { Kind: ProjectTargetKind.LinkExisting, LinkDbProjectId: { } dbProjectId })
+        {
+            return null;
+        }
+
+        KnownProject? current = currentLocalCatalog.ProjectDirectory.FindById(dbProjectId);
+        if (current is null || !string.Equals(current.DbProjectId, dbProjectId, StringComparison.Ordinal))
+        {
+            return Result.Of(
+                ImportPlanPreflightStatus.LocalStateChanged,
+                $"미리보기 이후 이 PC에서 프로젝트 '{project.DisplayName}'의 연결 대상 프로젝트를 더 이상 찾을 수 없습니다. 다시 불러와 주세요.");
+        }
+
+        return null;
+    }
+
+    private static Result? CheckLinkTargetFolder(ImportPlanProject project)
+    {
+        if (project.ResolvedTarget is not { Kind: ProjectTargetKind.LinkExisting, FolderPath: { } folder } ||
+            Directory.Exists(folder))
+        {
+            return null;
+        }
+
+        return Result.Of(
+            ImportPlanPreflightStatus.TargetPathUnavailable,
+            $"프로젝트 '{project.DisplayName}'의 대상 폴더를 더 이상 찾을 수 없습니다.");
     }
 
     private static Result? CheckTargetPath(ImportPlanProject project)

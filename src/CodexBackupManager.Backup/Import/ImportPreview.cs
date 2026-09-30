@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using CodexBackupManager.Backup.Manifest;
 using CodexBackupManager.Domain.Codex.Import;
+using CodexBackupManager.Domain.Codex.Projects;
 
 namespace CodexBackupManager.Backup.Import;
 
@@ -60,7 +61,44 @@ public sealed record ImportConversationPreview(
     MetadataDifferences Metadata,
     IReadOnlyList<string> Warnings,
     ConversationRevision? LocalRevision,
-    ConversationRevision? IncomingRevision);
+    ConversationRevision? IncomingRevision)
+{
+    /// <summary>
+    /// (Phase 9_1-07) 이 대화가 대상 PC에 지금 어디에 있는지. Preview를 만들 때 채운다(없으면 <c>null</c> — 이전 방식으로
+    /// 직접 만든 레코드). 백업 쪽과의 원시 프로젝트 ID 비교(<see cref="MetadataDifferences.ProjectAssignmentDiffers"/>)는
+    /// PC마다 ID가 달라 화면에 쓰지 않고, 이 값으로 "이 PC 위치"를 보여준다.
+    /// </summary>
+    public ConversationLocalLocation? LocalLocation { get; init; }
+
+    /// <summary>(Phase 9_1-07) 백업 체인(조상 포함)에 <c>.jsonl.zst</c> 압축 rollout이 있는지.</summary>
+    public bool IsCompressedRollout { get; init; }
+
+    /// <summary>(Phase 9_1-07) 백업 체인에서 이 대화의 분기 조상 thread ID(뿌리 → 가까운 순). 자기 자신은 포함하지 않는다.</summary>
+    public IReadOnlyList<string> RequiredAncestorThreadIds { get; init; } = [];
+}
+
+/// <summary>
+/// 대화 하나의 "이 PC에서의 현재 위치"(Phase 9_1-07, 설계 §5.2).
+/// </summary>
+/// <param name="ExistsLocally">이 PC의 Codex에 이 thread가 이미 있는지.</param>
+/// <param name="KnownProjectKey">
+/// 이 PC에서 속한 프로젝트의 <see cref="Domain.Codex.Projects.KnownProject.Key"/>(원시 배정 ID를 ProjectDirectory로 정규화).
+/// 등록 목록에 없는 원시 ID면 그 ID 그대로. "기타 대화"거나 이 PC에 없으면 <c>null</c>.
+/// </param>
+/// <param name="ProjectDisplayName">그 프로젝트의 표시 이름. "기타 대화"거나 이 PC에 없으면 <c>null</c>.</param>
+/// <param name="Archived">이 PC에서 보관(archive) 상태인지. 없으면 <c>false</c>.</param>
+public sealed record ConversationLocalLocation(
+    bool ExistsLocally,
+    string? KnownProjectKey,
+    string? ProjectDisplayName,
+    bool Archived)
+{
+    /// <summary>이 PC에 없는 대화.</summary>
+    public static ConversationLocalLocation NotPresent { get; } = new(false, null, null, false);
+
+    /// <summary>이 PC에 있지만 "기타 대화"에 있는지.</summary>
+    public bool IsUncategorized => ExistsLocally && KnownProjectKey is null;
+}
 
 /// <summary>프로젝트 하나의 Import Preview 결과.</summary>
 /// <param name="ProjectId">backup 쪽 원본 프로젝트 ID. 미분류면 <c>null</c>.</param>
@@ -75,6 +113,13 @@ public sealed record ImportProjectPreview(
     ProjectPathMapping PathMapping,
     IReadOnlyList<ImportConversationPreview> Conversations)
 {
+    /// <summary>
+    /// (Phase 9_1-07) 이 프로젝트의 대상 PC 목적지 판정(<see cref="ProjectTargetResolver"/>). <see cref="PathMapping"/>은
+    /// Phase 6 호환용으로 그대로 두고, 실제로 연결되는지는 이 값이 말한다. Preview를 만들 때와 수동 재지정 때 채운다.
+    /// 이전 방식으로 직접 만든 레코드면 <c>null</c>.
+    /// </summary>
+    public ProjectTarget? SuggestedTarget { get; init; }
+
     /// <summary>이 프로젝트에서 특정 관계에 해당하는 대화 수(UI 요약용).</summary>
     public int CountOf(RevisionRelation relation) => Conversations.Count(c => c.Relation == relation);
 }
@@ -110,6 +155,13 @@ public sealed record ImportPreview(
     IReadOnlyList<string> Warnings,
     ImportBackupIdentity? SourceBackupIdentity)
 {
+    /// <summary>
+    /// (Phase 9_1-07) 이 Preview를 만들 때 쓴 대상 PC의 프로젝트 목록. 수동 재지정(<see cref="ImportPreviewBuilder.ApplyManualProjectPathOverride"/>)이
+    /// 같은 기준으로 목적지를 다시 판정하고, 화면이 연결 대상 이름을 보여줄 때 쓴다. Apply는 이 값을 쓰지 않고 fresh
+    /// 카탈로그로 다시 판정한다.
+    /// </summary>
+    public ProjectDirectory LocalProjectDirectory { get; init; } = ProjectDirectory.Empty;
+
     /// <summary>검증 실패 결과를 만든다.</summary>
     public static ImportPreview Failed(IReadOnlyList<string> validationErrors)
         => new(false, validationErrors, null, [], [], [], null);

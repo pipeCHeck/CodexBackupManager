@@ -69,14 +69,35 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         }
     }
 
+    /// <summary>호스트에서 실제로 실행 중인 프로세스와 무관한 "Codex 없음" 목록(Phase 9_1-01).</summary>
+    private static readonly CodexProcessGuard.RunningProcessLister NoCodexRunning = () => [];
+
+    /// <summary>가드가 실제로 막는지 확인할 때 쓰는 가짜 "Codex 실행 중" 목록.</summary>
+    private static readonly CodexProcessGuard.RunningProcessLister FakeCodexRunning =
+        () => [new RunningProcessInfo("Codex", null)];
+
+    /// <summary>
+    /// Phase 9_1-01 — ViewModel이 쓰는 Restore 호출(Apply/Recover)에 프로세스 목록만 주입한다. fresh
+    /// catalog 생성 등 나머지는 production과 같은 경로(<see cref="RestoreExecutor.BuildFreshCatalog"/>)다.
+    /// </summary>
+    private static void UseProcessLister(MainViewModel viewModel, CodexProcessGuard.RunningProcessLister lister)
+    {
+        viewModel.RestoreApply = (plan, codexHomePath, snapshotRoot, onStatusChanged, cancellationToken) => RestoreExecutor.Apply(
+            plan, codexHomePath, lister, RestoreExecutor.BuildFreshCatalog,
+            snapshotRoot: snapshotRoot, onStatusChanged: onStatusChanged, cancellationToken: cancellationToken);
+        viewModel.RecoveryProcessLister = lister;
+    }
+
     private MainViewModel CreateViewModel(
         string home,
         Func<string, string?>? exportFilePicker = null,
         Func<string?>? importFilePicker = null,
         Func<string?>? projectPathPicker = null,
         Func<string, string, bool>? confirmDialog = null,
-        Func<string>? snapshotRootProvider = null)
-        => new(
+        Func<string>? snapshotRootProvider = null,
+        CodexProcessGuard.RunningProcessLister? processLister = null)
+    {
+        var viewModel = new MainViewModel(
             new CodexDetectionService(),
             new SettingsStore(Path.Combine(_testDir!, $"settings-{Guid.NewGuid():N}.json")),
             new FileLogger(Path.Combine(_testDir!, "logs")),
@@ -86,6 +107,9 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
             projectPathPicker: projectPathPicker,
             confirmDialog: confirmDialog,
             snapshotRootProvider: snapshotRootProvider ?? (() => Path.Combine(_testDir!, "snapshots")));
+        UseProcessLister(viewModel, processLister ?? NoCodexRunning);
+        return viewModel;
+    }
 
     /// <summary>
     /// 같은 fixture를 복사한 source/target Codex Home 사이에서 Export → Import Preview까지 실행해
@@ -94,7 +118,9 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
     /// 안에서 confirmDialog만 다른 두 번째 importer가 필요하면 <see cref="CreateImporterForFrozenBackup"/>을
     /// 다시 부르면 된다(백업 파일을 다시 만들지 않는다).
     /// </summary>
-    private async Task<MainViewModel> BuildImporterWithFrozenPlanAsync(Func<string, string, bool>? confirmDialog = null)
+    private async Task<MainViewModel> BuildImporterWithFrozenPlanAsync(
+        Func<string, string, bool>? confirmDialog = null,
+        CodexProcessGuard.RunningProcessLister? processLister = null)
     {
         _sourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
         _targetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
@@ -111,7 +137,7 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         await WaitUntilFalse(() => exporter.IsExporting, "Export");
         Assert.True(File.Exists(_backupPath));
 
-        return await CreateImporterForFrozenBackupAsync(confirmDialog);
+        return await CreateImporterForFrozenBackupAsync(confirmDialog, processLister);
     }
 
     /// <summary>
@@ -122,14 +148,16 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
     /// 실제 데이터 특성이다) — 그래서 여기서 실제로 존재하는 임시 폴더로 수동 재지정까지 마친 뒤
     /// 돌려준다.
     /// </summary>
-    private async Task<MainViewModel> CreateImporterForFrozenBackupAsync(Func<string, string, bool>? confirmDialog = null)
+    private async Task<MainViewModel> CreateImporterForFrozenBackupAsync(
+        Func<string, string, bool>? confirmDialog = null,
+        CodexProcessGuard.RunningProcessLister? processLister = null)
     {
         string overrideFolder = Path.Combine(_testDir!, $"project-{Guid.NewGuid():N}");
         Directory.CreateDirectory(overrideFolder);
 
         MainViewModel importer = CreateViewModel(
             _targetHome!, importFilePicker: () => _backupPath, projectPathPicker: () => overrideFolder,
-            confirmDialog: confirmDialog);
+            confirmDialog: confirmDialog, processLister: processLister);
         importer.ChangeFolderCommand.Execute(null);
         await WaitUntilFalse(() => importer.IsBusy, "탐지");
         await WaitUntilFalse(() => importer.IsCatalogLoading, "카탈로그 로딩");
@@ -192,9 +220,9 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
     public async Task 완전히_동일한_대상에_Apply하면_NothingToDo로_끝나고_Plan을_무효화한다()
     {
         // 같은 fixture를 그대로 복사한 두 Codex Home 사이의 Apply이므로 opPlan은 항상 비어 있다
-        // (전부 Identical/NoOp) — Snapshot조차 만들지 않는 가장 안전한 경로다. RestoreExecutor는
-        // 여기서 production 진입점(CodexProcessGuard.SystemRunningProcessLister 포함)을 실제로
-        // 그대로 탄다 — 테스트 프로세스 이름이 "Codex"가 아니므로 통과한다.
+        // (전부 Identical/NoOp) — Snapshot조차 만들지 않는 가장 안전한 경로다. Phase 9_1-01부터
+        // 프로세스 목록만 "Codex 없음"으로 주입한다(호스트에서 Codex가 실행 중이어도 이 배선 테스트가
+        // 흔들리지 않게). 나머지 Restore 경로는 production과 같다.
         MainViewModel importer = await BuildImporterWithFrozenPlanAsync((_, _) => true);
 
         Assert.True(importer.ApplyCommand.CanExecute(null));
@@ -204,6 +232,22 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
         Assert.Contains("변경 사항이 없", importer.ApplyStatusText);
         Assert.Null(importer.CurrentImportPlan);
         Assert.False(importer.ApplyCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task Codex가_실행_중이면_Apply가_막히고_Plan은_그대로_남는다()
+    {
+        // Phase 9_1-01 — 테스트 격리 뒤에도 "Codex가 실행 중이면 적용이 막힌다"를 ViewModel 경로에서
+        // 확인한다. 가짜 Codex 프로세스 목록을 주입한다(실제 가드 판정 로직은 CodexProcessGuardTests).
+        MainViewModel importer = await BuildImporterWithFrozenPlanAsync((_, _) => true, FakeCodexRunning);
+        string snapshotRoot = Path.Combine(_testDir!, "snapshots");
+
+        importer.ApplyCommand.Execute(null);
+        await WaitUntilFalse(() => importer.IsApplying, "Apply");
+
+        Assert.Contains("실행 중", importer.ApplyStatusText);
+        Assert.NotNull(importer.CurrentImportPlan);
+        Assert.False(Directory.Exists(snapshotRoot) && Directory.EnumerateFileSystemEntries(snapshotRoot).Any());
     }
 
     [Fact]
@@ -313,6 +357,7 @@ public sealed class MainViewModelApplyTests : IAsyncLifetime
             new FileLogger(Path.Combine(_testDir, "logs")),
             folderPicker: () => currentFolder,
             snapshotRootProvider: () => snapshotRoot);
+        UseProcessLister(viewModel, NoCodexRunning);
 
         // Home B를 먼저 선택한다 — Home A에 대한 미완료 Apply가 여기 나타나면 안 된다.
         viewModel.ChangeFolderCommand.Execute(null);

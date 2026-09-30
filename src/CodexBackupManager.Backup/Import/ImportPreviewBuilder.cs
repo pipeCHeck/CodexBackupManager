@@ -8,8 +8,11 @@ using CodexBackupManager.Backup.Reading;
 using CodexBackupManager.Backup.Validation;
 using CodexBackupManager.Codex.Revisions;
 using CodexBackupManager.Codex.Rollout;
+using CodexBackupManager.Codex.Threads;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Import;
+using CodexBackupManager.Domain.Codex.Projects;
+using CodexBackupManager.Domain.Codex.Rollout;
 using CodexBackupManager.Domain.Codex.Threads;
 using CodexBackupManager.Domain.Paths;
 
@@ -80,19 +83,38 @@ public static class ImportPreviewBuilder
         Dictionary<string, ConversationEntry> localByThreadId = localCatalog.AllConversations
             .ToDictionary(e => e.ThreadId, StringComparer.OrdinalIgnoreCase);
 
+        // Phase 9_1-07 — 이 PC에서 각 대화가 속한 카탈로그 그룹(LocalLocation 계산용).
+        var localGroupByThreadId = new Dictionary<string, ProjectEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (ProjectEntry group in localCatalog.Projects)
+        {
+            foreach (ConversationEntry entry in group.Conversations)
+            {
+                localGroupByThreadId[entry.ThreadId] = group;
+            }
+        }
+
         var conversationPreviews = new Dictionary<string, ImportConversationPreview>(StringComparer.OrdinalIgnoreCase);
         foreach (BackupConversationMetadata conversation in manifest.Conversations)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            conversationPreviews[conversation.ThreadId] = BuildConversationPreview(
+            ImportConversationPreview conversationPreview = BuildConversationPreview(
                 conversation, localCatalog, localByThreadId, backupCatalog, backupSliceReader, localSliceReader, cancellationToken);
+            conversationPreviews[conversation.ThreadId] = conversationPreview with
+            {
+                LocalLocation = ResolveLocalLocation(conversation.ThreadId, localByThreadId, localGroupByThreadId, localCatalog.ProjectDirectory),
+                IsCompressedRollout = HasCompressedRollout(conversation.ThreadId, backupCatalog.Chains),
+                RequiredAncestorThreadIds = ResolveAncestors(conversation.ThreadId, backupCatalog.Chains),
+            };
         }
 
         var projectPreviews = new List<ImportProjectPreview>();
         var coveredSelectedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (BackupProjectMetadata project in manifest.Projects)
         {
-            ProjectPathMapping mapping = ProjectPathMapper.Resolve(project, localCatalog.Projects);
+            // Phase 9_1-07 — 목적지는 루트 경로 → 이 PC의 ProjectDirectory로만 판정한다(설계 §4.4). 호환용
+            // ProjectPathMapping은 그 판정에서 파생한다(LinkExisting → AutoLinked, 그 밖 → NotFound).
+            ProjectTarget target = ProjectTargetResolver.Resolve(project, userSelectedFolder: null, localCatalog.ProjectDirectory);
+            ProjectPathMapping mapping = ProjectTargetResolver.ToAutomaticMapping(project, target);
             List<ImportConversationPreview> conversations = project.ConversationThreadIds
                 .Where(conversationPreviews.ContainsKey)
                 .Select(id => conversationPreviews[id])
@@ -102,7 +124,10 @@ public static class ImportPreviewBuilder
                 coveredSelectedIds.Add(id);
             }
 
-            projectPreviews.Add(new ImportProjectPreview(project.ProjectId, project.DisplayName, mapping, conversations));
+            projectPreviews.Add(new ImportProjectPreview(project.ProjectId, project.DisplayName, mapping, conversations)
+            {
+                SuggestedTarget = target,
+            });
         }
 
         // manifest.projects[].conversationThreadIds에 포함되지 않은 선택 대화가 있으면(이론상
@@ -115,7 +140,10 @@ public static class ImportPreviewBuilder
         if (uncoveredSelected.Count > 0)
         {
             var fallbackMapping = new ProjectPathMapping(null, "기타 대화", [], ProjectPathMappingStatus.NotApplicable, null, null);
-            projectPreviews.Add(new ImportProjectPreview(null, "기타 대화", fallbackMapping, uncoveredSelected));
+            projectPreviews.Add(new ImportProjectPreview(null, "기타 대화", fallbackMapping, uncoveredSelected)
+            {
+                SuggestedTarget = ProjectTarget.Uncategorized(ProjectTargetReason.NotApplicable, null),
+            });
         }
 
         List<ImportConversationPreview> dependencyOnly = manifest.Conversations
@@ -125,7 +153,57 @@ public static class ImportPreviewBuilder
 
         List<string> warnings = [.. manifest.Warnings, .. backupCatalog.Warnings];
 
-        return new ImportPreview(true, [], manifest, projectPreviews, dependencyOnly, warnings, SourceBackupIdentity: null);
+        return new ImportPreview(true, [], manifest, projectPreviews, dependencyOnly, warnings, SourceBackupIdentity: null)
+        {
+            LocalProjectDirectory = localCatalog.ProjectDirectory,
+        };
+    }
+
+    private static ConversationLocalLocation ResolveLocalLocation(
+        string threadId,
+        Dictionary<string, ConversationEntry> localByThreadId,
+        Dictionary<string, ProjectEntry> localGroupByThreadId,
+        ProjectDirectory directory)
+    {
+        if (!localByThreadId.TryGetValue(threadId, out ConversationEntry? local))
+        {
+            return ConversationLocalLocation.NotPresent;
+        }
+
+        string? rawProjectId = local.Project.ProjectId;
+        if (rawProjectId is null)
+        {
+            return new ConversationLocalLocation(true, null, null, local.Archived);
+        }
+
+        KnownProject? known = directory.FindById(rawProjectId);
+        string? displayName = localGroupByThreadId.TryGetValue(threadId, out ProjectEntry? group) && !group.IsUncategorized
+            ? group.DisplayName
+            : known?.DisplayName;
+        return new ConversationLocalLocation(true, known?.Key ?? rawProjectId, displayName ?? rawProjectId, local.Archived);
+    }
+
+    private static bool HasCompressedRollout(string threadId, IReadOnlyDictionary<string, ThreadChain> backupChains)
+    {
+        if (!backupChains.ContainsKey(threadId))
+        {
+            return false;
+        }
+
+        var ignoredWarnings = new List<string>();
+        return ThreadDependencyResolver.ResolveChainLinks(threadId, backupChains, ignoredWarnings, out _)
+            .Any(link => link.Files.Any(f => f.Kind == RolloutFileKind.ZstdCompressed));
+    }
+
+    private static IReadOnlyList<string> ResolveAncestors(string threadId, IReadOnlyDictionary<string, ThreadChain> backupChains)
+    {
+        if (!backupChains.ContainsKey(threadId))
+        {
+            return [];
+        }
+
+        IReadOnlyList<string> ancestry = ThreadChainResolver.ResolveAncestry(threadId, backupChains, out _);
+        return ancestry.Where(id => !string.Equals(id, threadId, StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
     private static ImportConversationPreview BuildConversationPreview(
@@ -276,8 +354,13 @@ public static class ImportPreviewBuilder
         ImportProjectPreview target = preview.Projects[matchIndex];
         ProjectPathMapping updatedMapping = target.PathMapping.WithManualOverride(canonical.Display);
 
+        // Phase 9_1-07 — ManuallyLinked는 "사용자가 폴더를 직접 골랐다"는 뜻 그대로다(frozen). 실제로 연결되는지는
+        // 같은 ProjectDirectory 기준으로 다시 판정한 SuggestedTarget이 말한다.
+        ProjectTarget suggested = ProjectTargetResolver.Resolve(
+            target.PathMapping.OriginalRootPaths, canonical.Display, preview.LocalProjectDirectory);
+
         List<ImportProjectPreview> updatedProjects = preview.Projects.ToList();
-        updatedProjects[matchIndex] = target with { PathMapping = updatedMapping };
+        updatedProjects[matchIndex] = target with { PathMapping = updatedMapping, SuggestedTarget = suggested };
 
         return preview with { Projects = updatedProjects };
     }

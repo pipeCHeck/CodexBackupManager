@@ -213,10 +213,11 @@ public sealed class RestoreExecutorTests : IDisposable
         // 되지만(경로가 다르다), 사용자가 수동으로 재지정하면 그 경로로 project_id가 해석된다.
         string overrideFolder = Path.Combine(_root, $"remapped-project-{Guid.NewGuid():N}");
         Directory.CreateDirectory(overrideFolder);
-        var pcBBefore = new CodexCatalog(
-            [new ProjectEntry("local-proj", "Local Project", [overrideFolder], [])],
-            [], new Dictionary<string, ThreadChain>(),
-            [], DateTimeOffset.UtcNow, new CodexCatalogStats(0, 0, 1, TimeSpan.Zero, TimeSpan.Zero));
+
+        // Phase 9_1b — 로컬 프로젝트는 실제 state DB에 등록된 프로젝트여야 한다(threads.project_id는
+        // projects(id) 외래키다). 이전에는 카탈로그에만 있는 가짜 프로젝트 ID를 썼고, 외래키가 없는 fixture라 통과했다.
+        TestCodexHomeBuilder.InsertProject(_pcBHome, "local-proj", "Local Project", overrideFolder);
+        CodexCatalog pcBBefore = BuildFreshPcBCatalog();
 
         ImportPreview preview = ImportPreviewBuilder.Build(backupPath, pcBBefore);
         Assert.True(preview.Success, string.Join(";", preview.ValidationErrors));

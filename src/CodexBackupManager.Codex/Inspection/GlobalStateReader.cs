@@ -269,6 +269,136 @@ public static class GlobalStateReader
             ? value.GetString()
             : null;
 
+    /// <summary>
+    /// 레거시 프로젝트 ID → SQLite <c>projects.id</c> 매핑이 담긴 최상위 키(Phase 9_1-02).
+    /// Desktop이 프로젝트 migration 중에 host별로 기록한다.
+    /// </summary>
+    /// <remarks>
+    /// <code>
+    /// "app-server-project-id-by-legacy-project-id-by-host": {
+    ///   "local:C:\\Users\\User\\.codex": { "&lt;legacyId&gt;": "&lt;dbProjectId&gt;", ... }
+    /// }
+    /// </code>
+    /// </remarks>
+    public const string LegacyProjectIdMappingKey = "app-server-project-id-by-legacy-project-id-by-host";
+
+    private const string LocalHostKeyPrefix = "local:";
+
+    /// <summary>
+    /// 레거시 프로젝트 ID → DB 프로젝트 ID 매핑을 읽는다(Phase 9_1-02). 읽기 전용이다.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// host key는 <c>"local:" + 경로</c>이고, 그 경로를 <paramref name="codexHome"/>과 canonical로 비교해 고른다.
+    /// 다른 host key의 매핑은 쓰지 않는다 — 다른 Codex Home의 ID를 이 Home에 섞지 않기 위함이다.
+    /// </para>
+    /// <para>
+    /// 파일이 없거나, 키가 없거나, 형식이 다르면 <b>예외 없이 빈 매핑</b>을 돌려주고 이유를
+    /// <paramref name="warning"/>에 남긴다. 값이 문자열이 아닌 항목은 건너뛴다.
+    /// 경고 문구에는 경로/ID 원문을 넣지 않는다.
+    /// </para>
+    /// </remarks>
+    /// <param name="globalStateFilePath"><c>.codex-global-state.json</c> 전체 경로.</param>
+    /// <param name="codexHome">현재 Codex Home.</param>
+    /// <param name="warning">
+    /// 형식 이상으로 빈 매핑을 돌려줬거나 일부 항목을 건너뛴 이유. 문제가 없거나 키/파일이 아예 없으면 <c>null</c>.
+    /// </param>
+    public static IReadOnlyDictionary<string, string> ReadLegacyProjectIdMapping(
+        string globalStateFilePath,
+        CanonicalPath codexHome,
+        out string? warning)
+    {
+        ArgumentNullException.ThrowIfNull(codexHome);
+        warning = null;
+        var empty = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            var file = new FileInfo(globalStateFilePath);
+            if (!file.Exists)
+            {
+                return empty; // global-state 자체가 없는 Home — 매핑 없음은 정상 상태다.
+            }
+
+            if (file.Length > MaxFileSizeBytes)
+            {
+                warning = "데스크톱 앱 상태 파일이 예상보다 너무 커서 프로젝트 ID 매핑을 읽지 않았습니다.";
+                return empty;
+            }
+
+            using FileStream stream = new(globalStateFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using JsonDocument document = JsonDocument.Parse(stream);
+            JsonElement root = document.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty(LegacyProjectIdMappingKey, out JsonElement byHost))
+            {
+                return empty; // 매핑을 기록하지 않은 Desktop 버전 — 경고할 일이 아니다.
+            }
+
+            if (byHost.ValueKind != JsonValueKind.Object)
+            {
+                warning = $"'{LegacyProjectIdMappingKey}' 형식이 예상과 달라 프로젝트 ID 매핑을 쓰지 않습니다.";
+                return empty;
+            }
+
+            JsonElement? hostMapping = null;
+            foreach (JsonProperty host in byHost.EnumerateObject())
+            {
+                if (host.Name.StartsWith(LocalHostKeyPrefix, StringComparison.Ordinal) &&
+                    HostKeyMatches(host.Name, codexHome))
+                {
+                    hostMapping = host.Value;
+                    break;
+                }
+            }
+
+            if (hostMapping is not { } mapping)
+            {
+                return empty; // 현재 Home에 대한 매핑이 없다. 다른 host key는 쓰지 않는다.
+            }
+
+            if (mapping.ValueKind != JsonValueKind.Object)
+            {
+                warning = "현재 Codex Home의 프로젝트 ID 매핑 형식이 예상과 달라 쓰지 않습니다.";
+                return empty;
+            }
+
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            int skipped = 0;
+            foreach (JsonProperty entry in mapping.EnumerateObject())
+            {
+                if (entry.Name.Length > 0 &&
+                    entry.Value.ValueKind == JsonValueKind.String &&
+                    entry.Value.GetString() is { Length: > 0 } dbProjectId)
+                {
+                    result[entry.Name] = dbProjectId;
+                }
+                else
+                {
+                    skipped++;
+                }
+            }
+
+            if (skipped > 0)
+            {
+                warning = $"프로젝트 ID 매핑 중 형식이 다른 항목 {skipped}개를 건너뛰었습니다.";
+            }
+
+            return result;
+        }
+        catch (JsonException)
+        {
+            warning = "데스크톱 앱 상태 파일을 JSON으로 해석할 수 없어 프로젝트 ID 매핑을 쓰지 않습니다.";
+            return empty;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warning = "데스크톱 앱 상태 파일을 읽을 수 없어 프로젝트 ID 매핑을 쓰지 않습니다.";
+            return empty;
+        }
+    }
+
     internal static bool HostKeyMatches(string hostKey, CanonicalPath codexHome)
     {
         int separator = hostKey.IndexOf(':');
