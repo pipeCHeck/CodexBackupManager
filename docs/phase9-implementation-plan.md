@@ -99,7 +99,7 @@
 | 9_0-A | Desktop 반영 실험 1 (DB 연결만) | 🟩 완료 — **결과 (a)** | 9_1 ✅ | 사용자 + 관리 |
 | 9_2 | 가져오기 작업 공간(새 화면) + 사용자 선택 | 🟨 점검 중 | 9_1 | 구현 |
 | 9_2b | 백업 속 대화 내용 미리보기 | 🟩 완료 | 9_2 | 구현 |
-| 9_5 | 자동 프로젝트 생성(최종 목표) | 🟦 구현 중 | 9_2 ✅, 9_0-A (a) ✅ | 구현 |
+| 9_5 | 자동 프로젝트 생성(최종 목표) | 🟦 구현 중 — 9_5-1 ✅, 9_5-2(새 폴더 만들기) 진행 | 9_2 ✅, 9_0-A (a) ✅ | 구현 |
 | 9_5a | (조건부) global-state 연결 기록 | ~~취소~~ (9_0-A 결과 (a)라 불필요) | — | — |
 | 9_0-B | Desktop 반영 실험 2 (자동 생성 프로젝트) | ⛔ 보류 | 9_5 개발 빌드(9_5-2 포함) | 사용자 + 관리 |
 | 9_6 | 내보내기 완료 안내 · 목록 텍스트 저장 (추가 요청) | ⬜ 대기 | — (9_5-2 다음, 9_0-B와 병행 가능) | 구현 |
@@ -153,7 +153,7 @@
 - [x] **9_1-14** (9_1b 점검 후속) 자동 LinkExisting의 `FolderPath`/`TargetProjectPath`(→ cwd)를 백업 원본 문자열이 아니라 이 PC `project_roots`에 저장된 루트 표기로 쓴다(canonical은 같아도 표기가 다를 수 있음)
 - [x] **9_1-15** (9_2-1 점검에서 발견) `CodexProcessGuardTests.실제로_띄운_자식_프로세스의_ProcessName과_경로를_정확히_캡처한다`가 목록의 **첫** `cmd`를 검사해 병렬 실행 시 간헐 실패(07_01부터 존재) → 띄운 자식 프로세스를 특정해 검사하도록 수정 — *9_2-2에서 PID로 특정하도록 고쳤으나 다시 간헐 실패. 관리 대화방 재현(부하 중 150회 → 5회): **방금 띄운 자식의 `MainModule` 경로를 아직 읽을 수 없어 null**인 타이밍 문제가 실제 원인. 9_2-3에서 재수정*
 - [x] **9_1-16** (9_2-1 점검 결정) 수동 지정(UserSelectedRegistered)도 cwd/ResolvedLocalPath를 등록 루트 표기로 통일
-- [ ] **9_1-17** (9_2-4 보고) `CrashRecoveryIntegrationTests.같은_Codex_Home에서_동시에_Apply를…`가 전체 동시 실행 중 간헐 실패 — 자식 프로세스가 쓰는 중인 ready 파일을 `File.ReadAllText`로 읽다가 sharing violation(07_03부터). 읽기 성공 + 내용 확인까지 조건 대기로 수정
+- [x] **9_1-17** (9_2-4 보고) `CrashRecoveryIntegrationTests.같은_Codex_Home에서_동시에_Apply를…`가 전체 동시 실행 중 간헐 실패 — 자식 프로세스가 쓰는 중인 ready 파일을 `File.ReadAllText`로 읽다가 sharing violation(07_03부터). 읽기 성공 + 내용 확인까지 조건 대기로 수정
 
 ### 5.2 테스트
 
@@ -268,22 +268,23 @@
 **목표**: 폴더를 고르면(또는 원본 폴더가 실존하는데 미등록이면) 그 경로를 루트로 하는 프로젝트를 만들고 가져온 대화를 연결한다.
 **설계 참조**: §6 "9_5", §7.3, §8.
 
-- [ ] **9_5-01** `PlannedProjectCreate` + Planner: fresh 재판정(계획과 다르면 거부 — 9_5-1 프롬프트 결정), 같은 루트 CreateNew 합치기, 이름/루트/idempotency key 규칙
-- [ ] **9_5-02** `StateDatabaseWriter.CreateProject`: 공식 `create_project`와 같은 순서(idempotency 조회 → 트랜잭션 내 루트 충돌 재확인 → projects → project_roots → thread INSERT → idempotency 키), thread INSERT보다 먼저
-- [ ] **9_5-03** `SchemaCompatibilityChecker`에 projects/project_roots/project_idempotency_keys와 threads.project_id FK 게이트. 실패 시 `CreationUnsupported`(생성만 포기)
-- [ ] **9_5-04** `RestoreValidator` 사후 검증(프로젝트/루트/키 행, thread `project_id`/`cwd`, fresh ProjectDirectory 반영)
-- [ ] **9_5-05** Preview/화면: CreateNew 목적지와 이름 편집 칸, 백업 "기타 대화" 그룹에도 폴더 지정 허용, 확인과 결과 화면에 "새로 만들 프로젝트" 표시
-- [ ] **9_5-06** 기능 스위치(internal, 9_0-A (a)라 기본 켜짐)
-- [ ] **9_5-T1** 미등록 폴더 → 생성 + 연결 + cwd, 공식 SQL 불변식(position=MAX+1, 루트 position 0, 키 행)
-- [ ] **9_5-T2** 같은 백업 재가져오기 → 재사용(중복 0), 계획 후 같은 루트가 등록되면 거부·쓰기 0, 같은 폴더 백업 프로젝트 2개 → 생성 1회
-- [ ] **9_5-T3** fault injection 3지점 → Rollback 후 프로젝트 행 없음, CrashSim 강제 종료 → 복구
-- [ ] **9_5-T4** 스키마 게이트 실패 → 생성 생략 + 기타 대화 + 경고, Apply 성공
-- [ ] **9_5-T5** 복제본 E2E(원본 해시 불변)
+- [x] **9_5-01** `PlannedProjectCreate` + Planner: fresh 재판정(계획과 다르면 거부 — 9_5-1 프롬프트 결정), 같은 루트 CreateNew 합치기, 이름/루트/idempotency key 규칙
+- [x] **9_5-02** `StateDatabaseWriter.CreateProject`: 공식 `create_project`와 같은 순서(idempotency 조회 → 트랜잭션 내 루트 충돌 재확인 → projects → project_roots → thread INSERT → idempotency 키), thread INSERT보다 먼저
+- [x] **9_5-03** `SchemaCompatibilityChecker`에 projects/project_roots/project_idempotency_keys와 threads.project_id FK 게이트. 실패 시 `CreationUnsupported`(생성만 포기)
+- [x] **9_5-04** `RestoreValidator` 사후 검증(프로젝트/루트/키 행, thread `project_id`/`cwd`, fresh ProjectDirectory 반영)
+- [x] **9_5-05** Preview/화면: CreateNew 목적지와 이름 편집 칸, 백업 "기타 대화" 그룹에도 폴더 지정 허용, 확인과 결과 화면에 "새로 만들 프로젝트" 표시
+- [x] **9_5-06** 기능 스위치(internal, 9_0-A (a)라 기본 켜짐)
+- [x] **9_5-T1** 미등록 폴더 → 생성 + 연결 + cwd, 공식 SQL 불변식(position=MAX+1, 루트 position 0, 키 행)
+- [x] **9_5-T2** 같은 백업 재가져오기 → 재사용(중복 0), 계획 후 같은 루트가 등록되면 거부·쓰기 0, 같은 폴더 백업 프로젝트 2개 → 생성 1회
+- [x] **9_5-T3** fault injection 3지점 → Rollback 후 프로젝트 행 없음, CrashSim 강제 종료 → 복구
+- [x] **9_5-T4** 스키마 게이트 실패 → 생성 생략 + 기타 대화 + 경고, Apply 성공
+- [x] **9_5-T5** 복제본 E2E(원본 해시 불변)
 
 **9_5-2 — [새 폴더 만들기]** (2026-10-01 추가 요청, 설계 §6 "9_5-2")
 - [ ] **9_5-07** [새 폴더 만들기] 버튼(백업 프로젝트 행 + 백업 "기타 대화" 그룹): 이름 규칙, 같은 이름이면 ` (2)`, 만든 뒤 폴더 지정과 같게 처리 → CreateNew
 - [ ] **9_5-08** 새 폴더 위치(기본 `문서\ChatGPT`) 표시 + [변경…], `AppSettings.NewProjectFolderBase` 저장
 - [ ] **9_5-09** 이 화면에서 만든 폴더가 쓰이지 않고 완전히 비어 있으면 정리(비재귀 삭제만, 적용 성공 후에는 남김)
+- [ ] **9_5-10** (9_5-1 보고 Q2) 결과 화면: 새 프로젝트 목적지 그룹에 섞인 이어받기 대화는 "→ 새로 만든 프로젝트"가 아니라 실제 위치(기존 위치 유지)로 표시
 - [ ] **9_5-T6** 이름 정리(금지 문자·예약어·길이·빈 값)·중복 번호·만들기 실패 처리, 정리 규칙(비어 있지 않으면 안 지움), App 바인딩
 
 ### 9.1 9_5a — (조건부) global-state 연결 기록
@@ -380,6 +381,8 @@
 | 2026-10-01 | 9_4-1 | 프롬프트 초안(미발행) | `docs/phase9-prompts/9_4-1.md` — 9_0-A 결과가 먼저 나와 원래 순서(9_5→9_3→9_4)로 복귀, 실측 반영해 보관 |
 | 2026-10-01 | 9_0-A | **완료 — 결과 (a)** | 다른 PC(ProController) 백업(대화 5개, 전부 새 대화, 원본 폴더 모두 이 PC에 없음). 사용자가 `.codex` 전체 복사(`.codex-before-9_0`, 파일 11,568개·해시 일치 확인) → 관리 대화방 기준값 기록 → 앱으로 "PPT 뒤에 셰이더 과제 추가" 1개를 "GI8_2_ShaderRendering_260825"(대화 있는 등록 프로젝트) 폴더로 지정해 가져오기 → `threads.project_id`=그 DB ID, cwd=대상 루트, global-state·session_index·thread_history 무변경 → **Codex Desktop 사이드바에서 그 프로젝트 아래에 표시(a)**. Desktop 실행 후에도 `project_id` 유지, global-state 배정(72건)·`threadAssignmentsMigrated=false` 그대로. Desktop이 켜지면서 가져온 행의 `updated_at_ms`를 갱신하고 cwd를 `\\?\` 형식으로 정규화(열지 않아도). 실험 전에 사용자가 같은 백업의 "비행기 만들기" 대화 1개를 먼저 가져와 Codex에서 사용 → 기타 대화로 정상 동작, 열자 `thread_history_1.sqlite`(`thread_turns`/`thread_items`/`thread_history_projection_state`.`thread_id`)와 global-state `electron-persisted-atom-state`에 흔적 생성 확인. → 9_5a 불필요, 9_5 진행 |
 | 2026-10-01 | 9_5-1 | 프롬프트 발행 | `docs/phase9-prompts/9_5-1.md` |
+| 2026-10-01 | 9_5-1 점검 | **통과** | 빌드 경고 0 · 테스트 752/752(가짜 `codex` 실행 중/없이 각각 직접 재현). 코드 검토: Writer가 같은 트랜잭션에서 공식 순서(키 → 트랜잭션 안 루트 재확인 → projects → roots → thread → 키), read-only 가드에 `PRAGMA FOREIGN_KEY_LIST(` 추가(연결 자체가 `mode=ro&immutable=1`이라 방어선 약화 없음). **9_5-T5 복제본 E2E 22/22**(실제 `.codex`를 SQLite backup API로 복제, 다른 PC 백업 사용): 게이트 Supported, 삼각형→새 폴더(이름=폴더 이름)·기타 대화→새 폴더(이름 앞뒤 공백 제거) 새 프로젝트 2개, position MAX+1/+2, UUIDv7, metadata `{}`, 루트 position 0·경로 그대로, 키 160자, 대화 project_id·cwd, fresh catalog 그룹 표시, 재가져오기 → LinkExisting·NothingToDo·중복 0, 두 프로젝트를 같은 폴더로(끝 구분자 차이) → 1개로 합쳐 대화 3개, 계획 후 같은 루트(대문자 표기) 등록 → NotReady·쓰기 0. 원본 해시 불변. 결정: Q1 → 9_0-B 확인 목록, Q2 → 9_5-10, Q3 고아 키 수용(형식이 달라 겹치지 않음), Q4 수용, Q5 이름 규칙은 공식과 같게(공백만 거부). 설계 §6 9_5의 "LinkExisting 전환"은 **거부**로 확정 |
+| 2026-10-01 | 9_5-2 | 프롬프트 발행 | `docs/phase9-prompts/9_5-2.md` |
 | 2026-10-01 | 추가 요청 | 계획 반영 | 사용자 요청 3건: ① 내보내기 완료 안내 + 목록 txt → **9_6** 신설, ② 미등록 폴더 즉시 적용 → 9_5-1 범위 그대로, ③ [새 폴더 만들기] → **9_5-2**(9_5-07~09·T6). 순서: 9_5-1 → 9_5-2 → (9_0-B ∥ 9_6) → 9_3 → 9_4 |
 
 ## 14. 변경 이력
@@ -397,3 +400,4 @@
 | 2026-10-01 | 9_2-4 점검 반영: 9_2b-06·9_2-30~32 체크, 9_1-17·9_4-06~08·9_4-T5·T6 추가, 9_4를 9_5보다 먼저 진행 |
 | 2026-10-01 | 9_0-A 결과 (a) 반영: 9_0-A1~A7·9_5a-00 체크, 9_5a 취소, 순서를 9_5→9_3→9_4로 복귀 |
 | 2026-10-01 | 사용자 추가 요청 반영: 9_5-2(9_5-07~09·T6)·9_6(9_6-01~03·T1·T2) 추가, 9_5-01·06·T2 문구를 9_5-1 프롬프트 결정과 맞춤 |
+| 2026-10-01 | 9_5-1 점검 반영: 9_1-17·9_5-01~06·T1~T5 체크, 9_5-10 추가 |

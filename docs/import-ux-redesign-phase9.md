@@ -277,6 +277,19 @@ ImportResultViewModel(결과 + 어디로 들어갔는지 + 되돌리기 가능 �
 
 ---
 
+### 4.9 9_5-1 구현으로 확정된 사항 (2026-10-01 점검)
+
+- 생성 가능 여부는 카탈로그의 `ProjectDirectory.ProjectCreation`(`Disabled`/`Supported`/`SchemaUnsupported`)이다. Codex 층 `ProjectCreationSchemaGate`가 PRAGMA로 판정한다.
+  internal 기능 스위치 `ProjectCreationSchemaGate.FeatureEnabled`(기본 true)가 꺼지면 `Disabled`다.
+- "만들지 않기"는 `ProjectTargetDecision.CreateProject = false`다. 목적지는 같은 사유의 Uncategorized가 되고 폴더는 유지된다.
+- 새 프로젝트 이름: 사용자 입력을 trim한다. 비면 선택 오류다. 기본값은 폴더 이름이다. 길이·문자 제한은 두지 않는다(공식 `validate_name`과 같음).
+- 같은 canonical 루트의 CreateNew는 `NewProjectGrouping` 한 규칙으로 합친다(화면 요약, Planner, 결과 화면 공통). 이름은 Plan 순서의 첫 번째를 쓰고 경고를 띄운다.
+- fresh 재판정: CreateNew로 freeze했는데 결과가 달라지면 거부한다. Uncategorized로 freeze(만들지 않기, 또는 선택 없는 이전 방식 Plan)했는데 fresh가 CreateNew면 같은 상태("여전히 미등록")로 본다.
+- 선택 없는 이전 방식 Plan(`Build(preview, path)`)은 프로젝트를 만들지 않는다(0.1.3과 같은 결과).
+- 이어받기(Update) 대화만 가는 CreateNew 목적지로는 프로젝트를 만들지 않는다. 기존 대화의 연결 변경은 9_3에서 한다.
+- 스키마 게이트는 세 번 확인한다: 카탈로그, Planner(파일 read-only), 쓰기 트랜잭션 안.
+- 실측(이 PC): `project_idempotency_keys`에는 FK가 없다. 기존 키 53개 중 7개는 없는 프로젝트를 가리킨다(고아). 기존 키는 UUID 36자라 이 앱의 키와 겹치지 않는다.
+
 ## 5. 도메인 모델 변경
 
 모든 추가는 기존 레코드에 **옵션 필드 추가** 또는 **새 레코드**로 한다. 기존 생성자와 시그니처는 유지한다.
@@ -545,12 +558,12 @@ Compute(preview, choices) → SelectionSummary
 사용자가 폴더를 지정한 경우다.
 
 **계획(Planner)**
-1. fresh ProjectDirectory로 대상 canonical 루트를 다시 조회한다. 그 사이 등록됐으면 **LinkExisting으로 전환**한다(중복 생성 금지, TOCTOU).
+1. fresh ProjectDirectory로 대상 canonical 루트를 다시 판정한다. 그 사이 등록됐거나 생성을 지원하지 않게 됐으면 **Apply를 거부**한다(중복 생성 금지, TOCTOU). 다시 분석하면 LinkExisting 제안을 받는다(9_5-1에서 확정).
 2. 같은 Plan 안에서 같은 canonical 루트를 가진 CreateNew가 여러 개면 **하나로 합친다**(백업 프로젝트 여러 개가 같은 폴더로 지정된 경우).
 3. `PlannedProjectCreate(NewProjectId=UUIDv7, Name, RootPathDisplay, IdempotencyKey)`를 만든다.
    - `Name`: 사용자 입력 → 비면 폴더 이름. 앞뒤 공백을 제거하고 빈 값을 거부한다(공식 `validate_name`).
    - `RootPathDisplay`: 절대경로, `\\?\` 제거, 공식 `validate_roots`처럼 절대경로만 허용한다.
-   - `IdempotencyKey`: `codex-backup-manager:import:v1:<backupSha256>:<canonicalRoot>`(512바이트 이하).
+   - `IdempotencyKey`: `codex-backup-manager:import:v1:<backupSha256>:<SHA-256(canonical 루트)>`(소문자 hex, 160자. 512바이트 제한 때문에 루트 원문 대신 해시).
 4. 그 프로젝트로 가는 모든 `PlannedThreadInsert.ResolvedProjectId = NewProjectId`, `ResolvedTargetCwd = RootPathDisplay`.
 
 **실행(StateDatabaseWriter, 기존 단일 SQLite 트랜잭션 안에서 thread INSERT보다 먼저)** — 공식 `create_project`와 같은 순서:
