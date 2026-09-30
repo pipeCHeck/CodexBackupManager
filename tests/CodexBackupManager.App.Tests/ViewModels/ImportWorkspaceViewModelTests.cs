@@ -287,7 +287,7 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
         Assert.False(ws.CanImport);
         Assert.Equal("선택한 대화는 모두 이미 이 PC에 있습니다. 가져올 것이 없습니다.", ws.SummaryHint);
         ImportConversationNodeViewModel node = Node(ws, Thread2);
-        Assert.Equal("이미 이 PC에 있음 · 이 PC 위치: 기타 대화", node.PresenceText);
+        Assert.Equal("이 PC 위치: 기타 대화", node.PresenceText); // 9_2-30: 상태 설명은 StatusSentence만 한다
         Assert.Contains("이미 이 PC에 있습니다", node.StatusSentence);
 
         // 강제로 적용 경로를 태운다(쓸 것이 없는 선택) → NothingToDo 결과 화면과 현재 위치.

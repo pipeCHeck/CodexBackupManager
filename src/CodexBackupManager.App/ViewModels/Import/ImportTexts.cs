@@ -358,6 +358,16 @@ public static class ImportTexts
     }
 
     /// <summary>
+    /// (Phase 9_2-30) 사람이 읽는 경로 표기: <see cref="CanonicalPath.Display"/>(<c>\?\</c> 접두사 제거, 구분자 통일, 끝 구분자 제거, 대소문자 보존).
+    /// 정규화할 수 없는 값(상대 경로 등)은 원문 그대로 둔다. 원문은 툴팁/상세 정보에 따로 남긴다.
+    /// </summary>
+    public static string DisplayPath(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        return CanonicalPath.TryCreate(path, out CanonicalPath? canonical, out _) ? canonical!.Display : path;
+    }
+
+    /// <summary>
     /// 트리 행 안의 "이 PC 위치" 한 줄(Phase 9_2-26). 이 PC에 이미 있는 대화(새 대화가 아닌 모든 경우)에만 보인다.
     /// </summary>
     public static string? RowLocation(ImportConversationPreview conversation)

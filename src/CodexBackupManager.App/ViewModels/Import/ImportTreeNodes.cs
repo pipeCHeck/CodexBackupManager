@@ -37,8 +37,11 @@ public sealed class ImportConversationNodeViewModel : ObservableObject
     /// <summary>표시 제목(없으면 짧은 대체 표기).</summary>
     public string Title { get; }
 
-    /// <summary>원본 작업 폴더(백업 manifest). 없으면 <c>null</c>.</summary>
+    /// <summary>원본 작업 폴더(백업 manifest 원문). 없으면 <c>null</c>. 화면 본문은 <see cref="OriginalCwdText"/>, 원문은 툴팁이다.</summary>
     public string? OriginalCwd { get; }
+
+    /// <summary>(Phase 9_2-30) 원본 작업 폴더의 사람이 읽는 표기(<c>\?\</c> 없음). 없으면 <c>null</c>.</summary>
+    public string? OriginalCwdText => OriginalCwd is { } cwd ? ImportTexts.DisplayPath(cwd) : null;
 
     /// <summary>날짜 문구. 없으면 <c>null</c>.</summary>
     public string? DatesText { get; }
@@ -96,10 +99,11 @@ public sealed class ImportConversationNodeViewModel : ObservableObject
         ? $"{Title}, {BadgeText}, {location}"
         : $"{Title}, {BadgeText}";
 
-    /// <summary>상세의 "이미 이 PC에 있음 · 이 PC 위치: …" 한 줄. 이 PC에 없으면 <c>null</c>.</summary>
-    public string? PresenceText => LocalLocationText is { } location
-        ? (_result.Preview.Relation == RevisionRelation.Identical ? "이미 이 PC에 있음 · " : "이 PC에도 있음 · ") + "이 PC 위치: " + location
-        : null;
+    /// <summary>
+    /// 상세의 "이 PC 위치: …" 한 줄. 이 PC에 없으면 <c>null</c>. (Phase 9_2-30) 있음/같음 같은 상태 설명은 바로 윗줄
+    /// <see cref="StatusSentence"/>가 이미 하므로 되풀이하지 않는다.
+    /// </summary>
+    public string? PresenceText => LocalLocationText is { } location ? "이 PC 위치: " + location : null;
 
     /// <summary>검색 필터로 보이는지(선택 상태와 무관).</summary>
     public bool IsVisible
@@ -206,13 +210,21 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
     /// <summary>목적지. 조상 그룹은 <c>null</c>.</summary>
     public ProjectTarget? Target => _project?.Target;
 
-    /// <summary>원본 경로(백업).</summary>
+    /// <summary>원본 경로(백업). (Phase 9_2-30) 사람이 읽는 표기이고, 원문은 <see cref="OriginalPathRaw"/>(툴팁)다.</summary>
     public string OriginalPathText => _project is { } p && p.Preview.PathMapping.OriginalRootPaths.Count > 0
-        ? string.Join(Environment.NewLine, p.Preview.PathMapping.OriginalRootPaths)
+        ? string.Join(Environment.NewLine, p.Preview.PathMapping.OriginalRootPaths.Select(ImportTexts.DisplayPath))
         : "없음";
 
-    /// <summary>이 PC 경로(목적지 폴더). 없으면 "지정 안 함".</summary>
-    public string LocalPathText => Target?.FolderPath ?? "지정 안 함";
+    /// <summary>원본 경로 원문(백업 manifest 그대로, 툴팁용). 없으면 <c>null</c>.</summary>
+    public string? OriginalPathRaw => _project is { } p && p.Preview.PathMapping.OriginalRootPaths.Count > 0
+        ? string.Join(Environment.NewLine, p.Preview.PathMapping.OriginalRootPaths)
+        : null;
+
+    /// <summary>이 PC 경로(목적지 폴더, 사람이 읽는 표기). 없으면 "지정 안 함".</summary>
+    public string LocalPathText => Target?.FolderPath is { } folder ? ImportTexts.DisplayPath(folder) : "지정 안 함";
+
+    /// <summary>이 PC 경로 원문(툴팁용). 없으면 <c>null</c>.</summary>
+    public string? LocalPathRaw => Target?.FolderPath;
 
     /// <summary>작업 폴더 상태 문구(ProjectTarget.Reason 기준).</summary>
     public string TargetStatusText => _project is { } p

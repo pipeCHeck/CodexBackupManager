@@ -25,8 +25,8 @@ public sealed class ImportWorkspacePreviewTests : IDisposable
 
     private async Task<string> ExportWithMarkersAsync()
     {
-        // Thread1에는 붙이지 않는다: 대상 PC에 그대로 있어 "이어받기"가 되는데, 커밋된 fixture는 rollout_path를 상대 경로로
-        // 저장해서 이어받기 사후 검증이 항상 Rollback된다(fixture 한계, 실제 Codex는 절대 경로). 미리보기 확인과 무관하다.
+        // 9_2-31: harness가 복사본의 rollout_path를 절대 경로로 보정하므로 Thread1(대상 PC에 그대로 있음 → 이어받기)에도 붙인다.
+        _h.AppendToSourceRollout(Thread1, 2, "마커-하나");
         _h.AppendToSourceRollout(Thread2, 2, "마커-둘");
         _h.AppendToSourceRollout(Thread3, 2, "마커-셋");
         return await _h.ExportAsync();
@@ -52,6 +52,7 @@ public sealed class ImportWorkspacePreviewTests : IDisposable
         Assert.Equal(Thread1, ws.SelectedConversation.ThreadId); // 첫 프로젝트(Alpha)의 첫 대화
         Assert.All(ws.ContentMessages, m => Assert.False(m.IsBodyRendered)); // FlowDocument는 화면에 보일 때만 만든다
         Assert.Contains(ws.ContentMessages, m => m.Text == "fixture user text");
+        Assert.Contains(ws.ContentMessages, m => m.Text.Contains("마커-하나", StringComparison.Ordinal)); // 백업 쪽(더 긴) 기록
     }
 
     [Fact]
@@ -253,5 +254,77 @@ public sealed class ImportWorkspacePreviewTests : IDisposable
         Assert.StartsWith("만든 앱 v", expected);
         Assert.Contains(expected, ws.BackupHeaderText);
         Assert.DoesNotContain(" · 앱 ", ws.BackupHeaderText);
+    }
+
+    // ── 9_2-31 이어받기(IncomingAhead) App E2E ─────────────────────────────────
+
+    [Fact]
+    public async Task 이어받기를_포함한_가져오기가_성공하고_결과와_rollout_바이트가_백업과_같다()
+    {
+        _h.RemoveFromTarget(Thread3);
+        _h.AppendToSourceRollout(Thread1, 4, "이어받을-줄");
+        string backup = await _h.ExportAsync(Thread1, Thread3);
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
+
+        ImportConversationNodeViewModel thread1 = Node(ws, Thread1);
+        Assert.Equal(CodexBackupManager.Domain.Codex.Import.RevisionRelation.IncomingAhead, thread1.Result.Preview.Relation);
+        Assert.True(thread1.IsChecked);
+        Assert.Equal("이 PC 위치: Alpha 프로젝트", thread1.PresenceText);
+        Assert.StartsWith("이 PC에 있지만 백업이 더 깁니다", thread1.StatusSentence);
+        Assert.True(ws.CanImport);
+
+        await ws.ImportAsync();
+
+        Assert.Equal(CodexBackupManager.Restore.RestoreOutcome.Succeeded, ws.Result!.Outcome);
+        List<ImportResultItem> items = ws.Result.Groups.SelectMany(g => g.Items).ToList();
+        Assert.Contains(items, i => i.Title == thread1.Title && i.Text == "이어받음");
+        Assert.Contains(items, i => i.Text == "새로 가져옴");
+        Assert.Contains(Thread1, ws.Result.ImportedThreadIds);
+
+        // 대상 rollout이 원본 PC(=백업에 들어간) rollout과 바이트까지 같다.
+        byte[] source = File.ReadAllBytes(RolloutFileOf(_h.SourceHome, Thread1));
+        byte[] target = File.ReadAllBytes(RolloutFileOf(_h.TargetHome, Thread1));
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(source)),
+                     Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(target)));
+    }
+
+    // ── 9_2-32 다시 분석 뒤 이전 선택이 사라진 경우 ─────────────────────────────
+
+    [Fact]
+    public async Task 다시_분석했을_때_이전_선택_대화가_없어졌으면_첫_대화로_돌아간다()
+    {
+        _h.RemoveFromTarget(Thread2, Thread3);
+        string backup = await ExportWithMarkersAsync();
+        string smaller = await _h.ExportAsync(Thread1, Thread2); // Thread3 없음
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
+        ws.SelectNode(Node(ws, Thread3));
+        await ContentLoadedAsync(ws);
+        ImportConversationPreviewer first = ws.Previewer!;
+
+        // 같은 경로의 백업 내용이 바뀐다(미리보기 reader가 열려 있어도 교체할 수 있다 — FileShare.ReadWrite|Delete).
+        File.Copy(smaller, backup, overwrite: true);
+        ws.ReanalyzeCommand.Execute(null);
+        await WaitUntil(() => ws.State == ImportWorkspaceState.Editing && ws.AnalysisStartCount == 2, "다시 분석");
+        await ContentLoadedAsync(ws);
+
+        Assert.DoesNotContain(ws.Projects.SelectMany(p => p.Conversations), c => c.ThreadId == Thread3);
+        Assert.Equal(Thread1, ws.SelectedConversation!.ThreadId);
+        Assert.True(ws.SelectedConversation.IsTreeSelected);
+        Assert.DoesNotContain(ws.ContentMessages, m => m.Text.Contains("마커-셋", StringComparison.Ordinal));
+        Assert.NotSame(first, ws.Previewer); // 내용이 바뀐 백업이면 미리보기를 새로 연다(이전 캐시를 쓰지 않는다)
+    }
+
+    // ── 9_2-30 상세 문구 ───────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task 상세의_위치_줄은_상태_문장을_되풀이하지_않는다()
+    {
+        string backup = await _h.ExportAsync(Thread2);
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
+        ImportConversationNodeViewModel node = Node(ws, Thread2);
+
+        Assert.Equal("이미 이 PC에 있습니다. 내용이 같습니다.", node.StatusSentence);
+        Assert.Equal("이 PC 위치: 기타 대화", node.PresenceText);
+        Assert.DoesNotContain("있음", node.PresenceText);
     }
 }

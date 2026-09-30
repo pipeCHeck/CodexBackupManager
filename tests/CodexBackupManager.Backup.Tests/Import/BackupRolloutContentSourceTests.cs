@@ -220,4 +220,139 @@ public sealed class BackupRolloutContentSourceTests : IDisposable
         using FileStream again = new(backupPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         Assert.True(again.Length > 0);
     }
+
+    // ── 9_2b-06 스트리밍(복사 없음), 동시 읽기, seek 불가 스트림의 컷오프 ─────────────────────────
+
+    private static string Hash(Stream stream)
+    {
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(stream));
+    }
+
+    [Fact]
+    public void OpenRaw는_entry를_메모리로_복사하지_않고_스트림으로_돌려준다()
+    {
+        // 약 8MB짜리 대화: 복사 방식이면 첫 줄만 읽어도 entry 크기 이상을 할당한다.
+        var lines = new List<string> { Meta(Plain) };
+        string filler = new('가', 2000);
+        for (int n = 1; n <= 1400; n++)
+        {
+            lines.Add(Message(n, n % 2 == 1, filler + n));
+        }
+
+        Write($"rollout-2026-01-02T03-04-05-{Plain}.jsonl", Lines([.. lines]));
+        IReadOnlyDictionary<string, ThreadChain> local = LocalChains();
+        long entrySize = new FileInfo(local[Plain].Files[0].FullPath).Length;
+        Assert.True(entrySize > 8_000_000);
+        string backupPath = Export(local, new HashSet<string> { Plain });
+
+        using BackupRolloutContentSource source = BackupRolloutContentSource.Open(backupPath);
+        RolloutFileReference file = source.ReadCatalog().Chains[Plain].Files[0];
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        using (Stream raw = source.OpenRaw(file))
+        {
+            Assert.IsNotType<MemoryStream>(raw);
+            Assert.False(raw.CanSeek);
+            string? first = RolloutStreamReader.ReadFirstLines(raw, file.Kind, 1).Single();
+            Assert.Contains("session_meta", first, StringComparison.Ordinal);
+        }
+
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < entrySize / 4, $"allocated={allocated} entry={entrySize}");
+
+        // 끝까지 읽어도 원본과 같은 바이트다.
+        using Stream again = source.OpenRaw(file);
+        using FileStream original = File.OpenRead(local[Plain].Files[0].FullPath);
+        Assert.Equal(Hash(original), Hash(again));
+    }
+
+    [Fact]
+    public void 여러_스레드가_동시에_OpenRaw해도_각자_맞는_바이트를_읽는다()
+    {
+        WriteConversations();
+        IReadOnlyDictionary<string, ThreadChain> local = LocalChains();
+        string backupPath = Export(local, new HashSet<string> { Plain, Segmented, Fork, Compressed });
+        Dictionary<string, string> expected = local.Values.SelectMany(c => c.Files)
+            .ToDictionary(f => f.FileName, f => { using FileStream fs = File.OpenRead(f.FullPath); return Hash(fs); });
+
+        using BackupRolloutContentSource source = BackupRolloutContentSource.Open(backupPath);
+        List<RolloutFileReference> files = source.ReadCatalog().Chains.Values.SelectMany(c => c.Files).ToList();
+        Assert.Equal(expected.Count, files.Count);
+
+        var failures = new System.Collections.Concurrent.ConcurrentBag<string>();
+        System.Threading.Tasks.Parallel.For(0, 64, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
+        {
+            RolloutFileReference file = files[n % files.Count];
+            using Stream raw = source.OpenRaw(file);
+            if (Hash(raw) != expected[file.FileName])
+            {
+                failures.Add(file.FileName);
+            }
+        });
+
+        Assert.Empty(failures);
+
+        // 병렬 transcript도 순차 결과와 같다.
+        IReadOnlyDictionary<string, ThreadChain> chains = source.ReadCatalog().Chains;
+        string[] ids = [Plain, Segmented, Fork, Compressed];
+        Dictionary<string, string> sequential = ids.ToDictionary(id => id, id => Fingerprint(ConversationTranscriptBuilder.Build(id, chains, source)));
+        System.Threading.Tasks.Parallel.For(0, 32, n =>
+        {
+            string id = ids[n % ids.Length];
+            if (Fingerprint(ConversationTranscriptBuilder.Build(id, chains, source)) != sequential[id])
+            {
+                failures.Add(id);
+            }
+        });
+
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void seek할_수_없는_entry_스트림에서도_바이트_오프셋과_ordinal_컷오프가_로컬과_같다()
+    {
+        WriteConversations();
+        IReadOnlyDictionary<string, ThreadChain> local = LocalChains();
+        string backupPath = Export(local, new HashSet<string> { Plain, Compressed });
+        using BackupRolloutContentSource source = BackupRolloutContentSource.Open(backupPath);
+        IReadOnlyDictionary<string, ThreadChain> fromBackup = source.ReadCatalog().Chains;
+
+        foreach (string threadId in new[] { Plain, Compressed })
+        {
+            RolloutFileReference localFile = local[threadId].Files[0];
+            RolloutFileReference backupFile = fromBackup[threadId].Files[0];
+
+            // 한글(여러 바이트 문자)이 섞인 줄 경계 여러 곳에서 자른다.
+            foreach (long cutoff in new long[] { 1, 200, 400, 700, 100_000 })
+            {
+                ConversationItemParser.ParseResult expected = ConversationItemParser.ParseFileWithByteOffsetCutoff(localFile, cutoff);
+                ConversationItemParser.ParseResult actual = ConversationItemParser.ParseFileWithByteOffsetCutoff(backupFile, source, cutoff);
+                Assert.Equal(expected.Messages.Select(m => m.Text), actual.Messages.Select(m => m.Text));
+                Assert.Equal(expected.Warning, actual.Warning);
+            }
+
+            foreach (long ordinal in new long[] { 0, 2, 3, 10 })
+            {
+                Assert.Equal(
+                    ConversationItemParser.ParseFileWithOrdinalCutoff(localFile, ordinal).Messages.Select(m => m.Text),
+                    ConversationItemParser.ParseFileWithOrdinalCutoff(backupFile, source, ordinal).Messages.Select(m => m.Text));
+            }
+        }
+    }
+
+    [Fact]
+    public void Dispose한_뒤에는_열_수_없고_이미_연_스트림은_끝까지_읽힌다()
+    {
+        WriteConversations();
+        string backupPath = Export(LocalChains(), new HashSet<string> { Plain });
+        BackupRolloutContentSource source = BackupRolloutContentSource.Open(backupPath);
+        RolloutFileReference file = source.ReadCatalog().Chains[Plain].Files[0];
+        using Stream open = source.OpenRaw(file);
+
+        source.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => source.OpenRaw(file));
+        Assert.NotEmpty(RolloutStreamReader.ReadLines(open, file.Kind).ToList());
+    }
 }

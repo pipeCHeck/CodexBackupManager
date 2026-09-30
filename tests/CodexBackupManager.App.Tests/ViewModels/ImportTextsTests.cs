@@ -224,4 +224,16 @@ public sealed class ImportTextsTests
         Assert.Equal(expected, ImportTexts.SnapshotLabel(id));
         Assert.Equal("unexpected-form", ImportTexts.SnapshotLabel("unexpected-form"));
     }
+
+    // ── 9_2-30 사람이 읽는 경로 표기 ────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(@"\\?\C:\_UserProjects\Unreal\Balhwajeom_Project", @"C:\_UserProjects\Unreal\Balhwajeom_Project")]
+    [InlineData(@"C:\Projects\Test\", @"C:\Projects\Test")]
+    [InlineData(@"C:/Projects/Test", @"C:\Projects\Test")]
+    [InlineData(@"\\?\UNC\server\share\dir", @"\\server\share\dir")]
+    [InlineData(@"C:\기획\펫 만들기", @"C:\기획\펫 만들기")]
+    [InlineData(@"relative\path", @"relative\path")]
+    public void 경로는_내부_접두사_없이_사람이_읽는_표기로_보인다(string raw, string expected)
+        => Assert.Equal(expected, ImportTexts.DisplayPath(raw));
 }

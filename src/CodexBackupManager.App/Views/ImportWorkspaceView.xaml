@@ -300,9 +300,9 @@
                             <RowDefinition Height="Auto" />
                           </Grid.RowDefinitions>
                           <TextBlock Text="원본" Style="{StaticResource Caption}" />
-                          <TextBlock Grid.Column="1" Text="{Binding OriginalPathText}" Style="{StaticResource PathText}" Foreground="{StaticResource Muted}" />
+                          <TextBlock Grid.Column="1" Text="{Binding OriginalPathText}" Style="{StaticResource PathText}" Foreground="{StaticResource Muted}" ToolTip="{Binding OriginalPathRaw}" />
                           <TextBlock Grid.Row="1" Text="이 PC" Style="{StaticResource Caption}" Margin="0,2,0,0" />
-                          <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LocalPathText}" Style="{StaticResource PathText}" Margin="0,2,0,0" />
+                          <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LocalPathText}" Style="{StaticResource PathText}" Margin="0,2,0,0" ToolTip="{Binding LocalPathRaw}" />
                         </Grid>
                         <TextBlock Text="{Binding TargetStatusText}" Style="{StaticResource TargetStatusText}" Margin="0,5,0,0" />
                         <TextBlock Text="{Binding DecisionError}" Foreground="{StaticResource Bad}" FontSize="11" TextWrapping="Wrap"
@@ -392,7 +392,7 @@
                                Visibility="{Binding PresenceText, Converter={StaticResource NullToCollapsed}}" />
                     <TextBlock Text="원본 작업 폴더" Style="{StaticResource Caption}" Margin="0,10,0,0"
                                Visibility="{Binding OriginalCwd, Converter={StaticResource NullToCollapsed}}" />
-                    <TextBlock Text="{Binding OriginalCwd}" Style="{StaticResource PathText}"
+                    <TextBlock Text="{Binding OriginalCwdText}" Style="{StaticResource PathText}" ToolTip="{Binding OriginalCwd}"
                                Visibility="{Binding OriginalCwd, Converter={StaticResource NullToCollapsed}}" />
                     <TextBlock Text="{Binding DatesText}" Style="{StaticResource Caption}" Margin="0,8,0,0"
                                Visibility="{Binding DatesText, Converter={StaticResource NullToCollapsed}}" />
@@ -436,11 +436,11 @@
                   <TextBlock Text="{Binding TargetStatusText}" Style="{StaticResource TargetStatusText}" Margin="0,8,0,0" />
                   <TextBlock Text="원본 경로" Style="{StaticResource Caption}" Margin="0,10,0,0"
                              Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
-                  <TextBlock Text="{Binding OriginalPathText}" Style="{StaticResource PathText}"
+                  <TextBlock Text="{Binding OriginalPathText}" Style="{StaticResource PathText}" ToolTip="{Binding OriginalPathRaw}"
                              Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
                   <TextBlock Text="이 PC 경로" Style="{StaticResource Caption}" Margin="0,6,0,0"
                              Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
-                  <TextBlock Text="{Binding LocalPathText}" Style="{StaticResource PathText}"
+                  <TextBlock Text="{Binding LocalPathText}" Style="{StaticResource PathText}" ToolTip="{Binding LocalPathRaw}"
                              Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}" />
                 </StackPanel>
               </ScrollViewer>

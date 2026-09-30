@@ -107,7 +107,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     // Phase 9_2b — 대화 내용 미리보기. 백업 파일마다 한 번만 열고(ImportConversationPreviewer) 화면을 닫거나 다른 파일을 열 때 닫는다.
     private ImportConversationPreviewer? _previewer;
-    private string? _previewerPath;
+    private string? _previewerKey;
     private CancellationTokenSource? _contentCancellation;
     private bool _isContentLoading;
     private string? _contentNotice;
@@ -602,7 +602,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         string? previousSelection = SelectedConversation?.ThreadId;
         string? previousProjectKey = SelectedProject?.ProjectKey;
         _preview = preview;
-        EnsurePreviewer();
+        EnsurePreviewer(preview);
         BackupManifest manifest = preview.Manifest!;
         Dictionary<string, BackupConversationMetadata> metadata = manifest.Conversations
             .ToDictionary(c => c.ThreadId, StringComparer.OrdinalIgnoreCase);
@@ -695,16 +695,19 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         SelectNode(target);
     }
 
-    private void EnsurePreviewer()
+    private void EnsurePreviewer(ImportPreview preview)
     {
-        if (_previewer is not null && string.Equals(_previewerPath, _backupFilePath, StringComparison.OrdinalIgnoreCase))
+        // 같은 파일이고 내용(SHA-256)도 같을 때만 이미 연 미리보기(와 캐시)를 그대로 쓴다. 다시 분석하기 전에 파일이 바뀌었으면
+        // 이전 목록·캐시가 맞지 않으므로 새로 연다(Phase 9_2-32).
+        string key = _backupFilePath + "|" + (preview.SourceBackupIdentity?.BackupFileSha256 ?? string.Empty);
+        if (_previewer is not null && string.Equals(_previewerKey, key, StringComparison.OrdinalIgnoreCase))
         {
-            return; // 같은 백업을 다시 분석한 경우 — 이미 연 미리보기(와 캐시)를 그대로 쓴다.
+            return;
         }
 
         DisposePreviewer();
         _previewer = PreviewerFactory(_backupFilePath!);
-        _previewerPath = _backupFilePath;
+        _previewerKey = key;
     }
 
     private void DisposePreviewer()
@@ -713,7 +716,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         _contentCancellation = null;
         _previewer?.Dispose();
         _previewer = null;
-        _previewerPath = null;
+        _previewerKey = null;
         ContentMessages.Clear();
         ContentNotice = null;
         IsContentLoading = false;

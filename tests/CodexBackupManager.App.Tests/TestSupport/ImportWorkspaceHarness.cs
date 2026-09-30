@@ -37,6 +37,8 @@ internal sealed class ImportWorkspaceHarness : IDisposable
     {
         SourceHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
         TargetHome = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
+        MakeRolloutPathsAbsolute(SourceHome);
+        MakeRolloutPathsAbsolute(TargetHome);
         TestDir = Path.Combine(Path.GetTempPath(), "cbm-app-import-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TestDir);
         SnapshotRoot = Path.Combine(TestDir, "snapshots");
@@ -278,6 +280,39 @@ internal sealed class ImportWorkspaceHarness : IDisposable
             await Task.Delay(10);
         }
     }
+
+    /// <summary>
+    /// (Phase 9_2-31) 복사본의 <c>threads.rollout_path</c>를 복사본 기준 절대 경로로 바꾼다. 실제 Codex는 절대 경로를 쓰고,
+    /// 공유 fixture(tests/Fixtures/CodexHome)는 상대 경로라 이어받기(IncomingAhead) 사후 검증을 App 수준에서 재현할 수 없었다.
+    /// 공유 fixture 원본은 바꾸지 않는다(temp 복사본만).
+    /// </summary>
+    private static void MakeRolloutPathsAbsolute(string home)
+    {
+        using SqliteConnection connection = Open(home);
+        var rows = new List<(string Id, string Path)>();
+        using (SqliteCommand select = connection.CreateCommand())
+        {
+            select.CommandText = "SELECT id, rollout_path FROM threads WHERE rollout_path IS NOT NULL AND rollout_path <> ''";
+            using SqliteDataReader reader = select.ExecuteReader();
+            while (reader.Read())
+            {
+                rows.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        foreach ((string id, string path) in rows.Where(r => !Path.IsPathRooted(r.Path)))
+        {
+            using SqliteCommand update = connection.CreateCommand();
+            update.CommandText = "UPDATE threads SET rollout_path = $path WHERE id = $id";
+            update.Parameters.AddWithValue("$path", Path.Combine(home, path));
+            update.Parameters.AddWithValue("$id", id);
+            update.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>대화의 rollout 파일(첫 번째) 경로.</summary>
+    public static string RolloutFileOf(string home, string threadId)
+        => Directory.EnumerateFiles(home, $"rollout-*{threadId}*.jsonl*", SearchOption.AllDirectories).First();
 
     private static SqliteConnection Open(string home)
     {

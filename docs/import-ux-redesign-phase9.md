@@ -605,6 +605,21 @@ Apply 전체를 막지는 않는다.
    - 이 역연산 자체도 **새 Snapshot → 실행 → 검증 → 실패 시 Rollback** 파이프라인으로 수행한다.
 3. 되돌린 뒤 journal에 `Undone` 상태를 기록한다.
 
+**보강(2026-10-01, 9_2-4 점검 후)**
+- 진행 순서: 9_5가 9_0-A 실험 결과를 기다리는 동안 **9_4를 먼저** 구현한다. 역연산 목록은 9_5(프로젝트 생성)·9_3(연결 변경)이 나중에 항목을 추가할 수 있는 구조로 만든다.
+- **Codex 흔적 검사**: 가져온 대화를 Codex에서 한 번이라도 열면 Codex가 `session_index.jsonl`(제목 줄)이나 파생 캐시 `thread_history_*.sqlite`에 흔적을 남길 수 있다.
+  이때 우리 쪽 행·파일만 지우면 Codex 쪽 데이터와 어긋난다. 따라서 되돌리기 전에 이 두 곳을 **읽기 전용**으로 확인한다. 흔적이 있으면 거부한다.
+  스키마를 확인할 수 없어도 보수적으로 거부한다. 우리 앱은 이 두 곳에 쓰지 않는다(Restore는 rollout 파일과 `threads` 테이블만 쓴다).
+- 되돌리기 대상은 이 앱이 그 Apply에서 쓴 것뿐이다.
+  - 새로 만든 rollout 파일
+  - 이어 붙인 rollout의 뒷부분
+  - INSERT한 `threads` 행
+  - UPDATE한 `threads` 컬럼(`rollout_path`, 메타데이터 병합 필드)
+  - 이전 값은 그 Apply의 Snapshot(DB 사본)에서 읽기 전용으로 읽는다.
+- journal `Summary`에는 대화 제목·경로 원문을 넣지 않는다. thread ID와 개수만 남기고, 화면에 보일 때 현재 카탈로그에서 제목을 찾는다.
+- 9_4 이전에 만든 기록(fingerprint 없음), 다른 Codex Home의 기록, 개발 중 테스트가 남긴 기록은 목록에서 "되돌리기 불가" 또는 제외로 처리한다.
+  이 PC `%LOCALAPPDATA%\CodexBackupManager\Snapshots`에는 이미 339개가 있다.
+
 **Snapshot 정리(`SnapshotRetentionService`)**: 사용자가 기록 화면에서 선택 삭제하거나 "30일 이상 + 되돌리기 불가 항목 정리"를 한다.
 **자동 삭제는 하지 않는다.** 진행 중이거나 미완료(`Prepared`/`Applying`) Snapshot은 절대 삭제하지 않는다.
 

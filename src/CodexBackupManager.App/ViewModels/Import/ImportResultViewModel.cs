@@ -131,7 +131,7 @@ public sealed class ImportResultViewModel
                 : plan.Projects.FirstOrDefault(p => ImportUserChoices.ProjectKeyOf(p.ProjectId) == group.Key);
             string header = project?.DisplayName ?? "필요한 원본 대화";
             string destination = project?.ResolvedTarget is { Kind: ProjectTargetKind.LinkExisting } target
-                ? $"→ '{localProjects.FindById(target.LinkDbProjectId)?.DisplayName ?? project.DisplayName}' 프로젝트 ({target.FolderPath})"
+                ? $"→ '{localProjects.FindById(target.LinkDbProjectId)?.DisplayName ?? project.DisplayName}' 프로젝트 ({(target.FolderPath is { } folder ? ImportTexts.DisplayPath(folder) : string.Empty)})"
                 : "→ 기타 대화";
 
             var items = group
