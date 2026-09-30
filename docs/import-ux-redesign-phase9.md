@@ -409,6 +409,19 @@ public ImportRecordSummary? Summary { get; init; }   // 기록 화면용(개수,
 - global-state 플래그(`projectsMigrated=true`, `threadAssignmentsMigrated=false`, `pendingThreadAssignmentIds`)는
   Desktop이 연결 정보를 DB로 옮기는 중임을 시사한다. Electron 소스는 비공개라 동작은 **실측으로만 확정**한다.
 
+**9_0-A 결과 (2026-10-01): (a) — DB(`threads.project_id`)가 Desktop 기준으로도 authoritative.**
+- 이 앱이 `threads.project_id`에 쓴 연결을 Codex Desktop 사이드바가 그대로 반영했다. 조건은 `threadAssignmentsMigrated=false`, global-state 배정 없음이다.
+  → **9_5a(global-state 쓰기) 불필요.** 9_5는 DB 방식으로 진행한다.
+- Desktop은 켜질 때 가져온 행을 스스로 갱신했다. 대화를 열지 않아도 그랬다.
+  - `updated_at_ms`를 실행 시각으로 바꾼다.
+  - `cwd`를 `\\?\` 형식으로 정규화한다.
+  - `project_id`는 유지한다.
+  - 영향: 되돌리기(9_4)의 행 fingerprint에 `updated_at`·`cwd` 원문을 넣으면 Desktop을 한 번만 켜도 되돌리기가 막힌다(9_4 설계에 반영).
+- Codex에서 대화를 **열면** 다음 흔적이 곧바로 생긴다(사용자가 먼저 가져온 대화로 확인).
+  - `thread_history_1.sqlite`의 `thread_turns.thread_id`, `thread_items.thread_id`, `thread_history_projection_state.thread_id`
+  - global-state `electron-persisted-atom-state` 안의 thread 언급
+- 실험 1은 "대화가 있는 등록 프로젝트"에 연결한 경우다. **새로 만든 DB 전용 프로젝트**(레거시 `local-projects`·`project-order`에 없음)도 사이드바에 보이는지는 9_0-B(9_5 빌드)에서 확인한다.
+
 **절차**
 1. Codex Desktop/CLI 완전 종료(작업 관리자에서 `codex*` 프로세스 없음 확인).
 2. `C:\Users\User\.codex` 폴더 전체를 다른 위치로 복사(원복용).

@@ -526,3 +526,16 @@ Codex Home 아래 어떤 파일도 생성/수정/삭제하지 않는다.
    조상 체인을 계산하도록 만들어져 있지만, 실제 `.codex` 데이터에서 2단계 이상 이어진 fork 실례를
    찾지 못해 검증하지 못했다. 1단계 fork(부모→자식)와 세그먼트 체인(같은 thread 안에서 여러 단계)은
    thread_history와 100% 일치를 확인했다.
+
+---
+
+## Phase 9 실측 추가 (2026-10-01, 9_0-A)
+
+- 이 PC Codex Desktop 26.924.22138 / CLI 0.158.0-alpha.2.1 기준이다. global-state `app-server-projects-migration-by-host["local:<home>"]`는
+  `projectsMigrated=true`, `threadAssignmentsMigrated=false`, `pendingThreadAssignmentIds` 12개다. 이 상태에서도 **`threads.project_id`가 채워진 대화는 Desktop 사이드바에서 그 프로젝트 아래에 표시된다.**
+  global-state `thread-project-assignments`에 없어도 된다.
+- `threads.project_id`는 `REFERENCES projects(id) ON DELETE SET NULL` 외래키다. 번들 e_sqlite3는 `foreign_keys` 기본값이 1이다.
+- global-state 배정(`thread-project-assignments`)은 **레거시 프로젝트 ID**를 쓴다. `app-server-project-id-by-legacy-project-id-by-host["local:<home>"]`가 레거시 ID를 DB ID로 매핑한다.
+- Desktop은 시작할 때 `threads` 행의 `updated_at_ms`를 갱신하고 `cwd`를 `\\?\` 형식으로 정규화하는 경우가 있다(대화를 열지 않아도).
+- 대화를 Desktop에서 열면 `thread_history_1.sqlite`의 `thread_turns`/`thread_items`/`thread_history_projection_state`(`thread_id` 컬럼)에 행이 생긴다.
+  global-state `electron-persisted-atom-state`에도 thread 언급이 생긴다. `session_index.jsonl`에는 그 시점에 줄이 추가되지 않았다.
