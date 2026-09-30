@@ -294,9 +294,9 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
         await ws.ImportAsync(bypassCanImport: true);
 
         Assert.Equal(ImportWorkspaceState.Result, ws.State);
-        Assert.Equal(RestoreOutcome.NothingToDo, ws.ResultOutcome);
-        Assert.Equal("적용할 변경이 없었습니다. 선택한 대화는 모두 이미 이 PC에 있습니다.", ws.ResultTitle);
-        ImportResultItem item = Assert.Single(Assert.Single(ws.ResultGroups).Items);
+        Assert.Equal(RestoreOutcome.NothingToDo, ws.Result!.Outcome);
+        Assert.Equal("적용할 변경이 없었습니다. 선택한 대화는 모두 이미 이 PC에 있습니다.", ws.Result!.Title);
+        ImportResultItem item = Assert.Single(Assert.Single(ws.Result!.Groups).Items);
         Assert.Equal("이 PC 위치: 기타 대화", item.Text);
         Assert.True(ws.ShowInListCommand.CanExecute(null));
     }
@@ -342,8 +342,8 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
         await ws.ImportAsync();
 
         Assert.Equal(ImportWorkspaceState.Result, ws.State);
-        Assert.Equal(RestoreOutcome.NotReady, ws.ResultOutcome);
-        Assert.Contains("실행 중", ws.ResultTitle);
+        Assert.Equal(RestoreOutcome.NotReady, ws.Result!.Outcome);
+        Assert.Contains("실행 중", ws.Result!.Title);
         Assert.True(ws.CanRetry);
         Assert.False(ThreadExists(_h.TargetHome, Thread2));
         Assert.Equal(1, ws.PlanBuildCount);
@@ -395,12 +395,12 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
         ProjectOf(ws, Thread1).ChooseFolderCommand.Execute(null);
         await ws.ImportAsync();
 
-        Assert.Equal(RestoreOutcome.Succeeded, ws.ResultOutcome);
+        Assert.Equal(RestoreOutcome.Succeeded, ws.Result!.Outcome);
         Assert.Equal(analyzed, ws.LastAppliedPlan!.Backup);
         Assert.Same(ws.LastAppliedPlan.UserChoices, ws.Choices);
         Assert.Equal("db-id-check", ReadThreadColumn(_h.TargetHome, Thread1, "project_id"));
         Assert.Equal(registered, ReadThreadColumn(_h.TargetHome, Thread1, "cwd"));
-        ImportResultGroup group = Assert.Single(ws.ResultGroups);
+        ImportResultGroup group = Assert.Single(ws.Result!.Groups);
         Assert.Contains("'등록' 프로젝트", group.Destination);
     }
 
@@ -455,16 +455,16 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
         Assert.Equal(1, ws.Summary!.ImportCount);
         await ws.ImportAsync();
 
-        Assert.Equal(RestoreOutcome.Succeeded, ws.ResultOutcome);
+        Assert.Equal(RestoreOutcome.Succeeded, ws.Result!.Outcome);
         Assert.True(ThreadExists(_h.TargetHome, Thread2));
         Assert.False(ThreadExists(_h.TargetHome, Thread3));
-        Assert.Contains("새로 가져옴 1", ws.ResultCountsText);
-        Assert.Contains("복구 지점", ws.ResultSnapshotText);
+        Assert.Contains("새로 가져옴 1", ws.Result!.CountsText);
+        Assert.Contains("복구 지점", ws.Result!.SnapshotText);
         Assert.Equal([Thread2], ws.ImportedThreadIds);
-        ImportResultGroup group = Assert.Single(ws.ResultGroups);
+        ImportResultGroup group = Assert.Single(ws.Result!.Groups);
         Assert.Equal("→ 기타 대화", group.Destination);
 
-        MainViewModel.HighlightDuration = TimeSpan.FromMinutes(1);
+        main.HighlightDuration = TimeSpan.FromMinutes(1); // 인스턴스 값(9_2-29c) — 전역 상태를 바꾸지 않는다
         ws.ShowInListCommand.Execute(null);
         await WaitUntil(() => !main.IsImportWorkspaceOpen && !main.IsCatalogLoading &&
                               main.ProjectNodes.SelectMany(p => p.Conversations).Any(c => c.ThreadId == Thread2 && c.IsHighlighted), "목록에서 보기");
@@ -474,6 +474,5 @@ public sealed class ImportWorkspaceViewModelTests : IDisposable
         Assert.True(shown.IsTreeSelected);
         Assert.True(main.ProjectNodes.Single(p => p.Conversations.Contains(shown)).IsExpanded);
         Assert.False(main.Selection.IsSelected(Thread2)); // 백업 선택은 바꾸지 않는다
-        MainViewModel.HighlightDuration = TimeSpan.FromSeconds(3);
     }
 }

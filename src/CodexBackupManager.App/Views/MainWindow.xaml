@@ -250,6 +250,8 @@
                 <Style TargetType="TreeViewItem">
                   <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                   <Setter Property="Padding" Value="0,3" />
+                  <!-- Phase 9_2-23 — 화면 읽기 프로그램·UI 자동화가 클래스 이름 대신 표시 이름을 읽게 한다. -->
+                  <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                   <!-- Phase 9_2-17 — [목록에서 보기]가 가져온 대화를 선택하면 보이는 위치로 스크롤한다. -->
                   <Setter Property="views:TreeViewItemBehavior.BringIntoViewWhenSelected" Value="True" />
                 </Style>
@@ -260,6 +262,7 @@
                     <Style TargetType="TreeViewItem">
                       <Setter Property="Padding" Value="0,3" />
                       <Setter Property="IsSelected" Value="{Binding IsTreeSelected, Mode=TwoWay}" />
+                      <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                       <Setter Property="views:TreeViewItemBehavior.BringIntoViewWhenSelected" Value="True" />
                     </Style>
                   </HierarchicalDataTemplate.ItemContainerStyle>
@@ -358,70 +361,16 @@
                    한 칸"(=여러 줄짜리 말풍선 하나) 단위로 건너뛰어 스크롤이 딱딱하고 한 번에 너무
                    많이 움직인다. Pixel 단위로 바꾸면 가상화(성능)는 그대로 유지하면서 일반 문서처럼
                    부드럽게 스크롤된다. -->
+              <!-- 메시지 모양은 App.xaml의 ConversationMessageItemStyle/ConversationMessageTemplate(가져오기 미리보기와 공용). -->
               <ListBox Grid.Row="1" Margin="0,12,0,0" ItemsSource="{Binding ConversationMessages}"
+                       ItemContainerStyle="{StaticResource ConversationMessageItemStyle}"
+                       ItemTemplate="{StaticResource ConversationMessageTemplate}"
                        BorderThickness="0" Background="Transparent"
                        ScrollViewer.CanContentScroll="True"
                        VirtualizingPanel.IsVirtualizing="True"
                        VirtualizingPanel.VirtualizationMode="Recycling"
                        VirtualizingPanel.ScrollUnit="Pixel"
                        ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                <ListBox.ItemContainerStyle>
-                  <Style TargetType="ListBoxItem">
-                    <Setter Property="Focusable" Value="False" />
-                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                    <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0,0,0,16" />
-                    <Setter Property="Template">
-                      <Setter.Value>
-                        <ControlTemplate TargetType="ListBoxItem">
-                          <ContentPresenter />
-                        </ControlTemplate>
-                      </Setter.Value>
-                    </Setter>
-                  </Style>
-                </ListBox.ItemContainerStyle>
-                <!-- Codex 실제 UI에 가깝게: Assistant는 완전 평면도, 무거운 채팅 말풍선도 아닌
-                     "은은한 문서 카드"로 표시한다(PanelAlt 배경, 약한 CornerRadius, Border 없음) —
-                     본문 폭은 넉넉히 유지해 문서형 읽기 느낌을 지킨다. User는 오른쪽 정렬의 작은
-                     말풍선(내용 크기만큼만)으로 남기되, 창 오른쪽 벽에 완전히 붙지 않도록 오른쪽
-                     여백을 둔다. Role/Phase 라벨(User/Assistant/commentary/final)은 개발자 도구처럼
-                     보인다는 지적을 반영해 전부 제거했다 — 정렬/배경색만으로 구분한다. Phase 값 자체는
-                     Domain에 그대로 보존되고(향후 Export 등에서 쓸 수 있다), UI에만 안 보여준다. -->
-                <ListBox.ItemTemplate>
-                  <DataTemplate>
-                    <Border x:Name="Bubble">
-                      <Border.Style>
-                        <Style TargetType="Border">
-                          <Setter Property="HorizontalAlignment" Value="Left" />
-                          <Setter Property="Background" Value="{StaticResource PanelAlt}" />
-                          <Setter Property="CornerRadius" Value="9" />
-                          <Setter Property="Padding" Value="16,14" />
-                          <Setter Property="Margin" Value="0" />
-                          <Setter Property="MaxWidth" Value="760" />
-                          <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsUser}" Value="True">
-                              <Setter Property="HorizontalAlignment" Value="Right" />
-                              <Setter Property="Background" Value="{StaticResource UserBubbleBg}" />
-                              <Setter Property="CornerRadius" Value="14" />
-                              <Setter Property="Padding" Value="14,9" />
-                              <Setter Property="Margin" Value="0,2,24,2" />
-                              <Setter Property="MaxWidth" Value="520" />
-                            </DataTrigger>
-                          </Style.Triggers>
-                        </Style>
-                      </Border.Style>
-                      <!-- 읽기 전용 RichTextBox: Markdown-lite로 파싱한 FlowDocument(제목/문단/
-                           목록/코드블록 서식)를 붙인다. 일반 TextBlock과 달리 텍스트 선택/복사는
-                           그대로 유지된다. RichTextBox.Document는 일반 CLR 속성이라 직접 바인딩할
-                           수 없어 render:FlowDocumentBinding.Document 첨부 속성을 거친다. -->
-                      <RichTextBox render:FlowDocumentBinding.Document="{Binding Body}"
-                                   IsReadOnly="True" BorderThickness="0" Background="Transparent"
-                                   Foreground="{StaticResource Fg}" IsReadOnlyCaretVisible="False"
-                                   Cursor="IBeam" Padding="0"
-                                   HorizontalScrollBarVisibility="Disabled" />
-                    </Border>
-                  </DataTemplate>
-                </ListBox.ItemTemplate>
               </ListBox>
             </Grid>
           </Border>

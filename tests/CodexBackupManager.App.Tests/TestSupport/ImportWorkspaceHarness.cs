@@ -118,6 +118,29 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         return backupPath;
     }
 
+    /// <summary>
+    /// 원본 PC의 대화 rollout 끝에 사용자/Codex 메시지를 번갈아 덧붙인다(미리보기 구분·긴 대화 재현용). 텍스트에 <paramref name="marker"/>를 넣는다.
+    /// </summary>
+    public void AppendToSourceRollout(string threadId, int count, string marker)
+    {
+        string file = Directory.EnumerateFiles(SourceHome, $"rollout-*{threadId}*.jsonl", SearchOption.AllDirectories).First();
+        var lines = new List<string>();
+        for (int i = 0; i < count; i++)
+        {
+            bool user = i % 2 == 0;
+            long ordinal = 100 + i;
+            // JSON 문자열 안의 줄바꿈 escape(\n)다 — 파일 줄은 나뉘지 않는다.
+            string text = $"{marker} {i} " + (i % 3 == 0 ? @"# 제목\n\n- 목록 하나\n- 목록 둘" : "본문 줄입니다.");
+            lines.Add(
+                "{\"timestamp\": \"2026-01-02T04:05:06.000Z\", \"ordinal\": " + ordinal + ", \"type\": \"event_msg\", \"payload\": {\"type\": \"item_completed\", " +
+                "\"item\": {\"type\": \"" + (user ? "UserMessage" : "AgentMessage") + "\", \"id\": \"x" + ordinal + "\", \"content\": [{\"type\": \"text\", \"text\": \"" + text + "\"}]}}}");
+        }
+
+        string existing = File.ReadAllText(file);
+        const char lf = (char)10; // rollout은 LF만 쓴다
+        File.WriteAllText(file, existing.TrimEnd(lf) + lf + string.Join(lf, lines) + lf);
+    }
+
     /// <summary>대상 PC에서 대화를 지운다(행 + rollout 파일) — 가져오기에서 "새 대화"가 된다.</summary>
     public void RemoveFromTarget(params string[] threadIds)
     {
@@ -229,7 +252,17 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         ImportWorkspaceViewModel workspace = CreateWorkspace(() => backupPath, folderPicker, confirm);
         await workspace.OpenAsync();
         Assert.True(workspace.State == ImportWorkspaceState.Editing, $"{workspace.State}: {workspace.Message}");
+        await ContentLoadedAsync(workspace); // 편집 진입 때 자동 선택된 대화의 내용 불러오기(9_2-27/9_2b)
         return workspace;
+    }
+
+    /// <summary>마지막으로 시작한 대화 내용 불러오기가 끝날 때까지 기다린다.</summary>
+    public static async Task ContentLoadedAsync(ImportWorkspaceViewModel workspace)
+    {
+        if (workspace.ContentLoadTask is { } task)
+        {
+            await task;
+        }
     }
 
     public static async Task WaitUntil(Func<bool> condition, string label)

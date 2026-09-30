@@ -88,4 +88,7 @@ public sealed class ConversationNodeViewModel : ObservableObject
         get => _isTreeSelected;
         set => SetProperty(ref _isTreeSelected, value);
     }
+
+    /// <summary>(Phase 9_2-23) 화면 읽기 프로그램·UI 자동화가 읽는 이름(Title).</summary>
+    public string AutomationName => Title;
 }

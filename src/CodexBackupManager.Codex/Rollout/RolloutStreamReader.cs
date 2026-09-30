@@ -133,37 +133,62 @@ public static class RolloutStreamReader
         CancellationToken cancellationToken = default)
     {
         using FileStream fileStream = new(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using Stream contentStream = kind == RolloutFileKind.ZstdCompressed
-            ? new DecompressionStream(fileStream, leaveOpen: true)
-            : fileStream;
-        using BufferedStream buffered = new(contentStream);
-
-        long offset = 0;
-        var lineBytes = new List<byte>();
-
-        int b;
-        while ((b = buffered.ReadByte()) != -1)
+        foreach ((string Line, long Start, long End) item in ReadLinesWithByteOffsets(fileStream, kind, cancellationToken))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            offset++;
+            yield return item;
+        }
+    }
 
-            if (b == '\n')
+    /// <summary>
+    /// <see cref="ReadLinesWithByteOffsets(string,RolloutFileKind,CancellationToken)"/>의 스트림 버전(Phase 9_2b-01 — 백업 ZIP entry처럼
+    /// 경로가 없는 출처에서도 같은 바이트 계산을 쓰기 위함). 호출자가 <paramref name="rawStream"/>을 소유한다 — 여기서는 닫지 않는다.
+    /// </summary>
+    public static IEnumerable<(string Line, long StartByteOffsetInclusive, long EndByteOffsetExclusive)> ReadLinesWithByteOffsets(
+        Stream rawStream,
+        RolloutFileKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        Stream? decompression = kind == RolloutFileKind.ZstdCompressed
+            ? new DecompressionStream(rawStream, leaveOpen: true)
+            : null;
+        Stream contentStream = decompression ?? rawStream;
+
+        try
+        {
+            // BufferedStream은 Dispose하면 감싼 스트림까지 닫으므로 닫지 않는다(관리 메모리뿐이라 GC로 충분하다).
+            var buffered = new BufferedStream(contentStream);
+
+            long offset = 0;
+            var lineBytes = new List<byte>();
+
+            int b;
+            while ((b = buffered.ReadByte()) != -1)
             {
-                long start = offset - lineBytes.Count - 1;
-                string line = Encoding.UTF8.GetString(lineBytes.ToArray());
-                lineBytes.Clear();
-                yield return (line, start, offset);
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                offset++;
+
+                if (b == '\n')
+                {
+                    long start = offset - lineBytes.Count - 1;
+                    string line = Encoding.UTF8.GetString(lineBytes.ToArray());
+                    lineBytes.Clear();
+                    yield return (line, start, offset);
+                    continue;
+                }
+
+                lineBytes.Add((byte)b);
             }
 
-            lineBytes.Add((byte)b);
+            if (lineBytes.Count > 0)
+            {
+                long start = offset - lineBytes.Count;
+                string line = Encoding.UTF8.GetString(lineBytes.ToArray());
+                yield return (line, start, offset);
+            }
         }
-
-        if (lineBytes.Count > 0)
+        finally
         {
-            long start = offset - lineBytes.Count;
-            string line = Encoding.UTF8.GetString(lineBytes.ToArray());
-            yield return (line, start, offset);
+            decompression?.Dispose();
         }
     }
 }

@@ -198,4 +198,30 @@ public sealed class ImportTextsTests
         Assert.Equal("Codex가 현재 실행 중입니다.",
             ImportTexts.ResultHeadline(new RestoreResult(RestoreOutcome.NotReady, "Codex가 현재 실행 중입니다.", null, null)).Title);
     }
+
+    // ── 9_2-28 만든 앱 버전 / 9_2-29b 복구 지점 표기 ───────────────────────────────
+
+    [Theory]
+    [InlineData("0.1.1.0", "만든 앱 v0.1.1")]
+    [InlineData("0.1.3", "만든 앱 v0.1.3")]
+    [InlineData("0.1.0.0", "만든 앱 v0.1.0")]
+    [InlineData("1.2.3.4", "만든 앱 v1.2.3.4")]
+    [InlineData("0.2.0+abc123", "만든 앱 v0.2.0")]
+    [InlineData("0.2.0-beta", "만든 앱 v0.2.0-beta")]
+    [InlineData("1.2", "만든 앱 v1.2")]
+    [InlineData(null, "만든 앱 버전 알 수 없음")]
+    [InlineData("", "만든 앱 버전 알 수 없음")]
+    public void 백업을_만든_앱_버전을_읽기_좋게_줄인다(string? raw, string expected)
+        => Assert.Equal(expected, ImportTexts.BackupAppVersion(raw));
+
+    [Fact]
+    public void 복구_지점은_이_PC_시각으로_짧게_보여준다()
+    {
+        string id = "20260930-181730-e0b793d859764646a7df9b07f55af865";
+        string expected = new DateTimeOffset(2026, 9, 30, 18, 17, 30, TimeSpan.Zero).ToLocalTime()
+            .ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+        Assert.Equal(expected, ImportTexts.SnapshotLabel(id));
+        Assert.Equal("unexpected-form", ImportTexts.SnapshotLabel("unexpected-form"));
+    }
 }

@@ -61,6 +61,19 @@ public sealed class ConversationMessageViewModel
     /// </summary>
     public FlowDocument Body => _body.Value;
 
+    /// <summary>
+    /// (Phase 9_2-23) 화면 읽기 프로그램·UI 자동화가 읽는 이름: "사용자: …" / "Codex: …"(본문 앞 100자). 화면 표시에만 쓰고 로그에는 남기지 않는다.
+    /// </summary>
+    public string AutomationName
+    {
+        get
+        {
+            string speaker = IsUser ? "사용자" : "Codex";
+            string flat = Text.ReplaceLineEndings(" ").Trim();
+            return $"{speaker}: {(flat.Length > 100 ? flat[..100] + "…" : flat)}";
+        }
+    }
+
     /// <summary><see cref="Body"/>가 이미 생성되었는지(테스트/진단용). 값 자체를 강제로 만들지 않는다.</summary>
     public bool IsBodyRendered => _body.IsValueCreated;
 

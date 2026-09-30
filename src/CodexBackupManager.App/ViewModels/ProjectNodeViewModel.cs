@@ -141,4 +141,7 @@ public sealed class ProjectNodeViewModel : ObservableObject
         get => _isExpanded;
         set => SetProperty(ref _isExpanded, value);
     }
+
+    /// <summary>(Phase 9_2-23) 화면 읽기 프로그램·UI 자동화가 읽는 이름(DisplayName).</summary>
+    public string AutomationName => DisplayName;
 }

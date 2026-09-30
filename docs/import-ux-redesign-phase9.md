@@ -261,6 +261,17 @@ ImportResultViewModel(결과 + 어디로 들어갔는지 + 되돌리기 가능 �
 - 원본으로만 들어 있는 조상은 트리 끝 "필요한 원본 대화(자동 포함)" 그룹에, 실제로 자동 포함될 때만 보인다.
 - `RunningProcessInfo.ProcessId`(선택 필드)가 추가됐다. 제품 판정(`CodexProcessGuard.Check`)은 이 값을 쓰지 않는다.
 
+### 4.8 9_2-3 구현으로 확정된 사항 (2026-10-01 점검)
+
+- 미리보기는 `IRolloutContentSource`(로컬 `LocalFileRolloutContentSource` / 백업 `BackupRolloutContentSource`)를 통해 메인 Viewer와 **같은 파서와 렌더러**를 쓴다.
+  메시지 템플릿·스타일은 App.xaml로 옮겨 두 화면이 공유한다.
+- 미리보기 reader는 가져오기 화면 하나당 1개다. `FileShare.ReadWrite|Delete`로 열어 Plan의 SHA-256 재확인과 Apply를 막지 않는다.
+- **메모리 원칙(9_2b-06에서 적용):** 백업 entry를 통째로 메모리에 복사하지 않는다. 큰 대화도 로컬 뷰어와 비슷한 메모리로 보여야 한다.
+  ZipArchive가 스레드 안전하지 않은 문제는 복사가 아니라 읽기 단위 격리로 푼다.
+- 결과 화면은 `ImportResultViewModel`이다. 복구 지점은 이 PC 시각 "yyyy-MM-dd HH:mm"으로 보이고 전체 ID는 툴팁/상세다.
+- 백업 앱 버전 표기 규칙: `+` 메타데이터를 버리고, 숫자 4자리이며 4번째가 0이면 뗀다(`0.1.1.0` → v0.1.1).
+- 비활성 CheckBox 스타일(흐리게 0.35, 화살표 커서)은 App.xaml 전역이다. "새 대화"가 아닌 모든 대화 행에 "이 PC 위치"가 보인다.
+
 ---
 
 ## 5. 도메인 모델 변경

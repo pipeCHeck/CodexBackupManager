@@ -308,6 +308,63 @@ public static class ImportTexts
         _ => (string.IsNullOrWhiteSpace(result.Message) ? "지금은 적용할 수 없습니다." : result.Message, "[다시 시도]로 다시 분석할 수 있습니다."),
     };
 
+    /// <summary>
+    /// 복구 지점 짧은 표기(Phase 9_2-29b). Snapshot ID는 <c>yyyyMMdd-HHmmss(UTC)-guid</c>이므로 앞부분을 이 PC 시각
+    /// "2026-10-01 03:17"로 바꾼다. 형식이 다르면 ID 앞 15자를 그대로 쓴다(전체 ID는 툴팁/상세).
+    /// </summary>
+    public static string SnapshotLabel(string snapshotId)
+    {
+        ArgumentNullException.ThrowIfNull(snapshotId);
+        if (snapshotId.Length >= 15 &&
+            DateTime.TryParseExact(snapshotId[..15], "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTime utc))
+        {
+            return new DateTimeOffset(utc, TimeSpan.Zero).ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+        }
+
+        return snapshotId.Length > 15 ? snapshotId[..15] : snapshotId;
+    }
+
+    /// <summary>
+    /// 백업을 만든 앱 버전 표기(Phase 9_2-28): "만든 앱 v0.1.1". 규칙: <c>+</c> 뒤(빌드 메타데이터)는 버리고,
+    /// 숫자 버전이면 끝의 0인 네 번째 자리(revision)만 줄인다(세 자리는 유지: 0.1.0 → v0.1.0, 0.1.1.0 → v0.1.1, 0.1.1.2 → v0.1.1.2).
+    /// 숫자 버전이 아니면(예: 0.2.0-beta) 그대로 쓴다. 비어 있으면 "만든 앱 버전 알 수 없음".
+    /// </summary>
+    public static string BackupAppVersion(string? appVersion)
+    {
+        if (string.IsNullOrWhiteSpace(appVersion))
+        {
+            return "만든 앱 버전 알 수 없음";
+        }
+
+        string core = appVersion.Trim();
+        int plus = core.IndexOf('+', StringComparison.Ordinal);
+        if (plus >= 0)
+        {
+            core = core[..plus];
+        }
+
+        if (Version.TryParse(core, out Version? version))
+        {
+            string text = version.Build < 0
+                ? $"{version.Major}.{version.Minor}"
+                : version.Revision > 0
+                    ? $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}"
+                    : $"{version.Major}.{version.Minor}.{version.Build}";
+            return "만든 앱 v" + text;
+        }
+
+        return "만든 앱 v" + core.TrimStart('v', 'V');
+    }
+
+    /// <summary>
+    /// 트리 행 안의 "이 PC 위치" 한 줄(Phase 9_2-26). 이 PC에 이미 있는 대화(새 대화가 아닌 모든 경우)에만 보인다.
+    /// </summary>
+    public static string? RowLocation(ImportConversationPreview conversation)
+        => conversation.Relation != RevisionRelation.New && LocalLocation(conversation.LocalLocation) is { } location
+            ? "이 PC 위치: " + location
+            : null;
+
     /// <summary>날짜 표시("만든 날 2026-06-29 · 마지막 2026-09-13").</summary>
     public static string? Dates(DateTimeOffset? created, DateTimeOffset? updated)
     {

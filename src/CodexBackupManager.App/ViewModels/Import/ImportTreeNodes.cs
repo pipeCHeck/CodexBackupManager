@@ -86,6 +86,16 @@ public sealed class ImportConversationNodeViewModel : ObservableObject
     /// <summary>이 PC 위치 문구(예: "기타 대화"). 이 PC에 없으면 <c>null</c>.</summary>
     public string? LocalLocationText => ImportTexts.LocalLocation(_result.Preview.LocalLocation);
 
+    /// <summary>
+    /// (Phase 9_2-26) 트리 행 안의 "이 PC 위치: …" 작은 줄. 이 PC에 이미 있는 대화(새 대화가 아닌 경우)에만 있다.
+    /// </summary>
+    public string? RowLocationText => ImportTexts.RowLocation(_result.Preview);
+
+    /// <summary>(Phase 9_2-23) 화면 읽기 프로그램·UI 자동화 이름: "제목, 배지[, 이 PC 위치]".</summary>
+    public string AutomationName => RowLocationText is { } location
+        ? $"{Title}, {BadgeText}, {location}"
+        : $"{Title}, {BadgeText}";
+
     /// <summary>상세의 "이미 이 PC에 있음 · 이 PC 위치: …" 한 줄. 이 PC에 없으면 <c>null</c>.</summary>
     public string? PresenceText => LocalLocationText is { } location
         ? (_result.Preview.Relation == RevisionRelation.Identical ? "이미 이 PC에 있음 · " : "이 PC에도 있음 · ") + "이 PC 위치: " + location
@@ -116,6 +126,7 @@ public sealed class ImportConversationNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(BadgeKind));
         OnPropertyChanged(nameof(DisabledReason));
         OnPropertyChanged(nameof(StatusSentence));
+        OnPropertyChanged(nameof(AutomationName));
     }
 }
 
@@ -146,6 +157,9 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
 
     /// <summary>표시 이름.</summary>
     public string DisplayName { get; }
+
+    /// <summary>(Phase 9_2-23) 화면 읽기 프로그램·UI 자동화 이름(프로젝트 이름).</summary>
+    public string AutomationName => DisplayName;
 
     /// <summary>백업 프로젝트 키(<see cref="ImportUserChoices.ProjectKeyOf(string?)"/>). 조상 그룹은 <c>null</c>.</summary>
     public string? ProjectKey => _project?.ProjectKey;

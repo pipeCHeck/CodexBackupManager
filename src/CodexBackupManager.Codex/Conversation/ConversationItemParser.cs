@@ -95,7 +95,11 @@ public static class ConversationItemParser
 
     /// <summary>파일 전체를 읽는다.</summary>
     public static ParseResult ParseFile(RolloutFileReference file, CancellationToken cancellationToken = default)
-        => Parse(file, maxOrdinalExclusive: null, maxByteOffsetExclusive: null, cancellationToken);
+        => Parse(file, LocalFileRolloutContentSource.Instance, maxOrdinalExclusive: null, maxByteOffsetExclusive: null, cancellationToken);
+
+    /// <summary>(Phase 9_2b-02) <paramref name="source"/>에서 파일 전체를 읽는다(예: 백업 ZIP entry).</summary>
+    public static ParseResult ParseFile(RolloutFileReference file, IRolloutContentSource source, CancellationToken cancellationToken = default)
+        => Parse(file, source, maxOrdinalExclusive: null, maxByteOffsetExclusive: null, cancellationToken);
 
     /// <summary>
     /// <c>ordinal</c>이 <paramref name="maxOrdinalExclusive"/> 미만인 줄까지만 읽는다.
@@ -104,7 +108,12 @@ public static class ConversationItemParser
     /// </summary>
     public static ParseResult ParseFileWithOrdinalCutoff(
         RolloutFileReference file, long maxOrdinalExclusive, CancellationToken cancellationToken = default)
-        => Parse(file, maxOrdinalExclusive, maxByteOffsetExclusive: null, cancellationToken);
+        => Parse(file, LocalFileRolloutContentSource.Instance, maxOrdinalExclusive, maxByteOffsetExclusive: null, cancellationToken);
+
+    /// <summary>(Phase 9_2b-02) <see cref="ParseFileWithOrdinalCutoff(RolloutFileReference,long,CancellationToken)"/>의 content source 버전.</summary>
+    public static ParseResult ParseFileWithOrdinalCutoff(
+        RolloutFileReference file, IRolloutContentSource source, long maxOrdinalExclusive, CancellationToken cancellationToken = default)
+        => Parse(file, source, maxOrdinalExclusive, maxByteOffsetExclusive: null, cancellationToken);
 
     /// <summary>
     /// 파일에서 <paramref name="maxByteOffsetExclusive"/> 바이트 이전까지만 읽는다.
@@ -112,24 +121,33 @@ public static class ConversationItemParser
     /// </summary>
     public static ParseResult ParseFileWithByteOffsetCutoff(
         RolloutFileReference file, long maxByteOffsetExclusive, CancellationToken cancellationToken = default)
-        => Parse(file, maxOrdinalExclusive: null, maxByteOffsetExclusive, cancellationToken);
+        => Parse(file, LocalFileRolloutContentSource.Instance, maxOrdinalExclusive: null, maxByteOffsetExclusive, cancellationToken);
+
+    /// <summary>(Phase 9_2b-02) <see cref="ParseFileWithByteOffsetCutoff(RolloutFileReference,long,CancellationToken)"/>의 content source 버전.</summary>
+    public static ParseResult ParseFileWithByteOffsetCutoff(
+        RolloutFileReference file, IRolloutContentSource source, long maxByteOffsetExclusive, CancellationToken cancellationToken = default)
+        => Parse(file, source, maxOrdinalExclusive: null, maxByteOffsetExclusive, cancellationToken);
 
     private static ParseResult Parse(
         RolloutFileReference file,
+        IRolloutContentSource source,
         long? maxOrdinalExclusive,
         long? maxByteOffsetExclusive,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(file);
+        ArgumentNullException.ThrowIfNull(source);
 
         var eventMessages = new List<ConversationMessage>();
         var responseItemMessages = new List<ConversationMessage>();
 
         try
         {
+            // Phase 9_2b-02 — 원시 스트림은 content source가 연다(로컬 파일은 이전과 같은 열기 옵션). 압축 해제와 줄 읽기는 그대로다.
+            using Stream raw = source.OpenRaw(file);
             if (maxByteOffsetExclusive is { } byteCutoff)
             {
-                foreach ((string line, _, long endOffset) in RolloutStreamReader.ReadLinesWithByteOffsets(file.FullPath, file.Kind, cancellationToken))
+                foreach ((string line, _, long endOffset) in RolloutStreamReader.ReadLinesWithByteOffsets(raw, file.Kind, cancellationToken))
                 {
                     if (endOffset > byteCutoff)
                     {
@@ -141,7 +159,7 @@ public static class ConversationItemParser
             }
             else
             {
-                foreach (string line in RolloutStreamReader.ReadLines(file.FullPath, file.Kind, cancellationToken))
+                foreach (string line in RolloutStreamReader.ReadLines(raw, file.Kind, cancellationToken))
                 {
                     if (string.IsNullOrWhiteSpace(line))
                     {

@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using Xunit;
 
 namespace CodexBackupManager.Restore.Tests;
@@ -83,23 +85,35 @@ public sealed class CodexProcessGuardTests
         using Process child = Process.Start(new ProcessStartInfo
         {
             FileName = "cmd.exe",
-            Arguments = "/c ping -n 3 127.0.0.1 >nul",
+            Arguments = "/c ping -n 30 127.0.0.1 >nul", // 초기화 대기 상한보다 오래 살아 있게 한다(끝나면 finally에서 종료)
             UseShellExecute = false,
             CreateNoWindow = true,
         })!;
 
         try
         {
-            IReadOnlyList<RunningProcessInfo> processes = CodexProcessGuard.SystemRunningProcessLister();
-            // Phase 9_1-15 — 목록의 "첫 번째 cmd"가 아니라 이 테스트가 띄운 바로 그 자식을 PID로 찾는다. 병렬 실행 중
-            // 다른 cmd.exe(경로를 읽을 수 없는 것 포함)가 먼저 잡히면 간헐적으로 실패하던 결함이다.
-            RunningProcessInfo? found = processes.FirstOrDefault(p => p.ProcessId == child.Id);
+            // Phase 9_1-15 — 이 테스트가 띄운 바로 그 자식을 PID로 찾는다(목록의 "첫 번째 cmd"가 아니다).
+            // 재수정: 방금 띄운 프로세스는 초기화가 끝나기 전까지 MainModule을 읽을 수 없어 경로가 null일 수 있다
+            // (부하 상황에서 실측 재현). 고정 Sleep 대신, 경로가 채워질 때까지 짧은 간격으로 목록을 다시 읽는다.
+            var stopwatch = Stopwatch.StartNew();
+            RunningProcessInfo? found = null;
+            while (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                found = CodexProcessGuard.SystemRunningProcessLister().FirstOrDefault(p => p.ProcessId == child.Id);
+                if (found?.MainModulePath is not null)
+                {
+                    break;
+                }
 
-            Assert.NotNull(found);
+                Thread.Sleep(25);
+            }
+
+            Assert.True(found is not null, $"자식 프로세스를 목록에서 찾지 못했습니다. pid={child.Id} elapsedMs={stopwatch.ElapsedMilliseconds}");
             Assert.Equal("cmd", found!.ProcessName, ignoreCase: true);
-
-            Assert.NotNull(found.MainModulePath);
-            Assert.Contains("cmd.exe", found.MainModulePath, System.StringComparison.OrdinalIgnoreCase);
+            Assert.True(
+                found.MainModulePath is not null,
+                $"자식 프로세스의 실행 파일 경로를 제한 시간 안에 읽지 못했습니다. pid={child.Id} elapsedMs={stopwatch.ElapsedMilliseconds}");
+            Assert.Contains("cmd.exe", found.MainModulePath, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

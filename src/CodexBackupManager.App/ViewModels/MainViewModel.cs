@@ -939,8 +939,10 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>강조 표시를 유지하는 시간(설계 §7.7).</summary>
-    internal static TimeSpan HighlightDuration { get; set; } = TimeSpan.FromSeconds(3);
+    /// <summary>
+    /// 강조 표시를 유지하는 시간(설계 §7.7). Phase 9_2-29c — 인스턴스 값이다(테스트가 전역 상태를 바꾸지 않게).
+    /// </summary>
+    internal TimeSpan HighlightDuration { get; set; } = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// 메인 트리에서 대화들을 펼치고, 첫 대화를 선택(스크롤)하고, 잠시 강조한다. 선택(백업 체크)은 바꾸지 않는다.
@@ -973,7 +975,7 @@ public sealed class MainViewModel : ObservableObject
         return found;
     }
 
-    private static async Task ClearHighlightLaterAsync(IReadOnlyList<ConversationNodeViewModel> nodes)
+    private async Task ClearHighlightLaterAsync(IReadOnlyList<ConversationNodeViewModel> nodes)
     {
         await Task.Delay(HighlightDuration).ConfigureAwait(true);
         foreach (ConversationNodeViewModel node in nodes)

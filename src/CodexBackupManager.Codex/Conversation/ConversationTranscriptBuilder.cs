@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
+using CodexBackupManager.Codex.Rollout;
 using CodexBackupManager.Codex.Threads;
 using CodexBackupManager.Domain.Codex.Conversation;
 using CodexBackupManager.Domain.Codex.Rollout;
@@ -53,9 +54,21 @@ public static class ConversationTranscriptBuilder
         string threadId,
         IReadOnlyDictionary<string, ThreadChain> chains,
         CancellationToken cancellationToken = default)
+        => Build(threadId, chains, LocalFileRolloutContentSource.Instance, cancellationToken);
+
+    /// <summary>
+    /// (Phase 9_2b-02) <paramref name="source"/>에서 rollout을 읽어 transcript를 만든다. 예: 백업 ZIP entry
+    /// (<c>BackupCatalogReader</c>가 만든 체인은 <see cref="RolloutFileReference.FullPath"/>가 entry 경로다). 체인·분기·세그먼트 규칙은 같다.
+    /// </summary>
+    public static ConversationTranscript Build(
+        string threadId,
+        IReadOnlyDictionary<string, ThreadChain> chains,
+        IRolloutContentSource source,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(threadId);
         ArgumentNullException.ThrowIfNull(chains);
+        ArgumentNullException.ThrowIfNull(source);
 
         var stopwatch = Stopwatch.StartNew();
         var warnings = new List<string>();
@@ -102,7 +115,7 @@ public static class ConversationTranscriptBuilder
 
             IReadOnlyList<RolloutFileReference> files = ThreadDependencyResolver.SelectFiles(chain, targetRolloutId);
             List<ConversationMessage> chainMessages = ReadChainMessages(
-                chain, files, targetRolloutId, cutoffOrdinal, cutoffByteOffset, warnings, cancellationToken);
+                chain, files, targetRolloutId, cutoffOrdinal, cutoffByteOffset, source, warnings, cancellationToken);
             messages.AddRange(chainMessages);
         }
 
@@ -132,6 +145,7 @@ public static class ConversationTranscriptBuilder
         string? externalTargetRolloutId,
         long? externalCutoffOrdinal,
         long? externalCutoffByteOffset,
+        IRolloutContentSource source,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
@@ -146,7 +160,7 @@ public static class ConversationTranscriptBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
             messages.AddRange(ReadOneFile(
-                slice.File, slice.CutoffOrdinalExclusive, slice.CutoffByteOffsetExclusive, warnings, cancellationToken));
+                slice.File, slice.CutoffOrdinalExclusive, slice.CutoffByteOffsetExclusive, source, warnings, cancellationToken));
         }
 
         return messages;
@@ -156,14 +170,15 @@ public static class ConversationTranscriptBuilder
         RolloutFileReference file,
         long? cutoffOrdinal,
         long? cutoffByteOffset,
+        IRolloutContentSource source,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
         ConversationItemParser.ParseResult parsed = cutoffOrdinal is { } ordinal
-            ? ConversationItemParser.ParseFileWithOrdinalCutoff(file, ordinal, cancellationToken)
+            ? ConversationItemParser.ParseFileWithOrdinalCutoff(file, source, ordinal, cancellationToken)
             : cutoffByteOffset is { } byteOffset
-                ? ConversationItemParser.ParseFileWithByteOffsetCutoff(file, byteOffset, cancellationToken)
-                : ConversationItemParser.ParseFile(file, cancellationToken);
+                ? ConversationItemParser.ParseFileWithByteOffsetCutoff(file, source, byteOffset, cancellationToken)
+                : ConversationItemParser.ParseFile(file, source, cancellationToken);
 
         if (parsed.Warning is not null)
         {

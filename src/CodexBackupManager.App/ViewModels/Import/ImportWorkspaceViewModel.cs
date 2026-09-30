@@ -49,17 +49,6 @@ public enum ImportWorkspaceState
     Result,
 }
 
-/// <summary>결과 화면의 대화 한 줄.</summary>
-/// <param name="Title">대화 제목.</param>
-/// <param name="Text">무엇을 했는지 / 지금 어디 있는지.</param>
-public sealed record ImportResultItem(string Title, string Text);
-
-/// <summary>결과 화면의 묶음(프로젝트 → 어디로).</summary>
-/// <param name="Header">묶음 이름.</param>
-/// <param name="Destination">어디로 들어갔는지. 없으면 <c>null</c>.</param>
-/// <param name="Items">대화들.</param>
-public sealed record ImportResultGroup(string Header, string? Destination, IReadOnlyList<ImportResultItem> Items);
-
 /// <summary>가져오기 화면을 닫을 때 메인에 넘기는 정보.</summary>
 /// <param name="CodexDataChanged">적용이 실제로 무언가를 썼는지(메인 목록을 새로 읽어야 하는지).</param>
 /// <param name="ShowInList">[목록에서 보기]로 닫았는지.</param>
@@ -113,8 +102,15 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     private string? _messageHint;
     private string? _editingError;
     private string? _applyStatusText;
-    private RestoreResult? _result;
+    private ImportResultViewModel? _result;
     private ImportPlan? _appliedPlan;
+
+    // Phase 9_2b — 대화 내용 미리보기. 백업 파일마다 한 번만 열고(ImportConversationPreviewer) 화면을 닫거나 다른 파일을 열 때 닫는다.
+    private ImportConversationPreviewer? _previewer;
+    private string? _previewerPath;
+    private CancellationTokenSource? _contentCancellation;
+    private bool _isContentLoading;
+    private string? _contentNotice;
 
     /// <summary>생성자.</summary>
     /// <param name="logger">로거.</param>
@@ -174,6 +170,15 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     /// <summary>편집 중 Codex 감시 타이머 생성기(주기, 콜백) → 해제 핸들. 기본: UI 컨텍스트로 넘기는 스레드 타이머.</summary>
     internal Func<TimeSpan, Action, IDisposable> PollTimerFactory { get; set; } = DefaultPollTimer;
+
+    /// <summary>미리보기 생성기 팩터리(테스트가 열기 횟수·캐시를 확인할 수 있게 둔다). 기본: 백업 파일을 공유 읽기로 여는 미리보기.</summary>
+    internal Func<string, ImportConversationPreviewer> PreviewerFactory { get; set; } = static path => new ImportConversationPreviewer(path);
+
+    /// <summary>현재 미리보기 생성기(테스트 확인용). 편집 화면이 아니면 <c>null</c>일 수 있다.</summary>
+    internal ImportConversationPreviewer? Previewer => _previewer;
+
+    /// <summary>마지막으로 시작한 대화 내용 불러오기 작업(테스트가 기다릴 수 있게 둔다).</summary>
+    internal Task? ContentLoadTask { get; private set; }
 
     /// <summary>이 화면이 Plan을 만든 횟수(테스트 확인용 — 체크/폴더 변경으로는 늘지 않아야 한다).</summary>
     internal int PlanBuildCount { get; private set; }
@@ -394,33 +399,44 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     // ── 결과 ─────────────────────────────────────────────────────────────
 
-    /// <summary>결과 제목.</summary>
-    public string? ResultTitle { get; private set; }
+    /// <summary>결과 화면(Phase 9_2-29a — <see cref="ImportResultViewModel"/>로 분리). 결과가 없으면 <c>null</c>.</summary>
+    public ImportResultViewModel? Result
+    {
+        get => _result;
+        private set
+        {
+            if (SetProperty(ref _result, value))
+            {
+                OnPropertyChanged(nameof(ImportedThreadIds));
+                OnPropertyChanged(nameof(CanRetry));
+            }
+        }
+    }
 
-    /// <summary>결과 한 줄 개수 요약.</summary>
-    public string? ResultCountsText { get; private set; }
-
-    /// <summary>결과 해결 방법/안내.</summary>
-    public string? ResultHint { get; private set; }
-
-    /// <summary>복구 지점 문구.</summary>
-    public string? ResultSnapshotText { get; private set; }
-
-    /// <summary>결과 묶음.</summary>
-    public ObservableCollection<ImportResultGroup> ResultGroups { get; } = [];
-
-    /// <summary>마지막 적용 결과 종류. 없으면 <c>null</c>.</summary>
-    public RestoreOutcome? ResultOutcome => _result?.Outcome;
-
-    /// <summary>결과가 성공 계열인지(초록).</summary>
-    public bool IsResultSuccess => _result?.Outcome is RestoreOutcome.Succeeded or RestoreOutcome.NothingToDo;
-
-    /// <summary>목록에서 강조할 대화(가져온 선택 대화).</summary>
-    public IReadOnlyList<string> ImportedThreadIds { get; private set; } = [];
+    /// <summary>목록에서 강조할 대화(결과 화면 기준).</summary>
+    public IReadOnlyList<string> ImportedThreadIds => _result?.ImportedThreadIds ?? [];
 
     /// <summary>[다시 시도]를 보여주는지.</summary>
-    public bool CanRetry => State == ImportWorkspaceState.Result &&
-                            _result?.Outcome is RestoreOutcome.NotReady or RestoreOutcome.Cancelled or RestoreOutcome.RolledBack;
+    public bool CanRetry => State == ImportWorkspaceState.Result && _result is { IsRetryable: true };
+
+    // ── 대화 내용 미리보기(9_2b) ────────────────────────────────────────────────
+
+    /// <summary>오른쪽 상세의 대화 내용(메인 Viewer와 같은 표시용 메시지).</summary>
+    public ObservableCollection<ConversationMessageViewModel> ContentMessages { get; } = [];
+
+    /// <summary>대화 내용을 불러오는 중인지.</summary>
+    public bool IsContentLoading
+    {
+        get => _isContentLoading;
+        private set => SetProperty(ref _isContentLoading, value);
+    }
+
+    /// <summary>대화 내용 안내 한 줄(일부만 보임, 읽을 수 없음 등). 없으면 <c>null</c>.</summary>
+    public string? ContentNotice
+    {
+        get => _contentNotice;
+        private set => SetProperty(ref _contentNotice, value);
+    }
 
     // ── 명령 ─────────────────────────────────────────────────────────────
 
@@ -583,7 +599,10 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     private void LoadPreview(ImportPreview preview)
     {
+        string? previousSelection = SelectedConversation?.ThreadId;
+        string? previousProjectKey = SelectedProject?.ProjectKey;
         _preview = preview;
+        EnsurePreviewer();
         BackupManifest manifest = preview.Manifest!;
         Dictionary<string, BackupConversationMetadata> metadata = manifest.Conversations
             .ToDictionary(c => c.ThreadId, StringComparer.OrdinalIgnoreCase);
@@ -625,7 +644,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
         BackupHeaderText =
             $"{Path.GetFileName(_backupFilePath)} · {manifest.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} · " +
-            $"대화 {manifest.ConversationCount}개 · 앱 {manifest.AppVersion}";
+            $"대화 {manifest.ConversationCount}개 · {ImportTexts.BackupAppVersion(manifest.AppVersion)}";
         OnPropertyChanged(nameof(BackupHeaderText));
 
         DetailRows.Clear();
@@ -645,6 +664,119 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(Choices));
         ApplyFilter();
         RefreshSummaryBindings();
+        AutoSelect(previousSelection, previousProjectKey);
+    }
+
+    /// <summary>
+    /// Phase 9_2-27 — 편집 화면에 들어오면 오른쪽 상세가 비지 않게 한다: 이전 선택(다시 분석) → 첫 대화 → 첫 프로젝트 순.
+    /// </summary>
+    private void AutoSelect(string? previousThreadId, string? previousProjectKey)
+    {
+        object? target =
+            (previousThreadId is not null && _conversationNodes.TryGetValue(previousThreadId, out ImportConversationNodeViewModel? previous)
+                ? previous
+                : null)
+            ?? (previousProjectKey is not null && _projectNodes.TryGetValue(previousProjectKey, out ImportProjectNodeViewModel? previousProject)
+                ? previousProject
+                : null)
+            ?? (object?)Projects.Where(p => !p.IsDependencyGroup).SelectMany(p => p.Conversations).FirstOrDefault(c => c.IsVisible)
+            ?? Projects.FirstOrDefault();
+
+        switch (target)
+        {
+            case ImportConversationNodeViewModel conversation:
+                conversation.IsTreeSelected = true;
+                break;
+            case ImportProjectNodeViewModel project:
+                project.IsTreeSelected = true;
+                break;
+        }
+
+        SelectNode(target);
+    }
+
+    private void EnsurePreviewer()
+    {
+        if (_previewer is not null && string.Equals(_previewerPath, _backupFilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return; // 같은 백업을 다시 분석한 경우 — 이미 연 미리보기(와 캐시)를 그대로 쓴다.
+        }
+
+        DisposePreviewer();
+        _previewer = PreviewerFactory(_backupFilePath!);
+        _previewerPath = _backupFilePath;
+    }
+
+    private void DisposePreviewer()
+    {
+        _contentCancellation?.Cancel();
+        _contentCancellation = null;
+        _previewer?.Dispose();
+        _previewer = null;
+        _previewerPath = null;
+        ContentMessages.Clear();
+        ContentNotice = null;
+        IsContentLoading = false;
+    }
+
+    /// <summary>
+    /// Phase 9_2b-04 — 고른 대화의 내용을 백그라운드에서 만든다. 선택이 바뀌면 이전 작업을 취소하고, 마지막 선택만 화면에 남긴다.
+    /// 로그에는 개수와 짧은 해시만 남긴다(원문·제목 없음).
+    /// </summary>
+    private async Task LoadContentAsync(ImportConversationNodeViewModel node)
+    {
+        _contentCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        _contentCancellation = cancellation;
+        ContentMessages.Clear();
+        ContentNotice = null;
+
+        if (_previewer is not { } previewer)
+        {
+            return;
+        }
+
+        IsContentLoading = true;
+        try
+        {
+            ImportConversationPreviewResult result = await previewer.LoadAsync(node.ThreadId, cancellation.Token).ConfigureAwait(true);
+            if (cancellation.IsCancellationRequested || !ReferenceEquals(SelectedNode, node))
+            {
+                return;
+            }
+
+            foreach (ConversationMessageViewModel message in result.Messages)
+            {
+                ContentMessages.Add(message);
+            }
+
+            ContentNotice = result.IsPartial
+                ? "일부 내용만 표시합니다. 백업에 없는 원본 대화가 있거나 읽을 수 없는 부분이 있습니다."
+                : result.Messages.Count == 0 ? "표시할 대화 내용이 없습니다." : null;
+            _logger.Info(
+                $"가져오기 미리보기. thread={CodexBackupManager.Domain.Diagnostics.Redact.ShortHash(node.ThreadId)} " +
+                $"messages={result.Messages.Count} warnings={result.WarningCount}");
+        }
+        catch (OperationCanceledException)
+        {
+            // 다른 대화를 골랐다 — 이전 결과를 남기지 않는다.
+        }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(_contentCancellation, cancellation))
+            {
+                ContentNotice = $"대화 내용을 읽을 수 없습니다({ex.GetType().Name}).";
+            }
+
+            _logger.Warning($"가져오기 미리보기 실패. type={ex.GetType().Name}");
+        }
+        finally
+        {
+            if (ReferenceEquals(_contentCancellation, cancellation))
+            {
+                IsContentLoading = false;
+            }
+        }
     }
 
     private ImportConversationNodeViewModel CreateConversationNode(
@@ -814,7 +946,21 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>트리 선택이 바뀌었을 때(View가 부른다).</summary>
-    public void SelectNode(object? node) => SelectedNode = node;
+    public void SelectNode(object? node)
+    {
+        SelectedNode = node;
+        if (node is ImportConversationNodeViewModel conversation)
+        {
+            ContentLoadTask = LoadContentAsync(conversation);
+        }
+        else
+        {
+            _contentCancellation?.Cancel();
+            ContentMessages.Clear();
+            ContentNotice = null;
+            IsContentLoading = false;
+        }
+    }
 
     // ── Codex 감시 ───────────────────────────────────────────────────────────
 
@@ -996,85 +1142,8 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ShowResult(RestoreResult result, ImportPlan plan)
     {
-        _result = result;
-        (string title, string? hint) = ImportTexts.ResultHeadline(result);
-        ResultTitle = title;
-        ResultHint = hint;
-        ResultSnapshotText = result.Outcome == RestoreOutcome.Succeeded && result.SnapshotId is { } id ? $"복구 지점 {id}" : null;
-        ResultGroups.Clear();
-
-        int imported = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.Import);
-        int updated = plan.Conversations.Count(c => c.PlannedAction == ImportPlannedAction.Update);
-        int skipped = plan.Conversations.Count(c => c.IsSelected && c.PlannedAction == ImportPlannedAction.Skip);
-
-        if (result.Outcome == RestoreOutcome.Succeeded)
-        {
-            ResultCountsText = $"새로 가져옴 {imported} · 이어받음 {updated} · 건너뜀 {skipped}";
-            BuildSucceededGroups(plan);
-            ImportedThreadIds = plan.Conversations
-                .Where(c => c.IsSelected && c.PlannedAction is ImportPlannedAction.Import or ImportPlannedAction.Update)
-                .Select(c => c.ThreadId)
-                .ToList();
-        }
-        else if (result.Outcome == RestoreOutcome.NothingToDo)
-        {
-            ResultCountsText = null;
-            BuildCurrentLocationGroup();
-            ImportedThreadIds = _summary!.Conversations
-                .Where(c => c.Preview.IsSelected && c.Preview.LocalLocation is { ExistsLocally: true })
-                .Select(c => c.ThreadId)
-                .ToList();
-        }
-        else
-        {
-            ResultCountsText = null;
-            ImportedThreadIds = [];
-        }
-
-        foreach (string name in new[]
-        {
-            nameof(ResultTitle), nameof(ResultHint), nameof(ResultSnapshotText), nameof(ResultCountsText),
-            nameof(ResultOutcome), nameof(IsResultSuccess), nameof(ImportedThreadIds), nameof(CanRetry),
-        })
-        {
-            OnPropertyChanged(name);
-        }
-
+        Result = new ImportResultViewModel(result, plan, _summary!, _titles, LocalProjects);
         State = ImportWorkspaceState.Result;
-    }
-
-    private void BuildSucceededGroups(ImportPlan plan)
-    {
-        foreach (IGrouping<string?, ImportPlanConversation> group in plan.Conversations
-                     .Where(c => c.PlannedAction is ImportPlannedAction.Import or ImportPlannedAction.Update)
-                     .GroupBy(c => c.TargetProjectKey))
-        {
-            ImportPlanProject? project = group.Key is null
-                ? null
-                : plan.Projects.FirstOrDefault(p => ImportUserChoices.ProjectKeyOf(p.ProjectId) == group.Key);
-            string header = project?.DisplayName ?? "필요한 원본 대화";
-            string destination = project?.ResolvedTarget is { Kind: ProjectTargetKind.LinkExisting } target
-                ? $"→ '{LocalProjects.FindById(target.LinkDbProjectId)?.DisplayName ?? project.DisplayName}' 프로젝트 ({target.FolderPath})"
-                : "→ 기타 대화";
-
-            var items = group
-                .Select(c => new ImportResultItem(
-                    _titles.TryGetValue(c.ThreadId, out string? t) ? t : ImportTexts.FallbackTitle(c.ThreadId),
-                    c.PlannedAction == ImportPlannedAction.Import ? "새로 가져옴" : "이어받음"))
-                .ToList();
-            ResultGroups.Add(new ImportResultGroup(header, destination, items));
-        }
-    }
-
-    private void BuildCurrentLocationGroup()
-    {
-        var items = _summary!.Conversations
-            .Where(c => c.Preview.IsSelected)
-            .Select(c => new ImportResultItem(
-                ImportTexts.TitleOf(c.Preview),
-                ImportTexts.LocalLocation(c.Preview.LocalLocation) is { } location ? $"이 PC 위치: {location}" : "이 PC에 없음"))
-            .ToList();
-        ResultGroups.Add(new ImportResultGroup("선택한 대화의 현재 위치", null, items));
     }
 
     // ── 닫기 ────────────────────────────────────────────────────────────────
@@ -1094,9 +1163,9 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     {
         _preview = null;
         _summary = null;
-        _result = null;
+        Result = null;
         _appliedPlan = null;
-        ImportedThreadIds = [];
+        DisposePreviewer();
         Projects.Clear();
         DetailRows.Clear();
         _conversationNodes.Clear();
@@ -1135,6 +1204,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        DisposePreviewer();
         StopPolling();
         _analysisCancellation?.Cancel();
         _applyCancellation?.Cancel();
