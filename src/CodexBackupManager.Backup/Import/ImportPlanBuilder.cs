@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using CodexBackupManager.Domain.Codex.Import;
 
@@ -79,6 +80,76 @@ public static class ImportPlanBuilder
         // Plan의 identity는 방금 재확인한 sourceIdentity 그 자체다 — 다시 계산하지 않는다(같은
         // 값임이 이미 확인됐다).
         return new ImportPlan(sourceIdentity, projects, conversations, hasBlockingIssues, hasUnresolvedDivergence);
+    }
+
+    /// <summary>
+    /// (Phase 9_2-04) 사용자 선택을 반영한 Plan을 만든다. <see cref="ImportSelection.Compute"/>의 결과를 그대로 옮기므로 화면 요약과
+    /// Plan이 서로 다른 판단을 하지 않는다. backup identity pinning(06_03)은 선택 없는 오버로드와 같다.
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    ///   <item>대화 순서와 사전조건(<see cref="ImportConversationPrecondition"/>)은 선택 없는 오버로드와 같다. 제외된 대화의
+    ///     <see cref="ImportPlanConversation.PlannedAction"/>은 <see cref="ImportPlannedAction.Skip"/>이고 이유는 <see cref="ImportPlanConversation.SkipReason"/>이다.</item>
+    ///   <item>프로젝트 <see cref="ImportPlanProject.ResolvedTarget"/>은 사용자 결정 기준이다. <see cref="ImportPlanProject.PathStatus"/>는 폴더를
+    ///     골랐으면 ManuallyLinked, 아니면 Preview의 자동 판정 상태다. <see cref="ImportPlanProject.TargetProjectPath"/>와 대화의
+    ///     <see cref="ImportPlanConversation.TargetProjectPath"/>는 LinkExisting이면 연결 루트, 아니면 <c>null</c>이다.</item>
+    ///   <item><see cref="ImportPlan.HasBlockingIssues"/>/<see cref="ImportPlan.HasUnresolvedDivergence"/>는 closure 기준이다.</item>
+    ///   <item>결정 오류(예: 아직 지원하지 않는 새 프로젝트 이름, 없는 폴더)가 있으면 Plan을 만들지 않는다(<c>null</c>).</item>
+    /// </list>
+    /// </remarks>
+    public static ImportPlan? Build(
+        ImportPreview preview, string backupFilePath, ImportUserChoices choices, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preview);
+        ArgumentException.ThrowIfNullOrWhiteSpace(backupFilePath);
+        ArgumentNullException.ThrowIfNull(choices);
+
+        if (!preview.Success || preview.Manifest is null || preview.SourceBackupIdentity is not { } sourceIdentity)
+        {
+            return null;
+        }
+
+        ImportSelectionSummary selection = ImportSelection.Compute(preview, choices);
+        if (selection.Projects.Any(p => p.Resolution.Error is not null))
+        {
+            return null;
+        }
+
+        if (!BackupIdentityHasher.Matches(sourceIdentity, backupFilePath, cancellationToken))
+        {
+            return null;
+        }
+
+        var projects = new List<ImportPlanProject>(selection.Projects.Count);
+        var targetPathByKey = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (ImportSelectionProject project in selection.Projects)
+        {
+            string? targetPath = project.Target.Kind == ProjectTargetKind.LinkExisting ? project.Target.FolderPath : null;
+            targetPathByKey.TryAdd(project.ProjectKey, targetPath);
+            projects.Add(new ImportPlanProject(
+                project.Preview.ProjectId, project.Preview.DisplayName, project.Resolution.PathStatus, targetPath)
+            {
+                ResolvedTarget = project.Target,
+            });
+        }
+
+        var conversations = new List<ImportPlanConversation>(selection.Conversations.Count);
+        foreach (ImportSelectionConversation conversation in selection.Conversations)
+        {
+            string? targetPath = conversation.ProjectKey is { } key && targetPathByKey.TryGetValue(key, out string? path) ? path : null;
+            conversations.Add(BuildPlanConversation(conversation.Preview, targetPath) with
+            {
+                PlannedAction = conversation.FinalAction,
+                SkipReason = conversation.SkipReason,
+                TargetProjectKey = conversation.ProjectKey,
+            });
+        }
+
+        return new ImportPlan(
+            sourceIdentity, projects, conversations, selection.HasBlockingIssues, selection.HasUnresolvedDivergence)
+        {
+            UserChoices = choices,
+        };
     }
 
     private static ImportPlanConversation BuildPlanConversation(ImportConversationPreview conversation, string? targetProjectPath)

@@ -93,9 +93,12 @@ public static class ProjectTargetResolver
         switch (lookup.Kind)
         {
             case ProjectLookupKind.Found when lookup.Project!.DbProjectId is { } dbProjectId:
+                // Phase 9_1-14 — 자동 연결은 백업 원본 문자열이 아니라 이 PC project_roots에 저장된 루트 표기를 쓴다
+                // (canonical은 같아도 대소문자/\\?\ 접두사가 다를 수 있다. 이 값이 Apply 때 threads.cwd가 된다).
+                // 사용자가 고른 폴더는 그 경로의 canonical Display를 유지한다.
                 return ProjectTarget.Link(
                     userSelected ? ProjectTargetReason.UserSelectedRegistered : ProjectTargetReason.OriginalRootRegistered,
-                    folderPath,
+                    userSelected ? folderPath : RegisteredRootDisplay(lookup.Project, canonical!) ?? folderPath,
                     dbProjectId);
 
             case ProjectLookupKind.Found:
@@ -107,6 +110,19 @@ public static class ProjectTargetResolver
             default:
                 return ProjectTarget.Uncategorized(unregistered, folderPath);
         }
+    }
+
+    private static string? RegisteredRootDisplay(KnownProject project, CanonicalPath canonical)
+    {
+        foreach (KnownProjectRoot root in project.Roots)
+        {
+            if (root.Canonical.Equals(canonical))
+            {
+                return root.DisplayPath;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -424,4 +424,97 @@ public sealed class ProjectTargetApplyTests : IDisposable
         AssertSucceeded(Apply(oldStylePlan));
         Assert.Equal("db-pf3", ProjectIdOf(threadId));
     }
+
+    // ── 9_1-14 자동 연결 cwd = 이 PC project_roots 표기 ─────────────────────────────
+
+    [Fact]
+    public void T9_1_14_원본_루트와_등록_루트가_대소문자만_다르면_cwd는_등록_루트_표기다()
+    {
+        string root = NewFolder("case-root");
+        string registered = root.ToUpperInvariant();
+        TestCodexHomeBuilder.InsertProject(_pcBHome, "db-case", "Case", registered);
+        string threadId = NewId();
+        string backupPath = ExportProjectConversation(threadId, root);
+
+        ImportPreview preview = Preview(backupPath);
+        Assert.Equal(registered, TargetOf(preview).FolderPath);
+        AssertSucceeded(Apply(Plan(preview, backupPath)));
+
+        Assert.Equal("db-case", ProjectIdOf(threadId));
+        Assert.Equal(registered, CwdOf(threadId));
+    }
+
+    [Fact]
+    public void T9_1_14_원본_루트에만_extended_prefix가_있으면_cwd는_접두사_없는_등록_루트_표기다()
+    {
+        string root = NewFolder("prefix-root");
+        TestCodexHomeBuilder.InsertProject(_pcBHome, "db-prefix", "Prefix", root);
+        string threadId = NewId();
+        string backupPath = ExportProjectConversation(threadId, @"\\?\" + root);
+
+        AssertSucceeded(Apply(Plan(Preview(backupPath), backupPath)));
+
+        Assert.Equal("db-prefix", ProjectIdOf(threadId));
+        Assert.Equal(root, CwdOf(threadId));
+    }
+
+    // ── 9_1-12 사후 검증 강화(project_id / cwd) ─────────────────────────────────
+
+    /// <summary>검증 직전에 방금 쓴 thread 행을 바꿔, 사후 검증이 실제로 잡아내는지 본다.</summary>
+    private sealed class TamperBeforeValidationHook(Action tamper) : IRestoreFaultInjectionHook
+    {
+        public void Check(RestoreFaultInjectionPoint point)
+        {
+            if (point == RestoreFaultInjectionPoint.BeforePostValidation)
+            {
+                tamper();
+            }
+        }
+    }
+
+    private RestoreResult ApplyWithTamper(ImportPlan plan, Action tamper)
+        => RestoreExecutor.Apply(
+            plan, _pcBHome, () => [], RestoreExecutor.BuildFreshCatalog, _snapshotRoot,
+            new TamperBeforeValidationHook(tamper));
+
+    [Fact]
+    public void PostValidation_기타_대화로_계획했는데_행에_project_id가_있으면_Rollback한다()
+    {
+        TestCodexHomeBuilder.InsertProject(_pcBHome, "db-other", "Other", NewFolder("other"));
+        string threadId = NewId();
+        string backupPath = ExportProjectConversation(threadId, MissingFolder("orig"));
+        ImportPlan plan = Plan(Preview(backupPath), backupPath);
+
+        RestoreResult result = ApplyWithTamper(plan, () => TestCodexHomeBuilder.UpdateThreadColumn(_pcBHome, threadId, "project_id", "db-other"));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.DoesNotContain(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void PostValidation_연결한_대화의_cwd가_대상_루트가_아니면_Rollback한다()
+    {
+        string root = NewFolder("pv-root");
+        TestCodexHomeBuilder.InsertProject(_pcBHome, "db-pv", "PV", root);
+        string threadId = NewId();
+        string backupPath = ExportProjectConversation(threadId, root);
+        ImportPlan plan = Plan(Preview(backupPath), backupPath);
+
+        RestoreResult result = ApplyWithTamper(plan, () => TestCodexHomeBuilder.UpdateThreadColumn(_pcBHome, threadId, "cwd", OriginalCwd));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.DoesNotContain(threadId, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));
+    }
+
+    [Fact]
+    public void PostValidation_기타_대화_행의_cwd가_원본이_아니면_Rollback한다()
+    {
+        string threadId = NewId();
+        string backupPath = ExportProjectConversation(threadId, MissingFolder("orig"));
+        ImportPlan plan = Plan(Preview(backupPath), backupPath);
+
+        RestoreResult result = ApplyWithTamper(plan, () => TestCodexHomeBuilder.UpdateThreadColumn(_pcBHome, threadId, "cwd", @"C:\Somewhere\Else"));
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+    }
 }

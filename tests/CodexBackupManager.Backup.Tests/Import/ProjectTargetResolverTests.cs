@@ -72,6 +72,44 @@ public sealed class ProjectTargetResolverTests : IDisposable
         Assert.Null(target.NewProjectName);
     }
 
+    // ── 9_1-13 ProjectPathMapperTests에서 옮김 + 9_1-14(자동 연결 표기) ─────────────
+
+    [Fact]
+    public void 등록_루트가_extended_prefix로_저장돼_있어도_같은_위치로_자동_연결하고_이_PC_표기를_쓴다()
+    {
+        // (옮김) 원본 "C:\...\Foo" ↔ 로컬 "\\?\C:\...\Foo". 9_1-14: FolderPath/ResolvedLocalPath는 이 PC project_roots 표기.
+        string root = Folder("Foo");
+        string registeredDisplay = @"\\?\" + root;
+        var directory = new ProjectDirectory([Db("local-1", "Foo (로컬)", registeredDisplay)]);
+        var backupProject = new BackupProjectMetadata
+        {
+            ProjectId = "proj-a", DisplayName = "Project A", OriginalRootPaths = [root], ConversationThreadIds = [],
+        };
+
+        ProjectTarget target = ProjectTargetResolver.Resolve(backupProject, null, directory);
+        ProjectPathMapping mapping = ProjectTargetResolver.ToAutomaticMapping(backupProject, target);
+
+        Assert.Equal(ProjectTargetKind.LinkExisting, target.Kind);
+        Assert.Equal(registeredDisplay, target.FolderPath);
+        Assert.Equal(ProjectPathMappingStatus.AutoLinked, mapping.Status);
+        Assert.Equal("local-1", mapping.LinkedLocalProjectId);
+        Assert.Equal(registeredDisplay, mapping.ResolvedLocalPath);
+    }
+
+    [Fact]
+    public void 대소문자만_다른_경로도_같은_위치로_자동_연결하고_이_PC_표기를_쓴다()
+    {
+        // (옮김) 원본 "…\Foo" ↔ 로컬 "…\foo"(소문자). 9_1-14: 이 PC 등록 표기를 쓴다.
+        string root = Folder("CaseFoo");
+        string registeredDisplay = root.ToLowerInvariant();
+        var directory = new ProjectDirectory([Db("local-1", "Foo", registeredDisplay)]);
+
+        ProjectTarget target = ProjectTargetResolver.Resolve([root], null, directory);
+
+        Assert.Equal(ProjectTargetKind.LinkExisting, target.Kind);
+        Assert.Equal(registeredDisplay, target.FolderPath);
+    }
+
     [Fact]
     public void 원본_루트가_여럿이면_이_PC에_실존하는_첫_번째를_쓴다()
     {

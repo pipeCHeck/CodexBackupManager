@@ -57,7 +57,9 @@ public static class RestoreValidator
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (conversation.PlannedAction is not (ImportPlannedAction.Import or ImportPlannedAction.Update))
+            // Phase 9_2-21 — 사용자 선택으로 뺀 대화는 이번에 쓰지 않았으므로 사후 검증 대상이 아니다(Skip이라 원래도 빠진다).
+            if (conversation.IsExcludedFromApply ||
+                conversation.PlannedAction is not (ImportPlannedAction.Import or ImportPlannedAction.Update))
             {
                 continue;
             }
@@ -164,6 +166,23 @@ public static class RestoreValidator
                 !string.Equals(localEntry.Row.ProjectId, expectedProjectId, StringComparison.Ordinal))
             {
                 return Fail(conversation.ThreadId, "project_id가 기대한 프로젝트로 배정되지 않았습니다.");
+            }
+
+            // ── Phase 9_1-12: New Import 행의 project_id/cwd가 계획과 정확히 같은지 양방향으로 확인한다.
+            //    기타 대화로 계획했으면(ResolvedProjectId=null) 실제 행도 NULL이어야 하고, cwd는 계획한 값
+            //    (연결 시 대상 루트, 아니면 백업 원본 cwd — StateDatabaseWriter와 같은 규칙)이어야 한다.
+            if (insert is not null)
+            {
+                if (insert.ResolvedProjectId is null && localEntry.Row.ProjectId is not null)
+                {
+                    return Fail(conversation.ThreadId, "기타 대화로 계획한 대화에 project_id가 기록되어 있습니다.");
+                }
+
+                string? expectedCwd = insert.ResolvedTargetCwd ?? insert.Source.OriginalCwd;
+                if (expectedCwd is not null && !string.Equals(localEntry.Row.Cwd, expectedCwd, StringComparison.Ordinal))
+                {
+                    return Fail(conversation.ThreadId, "cwd가 계획한 값과 다릅니다.");
+                }
             }
         }
 

@@ -89,7 +89,44 @@ public sealed record ImportPlanConversation(
     RevisionRelation Relation,
     ImportPlannedAction PlannedAction,
     string? TargetProjectPath,
-    ImportConversationPrecondition Precondition);
+    ImportConversationPrecondition Precondition)
+{
+    /// <summary>
+    /// (Phase 9_2-03) <see cref="ImportPlannedAction.Skip"/>인 이유. 이전 방식 Plan(<see cref="ImportPlan.UserChoices"/> = <c>null</c>)은
+    /// 항상 <see cref="ImportSkipReason.None"/>이다(LocalAhead Skip도 None — 그때는 이유를 따로 적지 않았다).
+    /// <see cref="ImportSkipReason.UserExcluded"/>/<see cref="ImportSkipReason.NotSelectedDependencyNotNeeded"/>인 대화는
+    /// Preflight 사전조건, Operation Plan 쓰기 대상, 사후 검증에서 모두 빠진다(<see cref="IsExcludedFromApply"/>).
+    /// </summary>
+    public ImportSkipReason SkipReason { get; init; }
+
+    /// <summary>
+    /// (Phase 9_2-03) 이 대화가 속한 백업 프로젝트 키(<see cref="ImportUserChoices.ProjectKeyOf(string?)"/>). 조상 전용 대화는 <c>null</c>.
+    /// 이전 방식 Plan은 <c>null</c>.
+    /// </summary>
+    public string? TargetProjectKey { get; init; }
+
+    /// <summary>
+    /// 사용자 선택으로 이번 가져오기에서 빠진 대화인지(<see cref="ImportSkipReason.UserExcluded"/> 또는
+    /// <see cref="ImportSkipReason.NotSelectedDependencyNotNeeded"/>). LocalAhead Skip은 포함하지 않는다(기존 동작 유지).
+    /// </summary>
+    public bool IsExcludedFromApply => SkipReason is ImportSkipReason.UserExcluded or ImportSkipReason.NotSelectedDependencyNotNeeded;
+}
+
+/// <summary><see cref="ImportPlannedAction.Skip"/>인 이유(Phase 9_2-03, 설계 §5.3).</summary>
+public enum ImportSkipReason
+{
+    /// <summary>Skip이 아니거나, 이유를 적지 않는 이전 방식 Plan.</summary>
+    None = 0,
+
+    /// <summary>이 PC 쪽이 더 최신이라 건너뛴다(기존 LocalAhead 동작 그대로 — Preflight 사전조건은 계속 확인한다).</summary>
+    LocalAhead = 1,
+
+    /// <summary>사용자가 체크하지 않았거나 선택할 수 없는 대화라 이번 가져오기에서 뺐다.</summary>
+    UserExcluded = 2,
+
+    /// <summary>조상 전용 대화인데, 이번에 포함한 어떤 대화에도 필요하지 않다.</summary>
+    NotSelectedDependencyNotNeeded = 3,
+}
 
 /// <summary>Import Plan에 고정된 프로젝트 하나.</summary>
 /// <param name="ProjectId">backup 쪽 원본 프로젝트 ID. 미분류면 <c>null</c>.</param>
@@ -149,4 +186,38 @@ public sealed record ImportPlan(
     /// 자체는 가능해도(이 Plan은 만들어질 수 있다) Apply-ready는 아니다.
     /// </summary>
     public bool IsApplyReady => !HasBlockingIssues && !HasUnresolvedDivergence;
+
+    /// <summary>
+    /// (Phase 9_2-03) 이 Plan을 만든 사용자 선택. <c>null</c>이면 이전 방식(Preview의 대화 전부, 제안 목적지)이고 결과도 그때와 같다.
+    /// 값이 있으면 <see cref="HasBlockingIssues"/>/<see cref="HasUnresolvedDivergence"/>는 이번에 실제로 적용할 대화와 그 조상
+    /// (closure)만 보고 계산했고, 제외된 대화의 <see cref="ImportPlanConversation.PlannedAction"/>은 Preview 값이 아니라
+    /// <see cref="ImportPlannedAction.Skip"/>이다.
+    /// </summary>
+    public ImportUserChoices? UserChoices { get; init; }
+
+    /// <summary>
+    /// 이 프로젝트의 목적지를 이번 적용에서 실제로 쓰는지(New Import가 하나라도 있는지). 이전 방식 Plan은 항상 <c>true</c>다
+    /// (그때는 모든 프로젝트를 확인했다). Preflight/Planner는 <c>false</c>인 프로젝트의 목적지를 확인하지 않는다 — 제외된
+    /// 프로젝트의 폴더/연결 대상이 바뀌어도 나머지 적용을 막지 않기 위함이다.
+    /// </summary>
+    public bool UsesProjectTarget(ImportPlanProject project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        if (UserChoices is null)
+        {
+            return true;
+        }
+
+        string key = ImportUserChoices.ProjectKeyOf(project.ProjectId);
+        foreach (ImportPlanConversation conversation in Conversations)
+        {
+            if (conversation.PlannedAction == ImportPlannedAction.Import &&
+                string.Equals(conversation.TargetProjectKey, key, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

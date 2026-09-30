@@ -643,3 +643,43 @@ PC에 실물 `.zst`가 0개, 기존 알려진 한계와 동일). 3단계 이상 
 - Phase 06_02에서 발견한 실제 프로젝트("test")의 `TargetProjectPath` 부재는 이번에도 동일하게
   재현됐다 — Phase 06_03이 이 계층을 건드리지 않았으므로 회귀가 아니라 그대로다(§4-15/§4-16 근처
   handoff 문서 참고).
+
+---
+
+## 10. Phase 9 addendum (2026-10-01) — 기존 계약은 유지하고 추가만 한다
+
+> 이 절은 Phase 9에서 **추가된** 필드와 의미만 적는다. §1~9의 기존 필드와 판정 semantics(`RevisionRelation`,
+> `ProjectPathMapping.Status`, backup identity pinning, Preflight 우선순위)는 바뀌지 않았다.
+> 설계 원문: `docs/import-ux-redesign-phase9.md` §4.4~4.6.
+
+### 10.1 프로젝트 목적지 — `ProjectTarget` (9_1b)
+- §7의 `ProjectPathMapper`는 9_2-1에서 **삭제됐다.** 목적지 판정은 `ProjectTargetResolver`가 한다. 대상 PC `CodexCatalog.ProjectDirectory`의 canonical 루트 기준이다.
+- `ImportProjectPreview.SuggestedTarget` / `ImportPlanProject.ResolvedTarget`: `Kind`(Uncategorized/LinkExisting/CreateNew) + `Reason`.
+  **실제 연결 여부의 기준은 이 값이다.**
+- `ProjectPathMapping.Status`의 의미는 그대로다.
+  - 자동 판정은 LinkExisting일 때만 `AutoLinked`, 나머지는 `NotFound`다.
+  - 수동 재지정은 항상 `ManuallyLinked`(= 사용자가 폴더를 골랐다)다.
+- `threads.project_id`에는 대상 PC의 **실존 `projects.id`만** 쓴다(외래키). 레거시 전용·Ambiguous·미등록 폴더는 기타 대화로 들어간다.
+- Apply 시점에 fresh `ProjectDirectory`로 다시 판정해 Kind/LinkDbProjectId가 다르면 거부한다. 원본 폴더가 없던 목적지는 다시 판정하지 않는다.
+- 자동 연결의 cwd는 대상 PC `project_roots`에 저장된 루트 표기다(9_1-14).
+
+### 10.2 대화 부가 정보 (9_1b)
+- `ImportConversationPreview.LocalLocation`(이 PC의 현재 위치), `IsCompressedRollout`, `RequiredAncestorThreadIds`
+- `MetadataDifferences.ProjectAssignmentDiffers`는 PC 간 원시 ID 비교라 화면에 쓰지 않는다. 계산은 유지한다.
+
+### 10.3 사용자 선택 — `ImportUserChoices` (9_2-1)
+`ImportPlan.UserChoices`가 `null`이면 Plan은 이전과 완전히 같다(모든 대화 포함, 제안 목적지, `SkipReason=None`, `TargetProjectKey=null`).
+값이 있으면 다음이 바뀐다.
+1. 이번 가져오기에서 뺀 대화의 `PlannedAction`은 Preview 값이 아니라 `Skip`이다. 이유는 `SkipReason`에 적는다.
+   - `UserExcluded`: 선택 안 함 또는 선택 불가
+   - `NotSelectedDependencyNotNeeded`: 필요 없는 조상
+   - `LocalAhead`: 기존과 같은 이유
+2. `HasBlockingIssues`/`HasUnresolvedDivergence`는 포함 대화와 그 조상(closure)만 보고 계산한다.
+   closure 안의 "백업에 없는 조상"과 "압축 rollout을 이어받아야 하는 조상"도 blocking이다.
+3. `UserExcluded`/`NotSelectedDependencyNotNeeded` 대화(`IsExcludedFromApply`)는 Preflight 사전조건, Operation Plan 쓰기, 사후 검증에서 모두 빠진다.
+   `LocalAhead` Skip은 기존처럼 사전조건을 확인한다. 선택하지 않은 Identical도 `UserExcluded`다.
+4. `ImportPlanProject.ResolvedTarget`은 사용자 결정 기준이다.
+   - `TargetProjectPath`는 LinkExisting일 때만 연결 루트, 아니면 `null`이다.
+   - 새로 가져올 대화가 없는 프로젝트의 목적지는 Preflight와 Planner가 확인하지 않는다(`ImportPlan.UsesProjectTarget`).
+5. 선택 요약(`ImportSelection.Compute`)과 Plan(`ImportPlanBuilder.Build(preview, path, choices)`)은 같은 규칙과 같은 코드 경로를 쓴다.
+   백업의 "기타 대화" 그룹 키는 `ImportUserChoices.UncategorizedProjectKey = "(uncategorized)"`다.

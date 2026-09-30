@@ -147,9 +147,11 @@
 - [x] **9_1-09** `ImportPlanPreflightValidator`: LinkExisting 대상 `DbProjectId` 존재와 폴더 실존 확인
 - [x] **9_1-10** 임시 UI 문구 수정: 사유별 문구(설계 §9). "사용자가 지정함 → …"은 실제 LinkExisting일 때만. 미등록 폴더는 "지금은 기타 대화로 들어갑니다" 명시
 - [x] **9_1-11** (9_1a 점검에서 추가) `ProjectDirectory`/`ProjectDirectoryBuilder` 방어: 비정상 데이터(ID 충돌 등)로 생성이 실패해도 카탈로그 전체가 실패하지 않게 한다(경고 + 문제 항목 제외), 테스트 포함
-- [ ] **9_1-12** (9_1b 점검 후속) `RestoreValidator`: New Import에서 `ResolvedProjectId`가 null이면 실제 행의 `project_id`도 null인지, 값이 있으면 `cwd`가 `ResolvedTargetCwd`와 같은지 사후 검증
-- [ ] **9_1-13** (9_1b 점검 후속) 더 이상 제품 코드에서 쓰지 않는 `ProjectPathMapper`와 그 테스트 제거(고유한 검증은 `ProjectTargetResolverTests`로 이전)
-- [ ] **9_1-14** (9_1b 점검 후속) 자동 LinkExisting의 `FolderPath`/`TargetProjectPath`(→ cwd)를 백업 원본 문자열이 아니라 이 PC `project_roots`에 저장된 루트 표기로 쓴다(canonical은 같아도 표기가 다를 수 있음)
+- [x] **9_1-12** (9_1b 점검 후속) `RestoreValidator`: New Import에서 `ResolvedProjectId`가 null이면 실제 행의 `project_id`도 null인지, 값이 있으면 `cwd`가 `ResolvedTargetCwd`와 같은지 사후 검증
+- [x] **9_1-13** (9_1b 점검 후속) 더 이상 제품 코드에서 쓰지 않는 `ProjectPathMapper`와 그 테스트 제거(고유한 검증은 `ProjectTargetResolverTests`로 이전)
+- [x] **9_1-14** (9_1b 점검 후속) 자동 LinkExisting의 `FolderPath`/`TargetProjectPath`(→ cwd)를 백업 원본 문자열이 아니라 이 PC `project_roots`에 저장된 루트 표기로 쓴다(canonical은 같아도 표기가 다를 수 있음)
+- [ ] **9_1-15** (9_2-1 점검에서 발견) `CodexProcessGuardTests.실제로_띄운_자식_프로세스의_ProcessName과_경로를_정확히_캡처한다`가 목록의 **첫** `cmd`를 검사해 병렬 실행 시 간헐 실패(07_01부터 존재) → 띄운 자식 프로세스를 특정해 검사하도록 수정
+- [ ] **9_1-16** (9_2-1 점검 결정) 수동 지정(UserSelectedRegistered)도 cwd/ResolvedLocalPath를 등록 루트 표기로 통일
 
 ### 5.2 테스트
 
@@ -189,17 +191,18 @@
 **설계 참조**: §3, §5.2~5.3, §6 "9_2", §7 전체, §9.
 **범위 밖**: 대화 내용 미리보기(9_2b), 프로젝트 생성(9_5), 연결 변경(9_3), 되돌리기(9_4).
 
-> **프롬프트 분할**: 9_2-1 = Core(9_2-01~06, 9_2-21, T1, T2, T7) + 9_1-12~14 (`docs/phase9-prompts/9_2-1.md`) · 9_2-2 = 화면(9_2-07~20, T3~T6)
+> **프롬프트 분할**: 9_2-1 = Core(9_2-01~06, 9_2-21, T1, T2, T7) + 9_1-12~14 (`docs/phase9-prompts/9_2-1.md`) · 9_2-2 = 화면(9_2-07~20, T3~T6) + 9_1-15·16 (`docs/phase9-prompts/9_2-2.md`) · 9_2-1 **점검 완료**
 
 ### 7.1 Core
 
-- [ ] **9_2-01** `ImportUserChoices`/`ProjectTargetDecision` 추가
-- [ ] **9_2-02** `ImportSelection.Compute(preview, choices)`: 선택 가능 여부, 조상 closure, 대화별 최종 동작, 차단 사유, 요약 개수(순수 로직, I/O 없음)
-- [ ] **9_2-03** `ImportPlan` addendum: `ImportSkipReason`, `TargetProjectKey`, `ResolvedTarget`, `UserChoices`(설계 §5.3) — 단 `ImportPlanProject.ResolvedTarget`은 9_1b(9_1-08)에서 먼저 추가
-- [ ] **9_2-04** `ImportPlanBuilder.Build(preview, path, choices)` 오버로드. 기존 시그니처는 `UserChoices=null`로 기존과 같은 결과
-- [ ] **9_2-05** Diverged/Unverifiable을 체크 해제하면 나머지는 적용 가능, closure에 걸리면 계속 차단
-- [ ] **9_2-06** `ProjectTargetResolver`를 사용자 폴더 변경에 즉시 재계산(메모리 + `Directory.Exists`만)
-- [ ] **9_2-21** (9_1b 점검에서 추가) 사용자가 제외한 대화(`UserExcluded`)는 Preflight 사전조건 검사와 Planner 쓰기 대상에서 모두 빠진다(제외 대화의 로컬 변화가 나머지 적용을 막지 않음, 제외 대화의 rollout·행은 쓰기 0건)
+- [x] **9_2-01** `ImportUserChoices`/`ProjectTargetDecision` 추가
+- [x] **9_2-02** `ImportSelection.Compute(preview, choices)`: 선택 가능 여부, 조상 closure, 대화별 최종 동작, 차단 사유, 요약 개수(순수 로직, I/O 없음)
+- [x] **9_2-03** `ImportPlan` addendum: `ImportSkipReason`, `TargetProjectKey`, `ResolvedTarget`, `UserChoices`(설계 §5.3) — 단 `ImportPlanProject.ResolvedTarget`은 9_1b(9_1-08)에서 먼저 추가
+- [x] **9_2-04** `ImportPlanBuilder.Build(preview, path, choices)` 오버로드. 기존 시그니처는 `UserChoices=null`로 기존과 같은 결과
+- [x] **9_2-05** Diverged/Unverifiable을 체크 해제하면 나머지는 적용 가능, closure에 걸리면 계속 차단
+- [x] **9_2-06** `ProjectTargetResolver`를 사용자 폴더 변경에 즉시 재계산(메모리 + `Directory.Exists`만)
+- [x] **9_2-21** (9_1b 점검에서 추가) 사용자가 제외한 대화(`UserExcluded`)는 Preflight 사전조건 검사와 Planner 쓰기 대상에서 모두 빠진다(제외 대화의 로컬 변화가 나머지 적용을 막지 않음, 제외 대화의 rollout·행은 쓰기 0건)
+- [ ] **9_2-22** (보류, 9_5 이후 후보) Ambiguous 루트에서 연결할 프로젝트를 사용자가 고르기(`[프로젝트 선택 ▼]`) — Planner의 fresh 재판정과 충돌하지 않는 결정 모델 필요. 9_2-2에서는 안내 문구만
 
 ### 7.2 App
 
@@ -220,13 +223,13 @@
 
 ### 7.3 테스트
 
-- [ ] **9_2-T1** ImportSelection: 기본 체크, 제외 → Skip(UserExcluded), 조상 자동 포함, Diverged 제외 시 적용 가능, closure Blocked면 불가, 요약 개수
-- [ ] **9_2-T2** ImportPlanBuilder: `UserChoices=null` 결과가 기존과 동일(스냅샷 비교), 선택 반영, identity pinning 유지
+- [x] **9_2-T1** ImportSelection: 기본 체크, 제외 → Skip(UserExcluded), 조상 자동 포함, Diverged 제외 시 적용 가능, closure Blocked면 불가, 요약 개수
+- [x] **9_2-T2** ImportPlanBuilder: `UserChoices=null` 결과가 기존과 동일(스냅샷 비교), 선택 반영, identity pinning 유지
 - [ ] **9_2-T3** App: 3상태 체크, 검색 중 선택 유지, 0개 비활성과 사유, 폴더 변경 후 요약 갱신, 상태 전이, Codex 실행 배너, **Codex 실행 중이면 분석 자체를 시작하지 않음(Analyzing 진입 0회)**, [다시 분석] 후 선택 유지
 - [ ] **9_2-T4** 스크린샷 시나리오 재현: 이미 있는(기타 대화) 대화 1개짜리 백업 → 버튼 비활성 + "이미 이 PC에 있음 · 위치: 기타 대화" 표시
 - [ ] **9_2-T5** 분석, 선택 변경, 폴더 변경 중 Codex Home 쓰기 0건(해시 고정 테스트)
 - [ ] **9_2-T6** 전체 테스트 GREEN + 사용자 GUI 수동 확인(관리 대화방이 확인 목록 제공)
-- [ ] **9_2-T7** (Core E2E, Restore.Tests) Diverged/Unverifiable 대화를 제외한 선택 → 나머지 Apply 성공 + 제외 대화의 파일·행 무변경, 제외한 New 대화의 rollout 미생성, 필수 조상 자동 포함 후 적용 성공
+- [x] **9_2-T7** (Core E2E, Restore.Tests) Diverged/Unverifiable 대화를 제외한 선택 → 나머지 Apply 성공 + 제외 대화의 파일·행 무변경, 제외한 New 대화의 rollout 미생성, 필수 조상 자동 포함 후 적용 성공
 
 ---
 
@@ -334,6 +337,8 @@
 | 2026-09-30 | 9_1b | 프롬프트 발행 | `docs/phase9-prompts/9_1b.md` |
 | 2026-10-01 | 9_1b 점검 | **통과** | 빌드 경고 0 · 테스트 599/599(가짜 `codex` 실행 중/없이 각각). 복제본 Case 0~4 전부 기대대로(0 자동 연결, 1 기타 대화+정확한 사유, 2 정상, **3 연결됨**, 4 실존 DB ID), 9_1a 이전 형식 백업으로 수행 → T9 실데이터 확인. 기본 E2E 42/42(하네스의 원시 ID 비교를 그룹 소속 판정으로 수정 후), 원본 해시 불변, 줄바꿈 혼합 없음. 결정: Q1 루트 없는 등록 프로젝트→OriginalRootMissing(기타 대화) 수용, Q2 원본 없음 Plan은 Apply 때 재판정 안 함 수용, Q3 사후 검증 강화(9_1-12), Q4 `ProjectPathMapper` 제거(9_1-13), Q5 수용(T9는 관리 대화방이 실데이터로 확인). 관리 대화방 발견: 자동 연결 cwd가 백업 원본 표기를 씀 → 9_1-14. 9_2-21·9_2-T7 추가 |
 | 2026-10-01 | 9_2-1 | 프롬프트 발행 | `docs/phase9-prompts/9_2-1.md` |
+| 2026-10-01 | 9_2-1 점검 | **통과** | 빌드 경고 0 · 테스트 636/636(가짜 `codex` 실행 중). 없이 1회차에 `CodexProcessGuardTests` 1건 간헐 실패 → 단독 12회 통과, 원인은 목록의 첫 `cmd`를 검사하는 테스트 결함(07_01부터, 이번 변경 무관) → 9_1-15. 복제본 E2E에 Diverged 대화 1개 추가: 기존 Build는 전체 차단, 기본 선택 Plan은 3 Import + 1 Update 적용·Diverged 파일 바이트 불변·재가져오기 NoOp·낡은 계획 거부, 실패 0건, 원본 해시 불변. 결정: Q1 선택 안 한 Identical=UserExcluded 수용, Q2 수동 지정 cwd도 등록 루트 표기(9_1-16), Q3 화면은 thread ID 대신 제목(9_2-2), Q4 수용, Q5 9_2-2에서 해소. Ambiguous 사용자 선택은 9_2-22로 보류. `docs/import-preview-phase6.md` §10 addendum 작성 |
+| 2026-10-01 | 9_2-2 | 프롬프트 발행 | `docs/phase9-prompts/9_2-2.md` |
 
 ## 14. 변경 이력
 
@@ -344,3 +349,4 @@
 | 2026-09-30 | CLAUDE.md §19에 가져오기 Codex 종료 전제 정책 추가(사용자 승인) |
 | 2026-09-30 | 9_1a 점검 반영: 9_1-01~05·T1·T2 체크, 9_1-11·9_1-T9 추가, 9_2-03 일부를 9_1b로 이동 |
 | 2026-10-01 | 9_1b 점검 반영: 9_1-06~11·T3~T9 체크, 9_1-12~14·9_2-21·9_2-T7 추가, 9_2 프롬프트 분할(9_2-1 Core / 9_2-2 화면) |
+| 2026-10-01 | 9_2-1 점검 반영: 9_1-12~14·9_2-01~06·21·T1·T2·T7 체크, 9_1-15·16·9_2-22 추가, Phase 6 계약 문서 §10 addendum |

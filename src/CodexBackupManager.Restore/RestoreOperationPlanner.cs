@@ -106,6 +106,13 @@ public static class RestoreOperationPlanner
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Phase 9_2-21 — 사용자 선택으로 뺀 대화(UserExcluded/NotSelectedDependencyNotNeeded)는 쓰기 대상이 아니다.
+            // PlannedAction과 무관하게 건너뛴다(충돌 대화를 빼도 "예상치 못한 PlannedAction"으로 거부하지 않는다).
+            if (conversation.IsExcludedFromApply)
+            {
+                continue;
+            }
+
             switch (conversation.PlannedAction)
             {
                 case ImportPlannedAction.Import:
@@ -483,6 +490,12 @@ public static class RestoreOperationPlanner
     {
         foreach (ImportPlanProject project in plan.Projects)
         {
+            // Phase 9_2-21 — 새로 가져올 대화가 없는 프로젝트의 목적지는 이번 적용에 쓰이지 않으므로 다시 판정하지 않는다.
+            if (!plan.UsesProjectTarget(project))
+            {
+                continue;
+            }
+
             if (project.ResolvedTarget is not { FolderPath: { } folder } frozen ||
                 frozen.Reason == ProjectTargetReason.NotApplicable)
             {

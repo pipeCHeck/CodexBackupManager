@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using CodexBackupManager.Backup.Container;
 using CodexBackupManager.Backup.Reading;
@@ -95,6 +96,14 @@ public static class ImportPlanPreflightValidator
         foreach (ImportPlanConversation conversation in plan.Conversations)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Phase 9_2-21 — 사용자 선택으로 이번 가져오기에서 뺀 대화는 사전조건을 확인하지 않는다. 그 대화의 로컬
+            // 상태가 미리보기 이후 바뀌어도 나머지 적용을 막지 않는다(LocalAhead Skip은 제외 대상이 아니다 — 기존 동작).
+            if (conversation.IsExcludedFromApply)
+            {
+                continue;
+            }
+
             Result? localStateResult = CheckConversationPrecondition(
                 conversation, currentLocalCatalog, currentLocalByThreadId, localSliceReader, backupCatalog, incomingSliceReader, cancellationToken);
             if (localStateResult is not null)
@@ -105,7 +114,9 @@ public static class ImportPlanPreflightValidator
 
         // Phase 9_1-09 — 연결하기로 freeze한 DB 프로젝트가 지금도 이 PC에 있는지. 없어졌다면 로컬 Codex 상태가
         // 미리보기 이후 바뀐 것이다(LocalStateChanged — 폴더 자체의 문제가 아니다).
-        foreach (ImportPlanProject project in plan.Projects)
+        // Phase 9_2-21 — 이번에 새로 가져올 대화가 없는 프로젝트(전부 제외됨)의 목적지는 확인하지 않는다(UsesProjectTarget).
+        // 선택 없는 이전 방식 Plan은 지금처럼 모든 프로젝트를 확인한다.
+        foreach (ImportPlanProject project in plan.Projects.Where(plan.UsesProjectTarget))
         {
             Result? linkResult = CheckLinkTargetStillRegistered(project, currentLocalCatalog);
             if (linkResult is not null)
@@ -114,7 +125,7 @@ public static class ImportPlanPreflightValidator
             }
         }
 
-        foreach (ImportPlanProject project in plan.Projects)
+        foreach (ImportPlanProject project in plan.Projects.Where(plan.UsesProjectTarget))
         {
             Result? pathResult = CheckTargetPath(project) ?? CheckLinkTargetFolder(project);
             if (pathResult is not null)

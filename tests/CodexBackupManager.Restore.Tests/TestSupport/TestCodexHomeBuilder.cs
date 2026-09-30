@@ -117,6 +117,20 @@ public static class TestCodexHomeBuilder
     }
 
     /// <summary>
+    /// Phase 9_2-1 — thread 행의 컬럼 하나를 직접 바꾼다(사후 검증 실패 경로 재현, 제외 대화의 로컬 변화 재현용).
+    /// <paramref name="column"/>은 테스트 코드의 상수만 넘긴다.
+    /// </summary>
+    public static void UpdateThreadColumn(string codexHome, string threadId, string column, object? value)
+    {
+        using SqliteConnection connection = OpenReadWrite(codexHome);
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = $"UPDATE threads SET {column} = $value WHERE id = $id";
+        cmd.Parameters.AddWithValue("$value", value ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$id", threadId);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Phase 9_1b — 등록 프로젝트 하나를 실측 스키마 그대로 INSERT한다(<c>projects</c> + <c>project_roots</c>).
     /// <c>position</c>은 기존 최대값 + 1, 루트 position은 0부터.
     /// </summary>

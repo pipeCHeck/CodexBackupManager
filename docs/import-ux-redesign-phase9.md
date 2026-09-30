@@ -240,6 +240,17 @@ ImportResultViewModel(결과 + 어디로 들어갔는지 + 되돌리기 가능 �
 - Restore 테스트 fixture(`TestCodexHomeBuilder`)는 실측 스키마의 `projects`/`project_roots`/`project_idempotency_keys`와
   `threads.project_id` 외래키를 가진다. 번들 e_sqlite3는 `foreign_keys` 기본값이 1이다. 그래서 가짜 프로젝트 ID는 즉시 FK 위반으로 드러난다.
 
+### 4.6 9_2-1 구현으로 확정된 사항 (2026-10-01 점검)
+
+- 선택 요약과 Plan은 같은 규칙, 같은 코드 경로(`ImportSelection.Compute` → `ImportPlanBuilder.Build(preview, path, choices)`)를 쓴다.
+  계약 문구는 `docs/import-preview-phase6.md` §10.3에 있다.
+- 선택하지 않은 Identical은 `Skip(UserExcluded)`다. 쓰지 않으므로 사전조건도 확인하지 않는다.
+- closure 안의 "백업에 없는 조상"과 "압축 rollout을 이어받아야 하는 조상"도 차단이다.
+- `CanApply=false`의 이유는 두 종류다. 적용하면 안 되는 이유는 `BlockingReasons`, 쓸 것이 없는 이유는 `NothingToWriteReason`이다.
+- 수동 지정 cwd도 등록 루트 표기로 통일한다(9_1-16).
+- **Ambiguous 루트에서 사용자가 프로젝트를 고르는 기능은 보류한다(9_2-22).** Apply 시점 재판정이 Ambiguous를 다시 돌려주면 계획과 달라져 거부된다.
+  이를 풀 결정 모델이 필요하다. 9_2-2 화면은 안내 문구만 둔다.
+
 ---
 
 ## 5. 도메인 모델 변경
