@@ -86,7 +86,9 @@ public sealed class MainViewModelSidebarRepairTests : IDisposable
         MainViewModel main = await ConnectAsync();
 
         Assert.True(main.HasSidebarRepairNotice);
-        Assert.Contains("지금은 표시할 수 없습니다", main.SidebarRepairText, StringComparison.Ordinal);
+        Assert.Equal(
+            "이 앱으로 만든 프로젝트 1개가 Codex 사이드바에 보이지 않습니다. (Codex 데스크톱 앱 상태 파일 형식이 달라 지금은 추가할 수 없습니다)",
+            main.SidebarRepairText); // 9_5a-05: 버튼이 꺼진 이유
         Assert.False(main.RepairSidebarCommand.CanExecute(null));
     }
 }

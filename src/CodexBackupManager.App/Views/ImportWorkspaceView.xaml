@@ -199,6 +199,10 @@
               Visibility="{Binding IsWaitingForCodexExit, Converter={StaticResource BoolToVisibility}}">
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="560">
           <TextBlock Text="{Binding Message}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" FontSize="14" />
+          <!-- Phase 9_2-36 — 다시 확인했는데 아직 실행 중이면 확인 시각을 보여준다. -->
+          <TextBlock Text="{Binding CodexRecheckText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0"
+                     AutomationProperties.LiveSetting="Polite"
+                     Visibility="{Binding CodexRecheckText, Converter={StaticResource NullToCollapsed}}" />
           <StackPanel Orientation="Horizontal" Margin="0,14,0,0" HorizontalAlignment="Center">
             <Button Content="다시 확인" Command="{Binding RecheckCodexCommand}" />
             <Button Content="닫기" Command="{Binding CloseCommand}" />
@@ -224,6 +228,9 @@
           <TextBlock Text="{Binding Message}" Foreground="{StaticResource Bad}" TextWrapping="Wrap" FontSize="14" />
           <TextBlock Text="{Binding MessageHint}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,6,0,0" />
           <StackPanel Orientation="Horizontal" Margin="0,14,0,0" HorizontalAlignment="Center">
+            <!-- Phase 9_2-37 — 다시 시도하면 될 수 있는 실패에서만 보인다(우측 상단 [다시 분석]과 같은 명령). -->
+            <Button Content="다시 분석" Command="{Binding ReanalyzeCommand}"
+                    Visibility="{Binding CanRetryAnalysis, Converter={StaticResource BoolToVisibility}}" />
             <Button Content="다른 파일 선택" Command="{Binding ChooseOtherFileCommand}" />
             <Button Content="닫기" Command="{Binding CloseCommand}" />
           </StackPanel>

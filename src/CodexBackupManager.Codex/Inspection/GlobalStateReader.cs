@@ -30,8 +30,11 @@ namespace CodexBackupManager.Codex.Inspection;
 /// Phase 2의 CodexProjectResolver가 어느 경로를 읽을지 이 플래그로 판단한다.
 /// </para>
 /// <para>
-/// <b>이 클래스는 절대 쓰기를 하지 않는다.</b> 이 파일은 Codex 실행 중 앱이 계속 덮어쓰므로
-/// (Phase 0에서 <c>.bak</c> + 0바이트 <c>.tmp-*</c> 잔여물 11개를 확인) 쓰기는 Phase 7 전까지 금지다.
+/// <b>이 클래스는 읽기만 한다.</b> 이 파일은 Codex 실행 중 Desktop 앱이 계속 덮어쓴다(Phase 0에서 <c>.bak</c> + 0바이트
+/// <c>.tmp-*</c> 잔여물 11개를 확인). 이 앱의 쓰기는 Phase 9_5a부터 <c>CodexBackupManager.Restore.GlobalStateWriter</c> 한 곳에서,
+/// <c>RestoreExecutor</c>(새 프로젝트를 만들 때)와 <c>SidebarRepairService</c>(사이드바 보정) 파이프라인 안에서만 한다 —
+/// Codex 종료 확인, Snapshot, Journal, 게이트(<see cref="GlobalStateProjectGate"/>) 통과, 레거시 프로젝트 저장소 세 키만 추가,
+/// 실패 시 Rollback. 다른 키(<c>thread-project-assignments</c> 등)는 쓰지 않는다.
 /// </para>
 /// </remarks>
 public static class GlobalStateReader

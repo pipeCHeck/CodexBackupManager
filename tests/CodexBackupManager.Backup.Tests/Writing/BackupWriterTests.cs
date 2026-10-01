@@ -218,6 +218,16 @@ public sealed class BackupWriterTests : IDisposable
 
     [Fact]
     public void 큰_파일도_경계_있는_메모리로_스트리밍한다()
+        => AssertStreamsLargeFileWithBoundedMemory(concurrentNoiseBytes: 0);
+
+    /// <summary>
+    /// (Phase 9_1-18) 같은 프로세스의 다른 스레드(전체 솔루션 동시 실행 중 다른 테스트)가 큰 메모리를 잡고 있어도 측정이 섞이지 않는다.
+    /// </summary>
+    [Fact]
+    public void 다른_스레드가_큰_메모리를_잡고_있어도_스트리밍_측정이_섞이지_않는다()
+        => AssertStreamsLargeFileWithBoundedMemory(concurrentNoiseBytes: 60 * 1024 * 1024);
+
+    private void AssertStreamsLargeFileWithBoundedMemory(int concurrentNoiseBytes)
     {
         string source = Path.Combine(_directory, "huge.jsonl");
         const int sizeBytes = 100 * 1024 * 1024;
@@ -236,19 +246,48 @@ public sealed class BackupWriterTests : IDisposable
         // JSONL 유효성이 아니다("payload/rollouts/…"는 Validator가 최소 JSON parse를 확인한다).
         ExportPlan plan = SinglePayloadPlan(source, "payload/attachments/0/huge.bin");
 
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        long before = GC.GetTotalMemory(forceFullCollection: true);
+        using var noiseStarted = new ManualResetEventSlim();
+        using var writeDone = new ManualResetEventSlim();
+        using var startNoise = new ManualResetEventSlim();
+        Thread? noise = null;
+        if (concurrentNoiseBytes > 0)
+        {
+            noise = new Thread(() =>
+            {
+                startNoise.Wait();
+                byte[] held = new byte[concurrentNoiseBytes];
+                Array.Fill(held, (byte)1);
+                noiseStarted.Set();
+                writeDone.Wait();
+                GC.KeepAlive(held);
+            });
+            noise.Start();
+        }
+
+        long before = MeasureBefore();
+        if (noise is not null)
+        {
+            startNoise.Set();
+            noiseStarted.Wait();
+        }
 
         BackupWriter.WriteResult result = BackupWriter.Write(plan, EmptyManifest(plan), dest);
-
-        long after = GC.GetTotalMemory(forceFullCollection: true);
+        long growth = MeasureAfter() - before;
+        writeDone.Set();
+        noise?.Join();
 
         Assert.True(result.Success, result.FailureReason);
         // 파일 크기(100MB)에 비례해서 메모리가 늘지 않아야 한다(버퍼 크기는 80KB 고정) —
         // 여유를 넉넉히 둬도 파일 크기의 1/4을 넘으면 전체를 메모리에 올렸다는 뜻이다.
-        Assert.True(after - before < sizeBytes / 4, $"메모리 증가량이 너무 큽니다: {after - before} bytes");
+        Assert.True(growth < sizeBytes / 4, $"메모리 증가량이 너무 큽니다: {growth} bytes");
     }
+
+    // Phase 9_1-18 — 프로세스 전체 힙(GC.GetTotalMemory)이 아니라 이 스레드가 Write 동안 "할당한" 양을 잰다. BackupWriter.Write는
+    // 호출 스레드에서 동기로 돈다. 다른 테스트(다른 스레드)의 할당이 섞이지 않고, 파일을 통째로 읽었다가 놓아 버리는 변형도
+    // (해제 여부와 무관하게) 할당량으로 잡힌다.
+    private static long MeasureBefore() => GC.GetAllocatedBytesForCurrentThread();
+
+    private static long MeasureAfter() => GC.GetAllocatedBytesForCurrentThread();
 
     [Fact]
     public void checksums_json의_payload_1바이트가_변조되면_Validator가_실패시킨다()

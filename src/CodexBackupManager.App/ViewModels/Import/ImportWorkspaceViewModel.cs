@@ -103,6 +103,8 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     private string? _messageHint;
     private string? _editingError;
     private string? _applyStatusText;
+    private string? _codexRecheckText;
+    private bool _failureRetryable;
     private ImportResultViewModel? _result;
     private ImportPlan? _appliedPlan;
 
@@ -159,7 +161,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         ClearAllCommand = new RelayCommand(ClearAll, () => CanEditSelection);
         ReanalyzeCommand = new RelayCommand(
             () => _ = ReanalyzeAsync(),
-            () => State is ImportWorkspaceState.Editing or ImportWorkspaceState.Result or ImportWorkspaceState.WaitingForCodexExit);
+            () => State is ImportWorkspaceState.Editing or ImportWorkspaceState.Result or ImportWorkspaceState.WaitingForCodexExit || CanRetryAnalysis);
         ImportCommand = new RelayCommand(() => _ = ImportAsync(), () => CanImport);
         CancelApplyCommand = new RelayCommand(() => _applyCancellation?.Cancel(), () => State == ImportWorkspaceState.Applying);
         RetryCommand = new RelayCommand(() => _ = ReanalyzeAsync(), () => CanRetry);
@@ -230,7 +232,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
                 foreach (string name in new[]
                 {
                     nameof(IsOpen), nameof(IsWaitingForCodexExit), nameof(IsAnalyzing), nameof(IsFailed),
-                    nameof(IsEditorVisible), nameof(IsApplying), nameof(IsResult), nameof(CanEditSelection),
+                    nameof(IsEditorVisible), nameof(IsApplying), nameof(IsResult), nameof(CanEditSelection), nameof(CanRetryAnalysis),
                 })
                 {
                     OnPropertyChanged(name);
@@ -438,6 +440,22 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>목록에서 강조할 대화(결과 화면 기준).</summary>
     public IReadOnlyList<string> ImportedThreadIds => _result?.ImportedThreadIds ?? [];
 
+    /// <summary>
+    /// (Phase 9_2-36) 종료 대기 화면에서 다시 확인했는데 Codex가 아직 실행 중일 때 "아직 Codex가 실행 중입니다(확인 HH:mm:ss)"(이 PC 시각).
+    /// 처음 대기 화면에 들어왔을 때와 대기 화면이 아닐 때는 <c>null</c>.
+    /// </summary>
+    public string? CodexRecheckText
+    {
+        get => _codexRecheckText;
+        private set => SetProperty(ref _codexRecheckText, value);
+    }
+
+    /// <summary>
+    /// (Phase 9_2-37) 실패 화면에서 [다시 분석]을 보여주는지. 다시 시도하면 될 수 있는 실패(Codex Home 확인 불가, 분석 중 예외)만 참이다.
+    /// 백업 파일 자체의 문제(손상, 체크섬 불일치, 지원하지 않는 형식)는 거짓이다.
+    /// </summary>
+    public bool CanRetryAnalysis => State == ImportWorkspaceState.Failed && _failureRetryable;
+
     /// <summary>[다시 시도]를 보여주는지.</summary>
     public bool CanRetry => State == ImportWorkspaceState.Result && _result is { IsRetryable: true };
 
@@ -539,12 +557,17 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     {
         if (IsCodexRunningNow())
         {
+            // Phase 9_2-36 — 이미 대기 화면에서 다시 확인한 것이면 확인했다는 사실을 시각으로 보여준다(화면 변화가 없어 반응이 없어 보이지 않게).
+            CodexRecheckText = State == ImportWorkspaceState.WaitingForCodexExit
+                ? ImportTexts.CodexStillRunning(Now())
+                : null;
             Message = ImportTexts.CodexRunningAtStart;
             MessageHint = null;
             State = ImportWorkspaceState.WaitingForCodexExit;
             return;
         }
 
+        CodexRecheckText = null;
         await AnalyzeAsync().ConfigureAwait(true);
     }
 
@@ -554,13 +577,14 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         string? home = _codexHomeProvider();
         if (string.IsNullOrWhiteSpace(home))
         {
-            Fail("Codex Home 경로를 확인할 수 없습니다.", "메인 화면에서 Codex 폴더를 먼저 선택해 주세요.");
+            Fail("Codex Home 경로를 확인할 수 없습니다.", "메인 화면에서 Codex 폴더를 먼저 선택해 주세요.", retryable: true);
             return;
         }
 
         var cancellation = new CancellationTokenSource();
         _analysisCancellation = cancellation;
         AnalysisStartCount++;
+        _failureRetryable = false;
         Message = "백업을 확인하고 이 PC와 비교하는 중…";
         MessageHint = null;
         EditingError = null;
@@ -584,7 +608,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
             if (!preview.Success)
             {
                 (string message, string hint) = ImportTexts.AnalysisFailure(preview.ValidationErrors);
-                Fail(message, hint);
+                Fail(message, hint, retryable: false); // 백업 파일 자체의 문제 — 다시 해도 같다
                 _logger.Warning($"가져오기 분석: 백업 검증 실패. errors={preview.ValidationErrors.Count}");
                 return;
             }
@@ -605,7 +629,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             _logger.Error("가져오기 분석 중 오류", ex);
-            Fail($"백업을 확인하는 중 오류가 발생했습니다: {ex.GetType().Name}", "다른 파일을 선택하거나 다시 시도해 주세요.");
+            Fail($"백업을 확인하는 중 오류가 발생했습니다: {ex.GetType().Name}", "다른 파일을 선택하거나 [다시 분석]을 눌러 주세요.", retryable: true);
         }
         finally
         {
@@ -616,11 +640,16 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void Fail(string message, string hint)
+    /// <param name="retryable">(Phase 9_2-37) 다시 시도하면 될 수 있는 실패인지([다시 분석]을 켠다).</param>
+    private void Fail(string message, string hint, bool retryable)
     {
         Message = message;
         MessageHint = hint;
+        _failureRetryable = retryable;
         State = ImportWorkspaceState.Failed;
+        OnPropertyChanged(nameof(CanRetryAnalysis));
+        RaiseCommands();
+        _logger.Info($"가져오기 분석 실패. retryable={retryable}");
     }
 
     private void LoadPreview(ImportPreview preview)
@@ -1479,6 +1508,8 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         MessageHint = null;
         EditingError = null;
         ApplyStatusText = null;
+        CodexRecheckText = null;
+        _failureRetryable = false;
         _searchText = string.Empty;
         OnPropertyChanged(nameof(SearchText));
         RefreshSummaryBindings();

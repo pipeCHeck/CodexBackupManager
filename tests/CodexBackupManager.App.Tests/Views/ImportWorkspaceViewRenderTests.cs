@@ -135,7 +135,38 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         ImportWorkspaceViewModel failed = _h.CreateWorkspace(() => broken);
         await failed.OpenAsync();
         Assert.Equal(ImportWorkspaceState.Failed, failed.State);
-        AssertRendersWithoutBindingErrors(failed);
+        AssertRendersWithoutBindingErrors(failed, window =>
+        {
+            // 9_2-37: 백업 파일 자체의 문제 → 가운데 [다시 분석] 없음(우측 상단 버튼은 꺼짐).
+            Assert.All(Descendants<System.Windows.Controls.Button>(window).Where(b => Equals(b.Content, "다시 분석")),
+                b => Assert.False(b.IsVisible && b.IsEnabled));
+        });
+    }
+
+    [Fact]
+    public async Task 대기_화면의_확인_시각과_재시도_가능한_실패의_다시_분석을_그린다()
+    {
+        // 9_2-36
+        string backup = await _h.ExportAsync();
+        _h.CodexRunning = true;
+        ImportWorkspaceViewModel waiting = _h.CreateWorkspace(() => backup);
+        waiting.Now = () => new DateTime(2026, 10, 1, 9, 8, 7);
+        await waiting.OpenAsync();
+        waiting.RecheckCodexCommand.Execute(null);
+        await Task.Delay(50);
+        AssertRendersWithoutBindingErrors(waiting, window =>
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window),
+                t => t.Text == "아직 Codex가 실행 중입니다(확인 09:08:07)" && t.IsVisible));
+
+        // 9_2-37
+        _h.CodexRunning = false;
+        ImportWorkspaceViewModel failed = _h.CreateWorkspace(() => backup);
+        failed.CatalogBuilder = (_, _) => throw new IOException("일시적");
+        await failed.OpenAsync();
+        Assert.True(failed.CanRetryAnalysis);
+        AssertRendersWithoutBindingErrors(failed, window =>
+            Assert.Equal(1, Descendants<System.Windows.Controls.Button>(window)
+                .Count(b => Equals(b.Content, "다시 분석") && b.IsVisible && b.IsEnabled))); // 실패 화면 가운데(Codex 배너는 이 상태에서 없음)
     }
 
     [Fact]
@@ -167,6 +198,70 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
             Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window),
                 t => t.Text == "이 앱으로 만든 프로젝트 1개가 Codex 사이드바에 보이지 않습니다.");
         });
+    }
+
+    [Fact]
+    public void 내보내기_완료_대화상자를_긴_목록과_좁은_폭에서도_바인딩_오류_없이_그린다()
+    {
+        // Phase 9_6-01 — 프로젝트 40개(루트 2개씩, D: 쪽은 이 PC에 없음) + 기타 대화. 목록 영역만 스크롤하고 좁은 폭에서도 버튼이 겹치지 않는다.
+        var projects = Enumerable.Range(1, 40)
+            .Select(i => new CodexBackupManager.Backup.Summary.ExportSummaryGroup(
+                $"프로젝트 {i:D2} 아주 긴 이름이 들어가도 줄바꿈으로 보여야 한다",
+                [$@"C:\_User Projects\깊은\폴더\구조\프로젝트{i:D2}\Source", $@"D:\Mirror\프로젝트{i:D2}"],
+                [new CodexBackupManager.Backup.Summary.ExportSummaryConversation("대화", null, null, null)]))
+            .ToList();
+        var summary = new CodexBackupManager.Backup.Summary.ExportSummary(
+            "codex-backup-20261001-140301.codexbackup", 12_900_000, DateTimeOffset.UtcNow, 41, projects,
+            new CodexBackupManager.Backup.Summary.ExportSummaryGroup("기타 대화", [@"C:\Users\User\Documents\Codex"],
+                [new CodexBackupManager.Backup.Summary.ExportSummaryConversation("과제 수행", null, null, @"C:\Users\User\Documents\Codex")]));
+        var vm = new CodexBackupManager.App.ViewModels.ExportCompletedViewModel(
+            summary, Path.Combine(_h.TestDir, "x.codexbackup"), path => path.StartsWith("C:", StringComparison.Ordinal), (_, _) => null,
+            TimeZoneInfo.Utc, new CodexBackupManager.App.Services.FileLogger(Path.Combine(_h.TestDir, "logs")));
+
+        AssertRendersWithoutBindingErrors(vm, BuildExportCompletedXaml(), window =>
+        {
+            foreach ((double width, double height) in new[] { (640.0, 600.0), (380.0, 520.0) })
+            {
+                window.Width = width;
+                window.Height = height;
+                window.UpdateLayout();
+                Pump();
+
+                var scroll = (System.Windows.Controls.ScrollViewer)window.FindName("FolderScroll");
+                Assert.True(scroll.ExtentHeight > scroll.ViewportHeight, $"목록이 스크롤되지 않음({width})");
+                Assert.True(scroll.ViewportHeight > 40, $"목록 영역이 너무 작음({width}): {scroll.ViewportHeight}");
+
+                System.Windows.Controls.Button save = Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, "목록을 텍스트 파일로 저장…"));
+                System.Windows.Controls.Button close = Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, "닫기"));
+                var root = (FrameworkElement)window.Content;
+                Rect saveRect = save.TransformToAncestor(root).TransformBounds(new Rect(save.RenderSize));
+                Rect closeRect = close.TransformToAncestor(root).TransformBounds(new Rect(close.RenderSize));
+                Assert.False(saveRect.IntersectsWith(closeRect), $"버튼이 겹침({width})");
+                foreach (Rect r in new[] { saveRect, closeRect })
+                {
+                    Assert.True(r.Right <= root.ActualWidth + 0.5 && r.Bottom <= root.ActualHeight + 0.5, $"버튼이 창 밖으로 나감({width}): {r}");
+                }
+
+                Assert.True(close.IsCancel); // Esc로 닫힌다
+            }
+
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == @"D:\Mirror\프로젝트01 (이 PC에 없음)");
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == CodexBackupManager.App.ViewModels.ExportCompletedViewModel.TextFileNoteText);
+        });
+    }
+
+    private static string BuildExportCompletedXaml()
+    {
+        string appDir = Path.Combine(RepositoryFixtures.RepositoryRoot, "src", "CodexBackupManager.App");
+        string text = File.ReadAllText(Path.Combine(appDir, "Views", "ExportCompletedWindow.xaml"));
+        text = Regex.Replace(text, "\\s+x:Class=\"[^\"]*\"", string.Empty);
+        XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        XElement window = XElement.Parse(text);
+        window.SetAttributeValue(XNamespace.Xmlns + "converters", "clr-namespace:CodexBackupManager.App.Converters;assembly=CodexBackupManager");
+        window.SetAttributeValue(XNamespace.Xmlns + "sys", "clr-namespace:System.Windows;assembly=PresentationFramework");
+        window.SetAttributeValue("Background", null); // StaticResource Bg는 아래 Resources보다 먼저 파싱되므로 뺀다(색만의 문제)
+        window.AddFirst(new XElement(presentation + "Window.Resources", AppResourceDictionary()));
+        return QualifyAppNamespaces(window.ToString());
     }
 
     private static string BuildMainWindowXaml()

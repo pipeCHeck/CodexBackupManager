@@ -197,11 +197,18 @@ public static class ImportTexts
                 "이 폴더가 Codex에 여러 프로젝트로 등록되어 있어 자동으로 연결하지 않습니다. 다른 폴더를 고르거나 기타 대화로 가져옵니다.",
             ProjectTargetReason.LegacyOnlyProject =>
                 "이 폴더는 Codex 데스크톱의 이전 형식 프로젝트로만 등록되어 있어 지금은 연결할 수 없습니다. 기타 대화로 들어갑니다.",
+            // Phase 9_5a-05 — Desktop 상태 파일 게이트 실패는 전용 문구(state DB 스키마가 다른 경우는 기존 문구 그대로).
+            ProjectTargetReason.CreationUnsupported when directory.ProjectCreation == ProjectCreationSupport.DesktopStateUnsupported =>
+                DesktopStateUnsupportedStatus,
             ProjectTargetReason.CreationUnsupported =>
                 "이 Codex 버전에서는 프로젝트 자동 생성을 지원하지 않습니다. 기타 대화로 들어갑니다.",
             _ => "이 PC의 프로젝트에 연결할 수 없습니다. 지금은 기타 대화로 들어갑니다.",
         };
     }
+
+    /// <summary>(Phase 9_5a-05) Desktop 상태 파일 형식을 확인하지 못해 새 프로젝트를 만들지 않을 때의 작업 폴더 행 문구.</summary>
+    public const string DesktopStateUnsupportedStatus =
+        "Codex 데스크톱 앱의 프로젝트 목록 형식을 확인하지 못해 새 프로젝트를 만들지 않습니다. 기타 대화로 가져옵니다.";
 
     /// <summary>목적지가 등록 프로젝트 연결인지(초록 표시용).</summary>
     public static bool IsLinked(ProjectTarget target) => target.Kind == ProjectTargetKind.LinkExisting;
@@ -304,6 +311,10 @@ public static class ImportTexts
 
     /// <summary>Codex 실행 중 안내(가져오기 시작 시, 설계 §9).</summary>
     public const string CodexRunningAtStart = "가져오기는 Codex를 종료한 상태에서만 할 수 있습니다. Codex를 완전히 종료한 뒤 [다시 확인]을 눌러 주세요.";
+
+    /// <summary>(Phase 9_2-36) 대기 화면에서 다시 확인했는데 아직 실행 중일 때(이 PC 시각).</summary>
+    public static string CodexStillRunning(DateTime checkedAtLocal)
+        => $"아직 Codex가 실행 중입니다(확인 {checkedAtLocal.ToString("HH:mm:ss", CultureInfo.InvariantCulture)})";
 
     /// <summary>Editing 중 Codex가 켜졌을 때(설계 §9).</summary>
     public const string CodexStartedWhileEditing = "Codex가 실행되어 분석 결과가 바뀌었을 수 있습니다. Codex를 종료한 뒤 [다시 분석]을 눌러 주세요.";

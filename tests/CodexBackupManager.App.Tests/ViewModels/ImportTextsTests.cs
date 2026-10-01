@@ -79,6 +79,20 @@ public sealed class ImportTextsTests
     }
 
     [Fact]
+    public void Desktop_상태_파일_게이트_실패는_전용_문구이고_스키마_실패는_기존_문구다()
+    {
+        // 9_5a-05
+        ProjectTarget target = ProjectTarget.Uncategorized(ProjectTargetReason.CreationUnsupported, Folder);
+        var desktop = new ProjectDirectory([]) { ProjectCreation = ProjectCreationSupport.DesktopStateUnsupported };
+        var schema = new ProjectDirectory([]) { ProjectCreation = ProjectCreationSupport.SchemaUnsupported };
+
+        Assert.Equal(
+            "Codex 데스크톱 앱의 프로젝트 목록 형식을 확인하지 못해 새 프로젝트를 만들지 않습니다. 기타 대화로 가져옵니다.",
+            ImportTexts.TargetStatus(target, desktop, []));
+        Assert.Equal("이 Codex 버전에서는 프로젝트 자동 생성을 지원하지 않습니다. 기타 대화로 들어갑니다.", ImportTexts.TargetStatus(target, schema, []));
+    }
+
+    [Fact]
     public void 이어받은_대화_결과_문구는_괄호를_한_번만_쓰고_나머지는_가운뎃점으로_잇는다()
     {
         // 9_2-35 — "기타 대화 (보관됨) (기존 위치 유지)" 같은 괄호 겹침을 없앤다.

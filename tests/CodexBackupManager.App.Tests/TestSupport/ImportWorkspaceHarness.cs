@@ -68,6 +68,9 @@ internal sealed class ImportWorkspaceHarness : IDisposable
     /// <summary>Restore(적용 시점)가 보는 "Codex 실행 중" 여부.</summary>
     public bool RestoreSeesCodex { get; set; }
 
+    /// <summary>(Phase 9_6) 이 harness의 MainViewModel이 띄우려 한 "내보내기 완료" 대화상자.</summary>
+    public List<ExportCompletedViewModel> ExportCompletedShown { get; } = [];
+
     /// <summary>편집 중 감시 타이머 콜백(테스트가 직접 부른다).</summary>
     public Action? PollCallback { get; private set; }
 
@@ -98,6 +101,7 @@ internal sealed class ImportWorkspaceHarness : IDisposable
             confirmDialog: (_, _) => true,
             snapshotRootProvider: () => SnapshotRoot);
         viewModel.ProcessLister = () => [];
+        viewModel.ExportCompletedPresenter = completed => ExportCompletedShown.Add(completed); // Phase 9_6 — 창을 띄우지 않고 기록만
         Configure(viewModel.ImportWorkspace);
         return viewModel;
     }

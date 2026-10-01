@@ -873,15 +873,16 @@ public sealed class MainViewModel : ObservableObject
         ExportStatusText = "내보내는 중…";
 
         var stopwatch = Stopwatch.StartNew();
+        ExportCompletedViewModel? completed = null;
         try
         {
-            BackupWriter.WriteResult result = await Task.Run(
+            (BackupWriter.WriteResult result, BackupManifest writtenManifest) = await Task.Run(
                 () =>
                 {
                     ExportPlan plan = ExportPlanBuilder.Build(catalog, selectedThreadIds, cancellation.Token);
                     BackupManifest manifest = ManifestBuilder.Build(
                         plan, _lastCodexDesktopVersion, _lastCodexCliVersion, DateTimeOffset.UtcNow);
-                    return BackupWriter.Write(plan, manifest, destination, overwrite: true, cancellationToken: cancellation.Token);
+                    return (BackupWriter.Write(plan, manifest, destination, overwrite: true, cancellationToken: cancellation.Token), manifest);
                 },
                 cancellation.Token).ConfigureAwait(true);
 
@@ -890,6 +891,7 @@ public sealed class MainViewModel : ObservableObject
             if (result.Success)
             {
                 long sizeBytes = new FileInfo(destination).Length;
+                completed = CreateExportCompleted(writtenManifest, destination, sizeBytes);
                 ExportStatusText =
                     $"내보내기 완료 — 선택 대화 {selectedThreadIds.Count}개, {sizeBytes / 1024.0 / 1024.0:F1} MB, " +
                     $"{stopwatch.ElapsedMilliseconds}ms" +
@@ -920,6 +922,46 @@ public sealed class MainViewModel : ObservableObject
                 IsExporting = false;
                 _exportCancellation = null;
             }
+        }
+
+        // Phase 9_6-01 — 성공 직후 한 번만 띄운다(실패·취소는 위의 상태 문구만). 내보내기 상태를 끝낸 뒤에 띄운다.
+        if (completed is not null)
+        {
+            ExportCompletedPresenter(completed);
+        }
+    }
+
+    // ── Phase 9_6 내보내기 완료 안내(테스트 seam: InternalsVisibleTo App.Tests) ─────────────────────
+
+    /// <summary>완료 대화상자 표시 방법(기본: 메인 창 소유의 모달 창).</summary>
+    internal Action<ExportCompletedViewModel> ExportCompletedPresenter { get; set; } = Views.ExportCompletedWindow.ShowFor;
+
+    /// <summary>작업 폴더가 이 PC에 있는지(기본: <see cref="Directory.Exists(string?)"/>).</summary>
+    internal Func<string, bool> DirectoryExists { get; set; } = Directory.Exists;
+
+    /// <summary>목록 텍스트 저장 위치 선택(기본 폴더, 기본 이름) → 경로(취소 시 <c>null</c>).</summary>
+    internal Func<string, string, string?> ExportTextFilePicker { get; set; } = TextFilePicker.PickSaveLocation;
+
+    /// <summary>텍스트 시각의 시간대(기본: 이 PC).</summary>
+    internal TimeZoneInfo ExportSummaryTimeZone { get; set; } = TimeZoneInfo.Local;
+
+    private ExportCompletedViewModel? CreateExportCompleted(BackupManifest manifest, string destination, long sizeBytes)
+    {
+        try
+        {
+            Backup.Summary.ExportSummary summary = Backup.Summary.ExportSummaryBuilder.Build(manifest, Path.GetFileName(destination), sizeBytes);
+            var completed = new ExportCompletedViewModel(
+                summary, destination, DirectoryExists, ExportTextFilePicker, ExportSummaryTimeZone, _logger);
+            _logger.Info(
+                $"내보내기 완료 안내. projects={summary.ProjectCount} uncategorized={summary.UncategorizedConversationCount} " +
+                $"folders={completed.Groups.Sum(g => g.Folders.Count)} missingFolders={completed.MissingFolderCount}");
+            return completed;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // 안내를 만들지 못해도 내보내기 결과는 이미 성공이다 — 상태 문구로 충분하다.
+            _logger.Warning($"내보내기 완료 안내를 만들지 못함. type={ex.GetType().Name}");
+            return null;
         }
     }
 
@@ -1066,7 +1108,7 @@ public sealed class MainViewModel : ObservableObject
         string line = $"이 앱으로 만든 프로젝트 {detection.Candidates.Count}개가 Codex 사이드바에 보이지 않습니다.";
         return detection.GateFailure == CodexBackupManager.Codex.Inspection.GlobalStateGateFailure.None
             ? line
-            : line + " Codex 데스크톱 앱 상태 파일 형식이 확인한 형태와 달라 지금은 표시할 수 없습니다.";
+            : line + " (Codex 데스크톱 앱 상태 파일 형식이 달라 지금은 추가할 수 없습니다)"; // Phase 9_5a-05 — 버튼이 꺼진 이유
     }
 
     /// <summary>[사이드바에 표시]. Codex가 실행 중이면 시작하지 않고 안내한다. 확인을 받은 뒤에만 쓴다.</summary>
