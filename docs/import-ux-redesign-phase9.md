@@ -660,6 +660,24 @@ Apply 전체를 막지는 않는다.
 
 지금 한글패치 대화(기타 대화에 있음)를 프로젝트로 옮기는 기능이다.
 
+**9_6-1 점검 때 실측(2026-10-01, 읽기 전용) — 9_3 범위를 정하는 근거**
+- 활성 대화 421개 중 DB `threads.project_id`가 채워진 것은 **4개뿐**이다. 모두 이 앱이 가져온 대화다.
+- Desktop이 직접 정한 대화 소속 72건은 **global-state `thread-project-assignments`에만** 있다(`{projectKind:"local", projectId:<레거시 ID>}`). 그 대화들의 DB `project_id`는 모두 NULL이다.
+- `projectless-thread-ids` 11개는 DB `project_id`도 모두 NULL이고, 배정과 겹치지 않는다.
+- `pendingThreadAssignmentIds` 12개는 모두 배정에 들어 있다.
+- 나머지 대화(배정 없음, projectless 아님, DB NULL)는 Desktop이 cwd 등으로 분류한다.
+- 결론
+  - 이 앱이 DB `project_id`만 바꿔도 되는 대화: 배정이 없고 projectless도 아닌 대화(이 앱이 가져온 대화, 예: "Inspect Airp flight project")
+  - 배정이나 projectless에 들어 있는 대화: Desktop이 global-state 기록을 우선할 수 있다(검증 안 됨). 9_3 V1에서는 옮기지 않는다
+
+**9_3 V1 확정 규칙(위 실측 반영)**
+- 대상: 이 PC에 있는 대화 중 `Identical`/`IncomingAhead`/`LocalAhead`(Diverged 제외, 보관됨 제외)이고, 현재 위치와 목적지가 다른 것
+- **global-state 배정(`thread-project-assignments`)이나 `projectless-thread-ids`에 들어 있는 대화는 옮기지 않는다.** 체크박스를 끄고 이유를 보여 준다("Codex 데스크톱 앱이 이 대화의 위치를 따로 기록하고 있어 Codex에서 직접 옮겨 주세요")
+- 목적지: DB ID가 있는 등록 프로젝트(LinkExisting), 또는 같은 Plan에서 만드는 새 프로젝트(CreateNew). 새 대화가 없어도 연결 변경 대화가 있으면 새 프로젝트를 만든다
+- global-state는 대화 소속 때문에는 쓰지 않는다(새 프로젝트의 레거시 항목은 9_5a 그대로). 다만 계획 시점 global-state 해시를 고정해, 계획 뒤 배정이 바뀌었으면 거부한다
+- `updated_at_ms`는 바꾸지 않는다(사이드바 정렬이 바뀌지 않게)
+
+
 - 대상: `Identical`(또는 IncomingAhead)이고 `LocalLocation`과 목적지가 다른 대화. 트리에 "📁 연결만 변경" 체크를 따로 둔다(기본 해제).
 - 계획: `PlannedThreadProjectLink(ThreadId, ExpectedCurrentProjectId, NewDbProjectId or 같은 Plan의 NewProjectId, NewCwd)`.
 - 실행: `UPDATE threads SET project_id=@p, cwd=@cwd WHERE id=@id AND project_id IS @expected`. 영향 행이 1이 아니면 실패 → Rollback(TOCTOU).

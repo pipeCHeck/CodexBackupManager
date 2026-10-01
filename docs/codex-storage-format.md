@@ -555,3 +555,14 @@ Codex Home 아래 어떤 파일도 생성/수정/삭제하지 않는다.
   - 지운 프로젝트 7개는 매핑과 키만 남는다(DB 행 없음)
 - Desktop을 실행한 뒤에도 global-state에서 바뀐 것은 `electron-persisted-atom-state`, `selected-project`, `environment-catalog-cache-v1`뿐이다. 새 DB 프로젝트를 레거시 쪽에 자동으로 추가하지 않았다.
 - global-state 파일 형식: UTF-8(BOM 없음), 한 줄 compact JSON(JS `JSON.stringify` 형식), 비ASCII 문자는 그대로 쓴다. Python `json.dumps(ensure_ascii=False, separators=(',', ':'))`로 바이트까지 같게 다시 만들 수 있다.
+
+## Phase 9 실측 추가 (2026-10-01, 대화 소속 기록 위치)
+
+- 활성 대화 421개 중 DB `threads.project_id`가 채워진 것은 **4개뿐**이다. 모두 이 앱이 가져온 대화다.
+- Desktop이 직접 정한 대화 소속 72건은 **global-state `thread-project-assignments`에만** 있다(`{projectKind:"local", projectId:<레거시 ID>}`). 그 대화들의 DB `project_id`는 모두 NULL이다.
+- `projectless-thread-ids` 11개는 DB `project_id`도 모두 NULL이고, 배정과 겹치지 않는다.
+- `pendingThreadAssignmentIds` 12개는 모두 배정에 들어 있다.
+- 나머지 대화(배정 없음, projectless 아님, DB NULL)는 Desktop이 cwd 등으로 분류한다.
+- 결론
+  - 이 앱이 DB `project_id`만 바꿔도 되는 대화: 배정이 없고 projectless도 아닌 대화(이 앱이 가져온 대화, 예: "Inspect Airp flight project")
+  - 배정이나 projectless에 들어 있는 대화: Desktop이 global-state 기록을 우선할 수 있다(검증 안 됨). 9_3 V1에서는 옮기지 않는다
