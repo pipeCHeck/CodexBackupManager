@@ -142,6 +142,12 @@ public sealed record RestoreOperationPlan(
     /// </summary>
     public IReadOnlyList<PlannedProjectCreate> ProjectCreates { get; init; } = [];
 
+    /// <summary>
+    /// (Phase 9_5a-03) 새 프로젝트를 만들 때, 계획 시점에 게이트(<c>GlobalStateProjectGate</c>)를 통과한 <c>.codex-global-state.json</c>의 SHA-256.
+    /// Snapshot·트랜잭션 안·쓰기 직전에 파일이 이 값과 다르면 거부한다(계획 뒤 변경). 프로젝트를 만들지 않으면 <c>null</c>.
+    /// </summary>
+    public string? GlobalStateExpectedSha256 { get; init; }
+
     /// <summary>SQL 쓰기가 하나라도 있는지(Snapshot 대상 판단용).</summary>
     public bool HasSqlWrite =>
         ProjectCreates.Count > 0 || ThreadInserts.Count > 0 || ThreadRolloutPathUpdates.Count > 0 || ThreadMetadataUpdates.Count > 0;

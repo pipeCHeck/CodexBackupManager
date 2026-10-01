@@ -86,6 +86,9 @@ public sealed class MainViewModel : ObservableObject
     // 있으면 새 Apply를 막고 사용자가 명시적으로 승인해야만 복구한다. RestoreExecutor.Apply 자신도
     // 같은 조건으로 새 Apply를 거부하므로(최종 판단자는 Core), 이건 UI가 미리 보여주는 안내일 뿐이다.
     private bool _hasIncompleteApply;
+    private SidebarRepairDetection _sidebarRepair = SidebarRepairDetection.None;
+    private string? _sidebarRepairStatusText;
+    private bool _isRepairingSidebar;
     private string? _incompleteApplySnapshotDirectory;
     private string? _incompleteApplyCodexHomePath;
     private string? _incompleteApplyStatusText;
@@ -149,6 +152,7 @@ public sealed class MainViewModel : ObservableObject
         OpenImportWorkspaceCommand = new RelayCommand(
             () => _ = ImportWorkspace.OpenAsync(), () => IsConnected && !IsBusy && !IsImportWorkspaceOpen && !IsExporting);
         RecoverIncompleteApplyCommand = new RelayCommand(() => _ = RecoverIncompleteApplyAsync(), () => HasIncompleteApply && !IsImportWorkspaceOpen);
+        RepairSidebarCommand = new RelayCommand(() => _ = RepairSidebarAsync(), () => CanRepairSidebar);
 
         _importWorkspace = new ImportWorkspaceViewModel(
             logger, importFilePicker ?? BackupFilePicker.PickOpenLocation, projectPathPicker ?? FolderPicker.PickProjectFolder,
@@ -199,6 +203,26 @@ public sealed class MainViewModel : ObservableObject
     /// 거부한다 — 여기서 강제 종료하지 않는다.
     /// </summary>
     public RelayCommand RecoverIncompleteApplyCommand { get; }
+
+    /// <summary>
+    /// [사이드바에 표시](Phase 9_5a-04): 이 앱이 만들었지만 Codex 사이드바에 없는 프로젝트를 Desktop 상태 파일에 추가한다.
+    /// 쓰기는 <see cref="SidebarRepairService"/>(Snapshot·Journal·Rollback)가 한다. DB는 바꾸지 않는다.
+    /// </summary>
+    public RelayCommand RepairSidebarCommand { get; }
+
+    /// <summary>사이드바 보정 안내 줄을 보여주는지(대상이 있거나 직전 결과가 있을 때).</summary>
+    public bool HasSidebarRepairNotice => _sidebarRepair.Candidates.Count > 0 || _sidebarRepairStatusText is not null;
+
+    /// <summary>사이드바 보정 안내/결과 문구(경로·이름 없음).</summary>
+    public string? SidebarRepairText => _sidebarRepairStatusText ?? DescribeSidebarRepair(_sidebarRepair);
+
+    /// <summary>[사이드바에 표시]를 누를 수 있는지.</summary>
+    public bool CanRepairSidebar =>
+        _sidebarRepair.Candidates.Count > 0 && _sidebarRepair.GateFailure == CodexBackupManager.Codex.Inspection.GlobalStateGateFailure.None &&
+        !_isRepairingSidebar && !IsImportWorkspaceOpen && !HasIncompleteApply && !string.IsNullOrWhiteSpace(HomePath);
+
+    /// <summary>감지된 보정 대상 수(테스트 확인용).</summary>
+    internal int SidebarRepairCandidateCount => _sidebarRepair.Candidates.Count;
 
     /// <summary>가져오기 작업 공간(Phase 9_2-2). 항상 같은 인스턴스이고 열림/닫힘은 <see cref="ImportWorkspaceViewModel.IsOpen"/>이 말한다.</summary>
     public ImportWorkspaceViewModel ImportWorkspace => _importWorkspace;
@@ -255,6 +279,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _hasIncompleteApply, value))
             {
                 RecoverIncompleteApplyCommand.RaiseCanExecuteChanged();
+                RepairSidebarCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -652,6 +677,8 @@ public sealed class MainViewModel : ObservableObject
             : "Codex 연결됨 (일부 구성 요소 없음)";
         HomePath = info.HomeDisplayPath;
         DetailText = null;
+        _sidebarRepairStatusText = null;
+        RefreshSidebarRepairState(info.HomeDisplayPath); // Phase 9_5a-04
 
         WarningText = info.Validation.Status == CodexHomeStatus.Valid
             ? null
@@ -927,6 +954,7 @@ public sealed class MainViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(HomePath))
         {
             RefreshIncompleteApplyState(HomePath);
+            RefreshSidebarRepairState(HomePath);
         }
 
         if ((e.CodexDataChanged || e.ShowInList) && _lastInstallation is { } installation)
@@ -992,6 +1020,106 @@ public sealed class MainViewModel : ObservableObject
         ExportCommand.RaiseCanExecuteChanged();
         OpenImportWorkspaceCommand.RaiseCanExecuteChanged();
         RecoverIncompleteApplyCommand.RaiseCanExecuteChanged();
+        RepairSidebarCommand.RaiseCanExecuteChanged();
+    }
+
+    // ── Phase 9_5a-04 사이드바 보정 ─────────────────────────────────────────────
+
+    /// <summary>
+    /// 이 앱이 만든 프로젝트 중 Codex 사이드바에 없는 것을 읽기 전용으로 다시 센다(연결 때, 가져오기 화면을 닫을 때, 보정 뒤).
+    /// 읽을 수 없으면 0개로 보고 줄을 숨긴다(쓰기는 클릭 때 <see cref="SidebarRepairService"/>가 다시 확인한다).
+    /// </summary>
+    private void RefreshSidebarRepairState(string codexHomePath)
+    {
+        try
+        {
+            _sidebarRepair = SidebarRepairService.Detect(codexHomePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _sidebarRepair = SidebarRepairDetection.None;
+        }
+
+        if (_sidebarRepair.Candidates.Count > 0)
+        {
+            _logger.Info($"사이드바에 없는 이 앱 프로젝트 감지. count={_sidebarRepair.Candidates.Count} gate={_sidebarRepair.GateFailure}");
+        }
+
+        RaiseSidebarRepairBindings();
+    }
+
+    private void RaiseSidebarRepairBindings()
+    {
+        OnPropertyChanged(nameof(HasSidebarRepairNotice));
+        OnPropertyChanged(nameof(SidebarRepairText));
+        OnPropertyChanged(nameof(CanRepairSidebar));
+        RepairSidebarCommand.RaiseCanExecuteChanged();
+    }
+
+    private static string? DescribeSidebarRepair(SidebarRepairDetection detection)
+    {
+        if (detection.Candidates.Count == 0)
+        {
+            return null;
+        }
+
+        string line = $"이 앱으로 만든 프로젝트 {detection.Candidates.Count}개가 Codex 사이드바에 보이지 않습니다.";
+        return detection.GateFailure == CodexBackupManager.Codex.Inspection.GlobalStateGateFailure.None
+            ? line
+            : line + " Codex 데스크톱 앱 상태 파일 형식이 확인한 형태와 달라 지금은 표시할 수 없습니다.";
+    }
+
+    /// <summary>[사이드바에 표시]. Codex가 실행 중이면 시작하지 않고 안내한다. 확인을 받은 뒤에만 쓴다.</summary>
+    internal async Task RepairSidebarAsync()
+    {
+        if (!CanRepairSidebar)
+        {
+            return;
+        }
+
+        string home = HomePath!;
+        int count = _sidebarRepair.Candidates.Count;
+        if (CodexProcessGuard.Check(ProcessLister).IsRunning)
+        {
+            _sidebarRepairStatusText = "사이드바 표시는 Codex를 종료한 상태에서만 할 수 있습니다. Codex를 완전히 종료한 뒤 [사이드바에 표시]를 다시 눌러 주세요.";
+            RaiseSidebarRepairBindings();
+            return;
+        }
+
+        bool confirmed = _confirmDialog(
+            $"이 앱으로 만든 프로젝트 {count}개를 Codex 사이드바 프로젝트 목록 맨 아래에 추가합니다.\n" +
+            "Codex 데스크톱 앱 상태 파일만 바꾸고, 바꾸기 전에 복구 지점(Snapshot)을 만듭니다.\n" +
+            "Codex가 완전히 종료되어 있어야 합니다. 계속하시겠습니까?",
+            "사이드바에 표시");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _isRepairingSidebar = true;
+        _sidebarRepairStatusText = "사이드바에 추가하는 중…";
+        RaiseSidebarRepairBindings();
+        try
+        {
+            SidebarRepairResult result = await Task.Run(
+                () => SidebarRepairService.Repair(home, _snapshotRootProvider(), ProcessLister)).ConfigureAwait(true);
+            _sidebarRepairStatusText = result.Outcome == RestoreOutcome.Succeeded
+                ? $"Codex 사이드바에 프로젝트 {result.AddedCount}개를 추가했습니다. Codex를 열면 프로젝트 목록 맨 아래에 보입니다."
+                : result.Outcome == RestoreOutcome.RollbackFailedCritical ? $"CRITICAL: {result.Message}" : result.Message;
+            _logger.Info($"사이드바 보정. outcome={result.Outcome} added={result.AddedCount}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("사이드바 보정 중 예기치 않은 오류", ex);
+            _sidebarRepairStatusText = $"사이드바 보정 중 예기치 않은 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            _isRepairingSidebar = false;
+        }
+
+        RefreshIncompleteApplyState(home);
+        RefreshSidebarRepairState(home);
     }
 
     /// <summary>

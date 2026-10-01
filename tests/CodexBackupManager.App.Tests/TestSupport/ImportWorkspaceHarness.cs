@@ -46,6 +46,7 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         if (realProjectSchema)
         {
             UpgradeToRealProjectSchema(TargetHome);
+            WriteDesktopGlobalState(TargetHome); // Phase 9_5a — 새 프로젝트를 사이드바에도 기록할 수 있는 실측 Desktop 형태
         }
 
         TestDir = Path.Combine(Path.GetTempPath(), "cbm-app-import-tests", Guid.NewGuid().ToString("N"));
@@ -163,6 +164,22 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// (Phase 9_5a) 실측 Desktop 형태의 빈 global-state(레거시 저장소 3키 + 마이그레이션 상태)를 JS <c>JSON.stringify</c> 형식으로 쓴다.
+    /// </summary>
+    public static void WriteDesktopGlobalState(string home)
+    {
+        var builder = new System.Text.StringBuilder("{\"local-projects\":{},\"project-order\":[],\"app-server-project-id-by-legacy-project-id-by-host\":{");
+        CodexBackupManager.Codex.Inspection.GlobalStateJson.WriteString(builder, "local:" + home);
+        builder.Append(":{}},\"app-server-projects-migration-by-host\":{");
+        CodexBackupManager.Codex.Inspection.GlobalStateJson.WriteString(builder, "local:" + home);
+        builder.Append(":{\"version\":1,\"projectsMigrated\":true,\"threadAssignmentsMigrated\":false}}}");
+        File.WriteAllBytes(GlobalStatePath(home), CodexBackupManager.Codex.Inspection.GlobalStateJson.StrictUtf8.GetBytes(builder.ToString()));
+    }
+
+    /// <summary>(Phase 9_5a) global-state 파일 경로.</summary>
+    public static string GlobalStatePath(string home) => Path.Combine(home, ".codex-global-state.json");
+
     /// <summary>대상 PC에서 대화를 지운다(행 + rollout 파일) — 가져오기에서 "새 대화"가 된다.</summary>
     public void RemoveFromTarget(params string[] threadIds)
     {
@@ -198,6 +215,21 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         cmd.Parameters.AddWithValue("$id", projectId);
         cmd.Parameters.AddWithValue("$name", name);
         cmd.Parameters.AddWithValue("$root", root);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// (Phase 9_5a-04) 이 앱이 만든 것처럼(idempotency key 접두사 <c>codex-backup-manager:import:v1:</c>) 대상 PC에 DB 프로젝트를 만든다.
+    /// global-state 레거시 저장소에는 넣지 않는다(사이드바에 보이지 않는 상태).
+    /// </summary>
+    public void RegisterAppProjectInTarget(string projectId, string name, string root)
+    {
+        RegisterTargetProject(projectId, name, root);
+        using SqliteConnection connection = Open(TargetHome);
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = "INSERT INTO project_idempotency_keys (key, project_id, created_at_ms) VALUES ($key, $id, 1759300000000)";
+        cmd.Parameters.AddWithValue("$key", "codex-backup-manager:import:v1:test:" + projectId);
+        cmd.Parameters.AddWithValue("$id", projectId);
         cmd.ExecuteNonQuery();
     }
 

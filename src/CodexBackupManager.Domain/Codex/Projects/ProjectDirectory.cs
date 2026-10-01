@@ -49,6 +49,12 @@ public enum ProjectCreationSupport
 
     /// <summary>기능은 켜져 있지만 state DB 프로젝트 스키마가 다르다 — 만들지 않는다(CreationUnsupported, 기타 대화).</summary>
     SchemaUnsupported = 2,
+
+    /// <summary>
+    /// (Phase 9_5a-01) state DB는 맞지만 Codex Desktop 상태 파일(<c>.codex-global-state.json</c>)의 레거시 프로젝트 저장소가 확인한 형태와
+    /// 다르다 — 만들어도 Desktop 사이드바에 보이지 않으므로 만들지 않는다(CreationUnsupported, 기타 대화).
+    /// </summary>
+    DesktopStateUnsupported = 3,
 }
 
 /// <summary>

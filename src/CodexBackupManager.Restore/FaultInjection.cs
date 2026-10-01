@@ -51,6 +51,15 @@ public enum RestoreFaultInjectionPoint
 
     /// <summary>(Phase 9_5-T3) 같은 트랜잭션 안에서 thread INSERT를 마친 직후, idempotency 키 INSERT·커밋 전.</summary>
     AfterThreadInsert,
+
+    /// <summary>(Phase 9_5a-03) global-state temp 파일에 쓰는 도중(flush 전). 원본 global-state는 아직 그대로다.</summary>
+    DuringGlobalStateTempWrite,
+
+    /// <summary>(Phase 9_5a-03) global-state temp를 원본 위치로 원자적으로 교체한 직후(DB 커밋은 이미 끝났다).</summary>
+    AfterGlobalStateReplace,
+
+    /// <summary>(Phase 9_5a-03) global-state 사후 검증 직전.</summary>
+    BeforeGlobalStateValidation,
 }
 
 /// <summary>fault injection 훅. 테스트 전용 — 운영 코드는 <see cref="NoOpRestoreFaultInjectionHook"/>을 쓴다.</summary>

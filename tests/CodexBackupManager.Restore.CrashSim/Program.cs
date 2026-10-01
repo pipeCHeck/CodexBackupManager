@@ -30,6 +30,7 @@ if (args.Length < 1)
 return args[0] switch
 {
     "apply" => RunApply(args, noProcessGuard, withChoices),
+    "repair" => RunRepair(args, noProcessGuard),
     "lock-hold" => RunLockHold(args),
     _ => Unknown(args[0]),
 };
@@ -91,6 +92,31 @@ static int RunApply(string[] args, bool noProcessGuard, bool withChoices)
 
     // 정상적으로 여기까지 실행이 돌아왔다면(=crashPoint에서 멈추지 않았다면) 부모가 기대한 시나리오가
     // 아니다 — 부모가 이 출력으로 그 사실을 알 수 있게 한다.
+    Console.WriteLine($"UNEXPECTED-COMPLETION:{result.Outcome}:{result.Message}");
+    return 0;
+}
+
+/// <summary>
+/// (Phase 9_5a-T1) 사이드바 보정(<see cref="SidebarRepairService"/>)을 지정 지점에서 멈춘다 — 부모가 강제 종료하면 진짜 크래시와 같다.
+/// </summary>
+static int RunRepair(string[] args, bool noProcessGuard)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: CrashSim repair <codexHomePath> <crashPoint> <sentinelFilePath> [snapshotRoot]");
+        return 2;
+    }
+
+    string codexHomePath = args[1];
+    RestoreFaultInjectionPoint crashPoint = Enum.Parse<RestoreFaultInjectionPoint>(args[2]);
+    string sentinelFilePath = args[3];
+    string? snapshotRoot = args.Length > 4 ? args[4] : null;
+    var hook = new CrashAtPointHook(crashPoint, sentinelFilePath);
+
+    SidebarRepairResult result = SidebarRepairService.Repair(
+        codexHomePath,
+        noProcessGuard ? static () => [] : CodexProcessGuard.SystemRunningProcessLister,
+        snapshotRoot, hook, catalogBuilder: null);
     Console.WriteLine($"UNEXPECTED-COMPLETION:{result.Outcome}:{result.Message}");
     return 0;
 }

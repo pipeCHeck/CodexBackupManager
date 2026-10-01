@@ -248,27 +248,39 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
     internal static void RunAndKillAtCrashPoint(
         string codexHomePath, string backupFilePath, RestoreFaultInjectionPoint crashPoint, string snapshotRoot, bool withChoices = false)
     {
-        string exePath = FindOrBuildCrashSimExecutable();
         string sentinelPath = Path.Combine(Path.GetTempPath(), $"cbm-crashsim-sentinel-{Guid.NewGuid():N}.txt");
+        var arguments = new List<string> { "apply", codexHomePath, backupFilePath, crashPoint.ToString(), sentinelPath, snapshotRoot };
+        if (withChoices)
+        {
+            arguments.Add("--with-choices"); // Phase 9_5-T3 — 기본 사용자 선택 Plan(새 프로젝트 만들기 포함)
+        }
 
+        RunCrashSimAndKill(arguments, sentinelPath);
+    }
+
+    /// <summary>(Phase 9_5a-T1) 사이드바 보정을 CrashSim으로 돌리고 지정 지점에서 강제 종료한다.</summary>
+    internal static void RunRepairAndKillAtCrashPoint(string codexHomePath, RestoreFaultInjectionPoint crashPoint, string snapshotRoot)
+    {
+        string sentinelPath = Path.Combine(Path.GetTempPath(), $"cbm-crashsim-sentinel-{Guid.NewGuid():N}.txt");
+        RunCrashSimAndKill(["repair", codexHomePath, crashPoint.ToString(), sentinelPath, snapshotRoot], sentinelPath);
+    }
+
+    private static void RunCrashSimAndKill(List<string> arguments, string sentinelPath)
+    {
+        string exePath = FindOrBuildCrashSimExecutable();
         var startInfo = new ProcessStartInfo(exePath)
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        startInfo.ArgumentList.Add("apply");
-        startInfo.ArgumentList.Add(codexHomePath);
-        startInfo.ArgumentList.Add(backupFilePath);
-        startInfo.ArgumentList.Add(crashPoint.ToString());
-        startInfo.ArgumentList.Add(sentinelPath);
-        startInfo.ArgumentList.Add(snapshotRoot);
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         // Phase 9_1-01 — 호스트에서 Codex가 실행 중이어도 자식 프로세스가 크래시 지점까지 가도록 한다.
         startInfo.ArgumentList.Add("--process-guard=none");
-        if (withChoices)
-        {
-            startInfo.ArgumentList.Add("--with-choices"); // Phase 9_5-T3 — 기본 사용자 선택 Plan(새 프로젝트 만들기 포함)
-        }
 
         using Process? process = Process.Start(startInfo);
         Assert.NotNull(process);

@@ -212,6 +212,13 @@ public static class RestoreExecutor
                 return new RestoreResult(RestoreOutcome.NotReady, $"복구용 Snapshot을 만들지 못해 적용을 시작하지 않았습니다: {snapshot.FailureReason}", null, null);
             }
 
+            // Phase 9_5a-03 — Snapshot에 담긴 global-state가 계획 때 게이트를 통과한 그 바이트인지(계획 뒤 변경이면 쓰기 0건으로 거부).
+            if (opPlan.GlobalStateExpectedSha256 is { } expectedGlobalState &&
+                !GlobalStateProjectStep.SnapshotMatches(snapshot.Manifest!, expectedGlobalState))
+            {
+                return new RestoreResult(RestoreOutcome.NotReady, GlobalStateProjectStep.ChangedAfterPlanMessage, null, snapshot.Manifest!.SnapshotId);
+            }
+
             // Snapshot까지 성공했다 — 이 지점부터는 pinnedBackup을 ExecuteMutations이 끝날 때까지
             // 계속 열어 둬야 한다(아래 finally가 조기 반환 경로에서만 정리하게 한다).
             proceedingToMutation = true;
@@ -268,15 +275,28 @@ public static class RestoreExecutor
                 new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Applying, DateTimeOffset.UtcNow));
 
             onStatusChanged("적용 중");
-            IReadOnlyDictionary<string, string> effectiveProjectIds =
-                ExecuteMutations(codexHomePath, opPlan, pinnedBackup, faultInjection, cancellationToken);
+            MutationOutcome mutation = ExecuteMutations(codexHomePath, opPlan, pinnedBackup, faultInjection, cancellationToken);
+            IReadOnlyDictionary<string, string> effectiveProjectIds = mutation.EffectiveProjectIds;
 
             onStatusChanged("검증 중");
+            // Phase 9_5a-03 — global-state 파일 수준 검증(게이트 재통과, 다른 키 바이트 불변, 추가분만 정확히).
+            if (mutation.GlobalState is { } globalStateWrite)
+            {
+                faultInjection.Check(RestoreFaultInjectionPoint.BeforeGlobalStateValidation);
+                string? globalStateError = GlobalStateProjectStep.VerifyFile(codexHomePath, globalStateWrite);
+                if (globalStateError is not null)
+                {
+                    throw new InvalidOperationException(globalStateError);
+                }
+            }
+
             faultInjection.Check(RestoreFaultInjectionPoint.BeforePostValidation);
             cancellationToken.ThrowIfCancellationRequested();
             // Phase 9_5-02 — idempotency key로 기존 프로젝트를 재사용했으면 실제로 쓴 ID로 검증한다.
+            // Phase 9_5a-03 — 새 레거시 항목이 fresh 카탈로그에서 DB 프로젝트와 합쳐져 보이는지도 본다.
             RestoreValidator.Result validation = RestoreValidator.Validate(
-                plan, opPlan.WithEffectiveProjectIds(effectiveProjectIds), codexHomePath, cancellationToken);
+                plan, opPlan.WithEffectiveProjectIds(effectiveProjectIds), codexHomePath, cancellationToken,
+                legacyProjectsAdded: mutation.GlobalState?.Added);
             if (!validation.Success)
             {
                 throw new InvalidOperationException(validation.FailureReason ?? "post-apply validation 실패");
@@ -346,7 +366,10 @@ public static class RestoreExecutor
         return CodexCatalogBuilder.Build(installation);
     }
 
-    private static IReadOnlyDictionary<string, string> ExecuteMutations(
+    /// <summary>mutation 결과: 실제로 쓴 프로젝트 ID, 그리고 global-state 쓰기 결과(프로젝트를 만들지 않았으면 <c>null</c>).</summary>
+    private sealed record MutationOutcome(IReadOnlyDictionary<string, string> EffectiveProjectIds, GlobalStateWriteResult? GlobalState);
+
+    private static MutationOutcome ExecuteMutations(
         string codexHomePath,
         RestoreOperationPlan opPlan,
         PinnedBackupSource pinnedBackup,
@@ -379,7 +402,7 @@ public static class RestoreExecutor
         var effectiveProjectIds = new Dictionary<string, string>(StringComparer.Ordinal);
         if (!opPlan.HasSqlWrite)
         {
-            return effectiveProjectIds;
+            return new MutationOutcome(effectiveProjectIds, null);
         }
 
         faultInjection.Check(RestoreFaultInjectionPoint.BeforeSqliteTransaction);
@@ -410,12 +433,20 @@ public static class RestoreExecutor
         // Phase 9_5-02 — 새 프로젝트는 thread INSERT보다 먼저(공식 create_project 순서). 트랜잭션 안에서 스키마 게이트를 한 번 더 본다.
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var reusedProjectIds = new HashSet<string>(StringComparer.Ordinal);
+        var legacyAdditions = new List<GlobalStateProjectAddition>();
         if (opPlan.ProjectCreates.Count > 0)
         {
             var gate = SchemaCompatibilityChecker.CheckProjectCreation(connection, transaction);
             if (!gate.IsSupported)
             {
                 throw new InvalidOperationException("state DB 프로젝트 스키마가 확인한 형태와 달라 새 프로젝트를 만들지 않습니다.");
+            }
+
+            // Phase 9_5a-03 — 트랜잭션 안에서 global-state 게이트와 계획 시점 해시를 다시 본다(계획 뒤 바뀌었으면 만들지 않는다 → Rollback).
+            string? globalStateError = GlobalStateProjectStep.CheckUnchanged(codexHomePath, opPlan.GlobalStateExpectedSha256);
+            if (globalStateError is not null)
+            {
+                throw new InvalidOperationException(globalStateError);
             }
 
             foreach (PlannedProjectCreate create in opPlan.ProjectCreates)
@@ -426,6 +457,14 @@ public static class RestoreExecutor
                 if (created.Reused)
                 {
                     reusedProjectIds.Add(create.NewProjectId);
+
+                    // 재사용한 프로젝트는 DB에 있는 값으로 레거시 항목을 만든다(이미 매핑에 있으면 쓰기 단계가 건너뛴다 — 멱등).
+                    StateDatabaseWriter.ProjectSummary existing = StateDatabaseWriter.ReadProjectSummary(connection, transaction, created.ProjectId);
+                    legacyAdditions.Add(new GlobalStateProjectAddition(created.ProjectId, existing.Name, existing.RootPaths, existing.CreatedAtMs));
+                }
+                else
+                {
+                    legacyAdditions.Add(new GlobalStateProjectAddition(created.ProjectId, create.Name, [create.RootPathDisplay], nowMs));
                 }
             }
 
@@ -466,7 +505,17 @@ public static class RestoreExecutor
         transaction.Commit();
         faultInjection.Check(RestoreFaultInjectionPoint.AfterSqliteCommit);
         cancellationToken.ThrowIfCancellationRequested();
-        return effectiveProjectIds;
+
+        // Phase 9_5a-03 — DB 커밋 뒤 global-state 레거시 저장소에 같은 nowMs로 기록한다(Desktop 사이드바). 실패하면 호출자가
+        // Snapshot으로 DB와 global-state를 함께 Rollback한다.
+        GlobalStateWriteResult? globalState = null;
+        if (opPlan.ProjectCreates.Count > 0)
+        {
+            globalState = GlobalStateProjectStep.Write(codexHomePath, opPlan.GlobalStateExpectedSha256, legacyAdditions, faultInjection);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return new MutationOutcome(effectiveProjectIds, globalState);
     }
 
     private static IReadOnlyList<(string Label, string AbsolutePath)> ComputeSnapshotTargets(
@@ -486,6 +535,12 @@ public static class RestoreExecutor
             targets.Add(("state-db", stateDbPath));
             targets.Add(("state-db-wal", stateDbPath + "-wal"));
             targets.Add(("state-db-shm", stateDbPath + "-shm"));
+        }
+
+        // Phase 9_5a-03 — 새 프로젝트를 만들면 Desktop 상태 파일도 바뀐다.
+        if (opPlan.GlobalStateExpectedSha256 is not null)
+        {
+            targets.Add((GlobalStateWriter.SnapshotLabel, GlobalStateProjectStep.PathFor(codexHomePath)));
         }
 
         foreach (PlannedNewRolloutFile newFile in opPlan.NewRolloutFiles)

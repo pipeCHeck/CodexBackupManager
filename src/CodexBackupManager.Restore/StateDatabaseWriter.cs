@@ -147,6 +147,51 @@ public static class StateDatabaseWriter
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>(Phase 9_5a-03) 레거시 항목에 쓸 DB 프로젝트 값(이름, 루트 position 순, <c>created_at_ms</c>).</summary>
+    public sealed record ProjectSummary(string Name, IReadOnlyList<string> RootPaths, long CreatedAtMs);
+
+    /// <summary>(Phase 9_5a-03) 같은 트랜잭션 안에서 프로젝트 값을 읽는다(재사용한 프로젝트의 레거시 항목용). 없으면 예외.</summary>
+    public static ProjectSummary ReadProjectSummary(SqliteConnection connection, SqliteTransaction transaction, string projectId)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        string name;
+        long createdAtMs;
+        using (SqliteCommand project = connection.CreateCommand())
+        {
+            project.Transaction = transaction;
+            project.CommandText = "SELECT name, created_at_ms FROM projects WHERE id = $id";
+            project.Parameters.AddWithValue("$id", projectId);
+            using SqliteDataReader reader = project.ExecuteReader();
+            if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1))
+            {
+                throw new InvalidOperationException("재사용할 프로젝트 행을 읽을 수 없습니다.");
+            }
+
+            name = reader.GetString(0);
+            createdAtMs = reader.GetInt64(1);
+        }
+
+        var roots = new List<string>();
+        using (SqliteCommand rootCommand = connection.CreateCommand())
+        {
+            rootCommand.Transaction = transaction;
+            rootCommand.CommandText = "SELECT path FROM project_roots WHERE project_id = $id ORDER BY position";
+            rootCommand.Parameters.AddWithValue("$id", projectId);
+            using SqliteDataReader reader = rootCommand.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!reader.IsDBNull(0))
+                {
+                    roots.Add(reader.GetString(0));
+                }
+            }
+        }
+
+        return new ProjectSummary(name, roots, createdAtMs);
+    }
+
     private static List<string> ReadRootPaths(SqliteConnection connection, SqliteTransaction transaction, string? projectId)
     {
         using SqliteCommand cmd = connection.CreateCommand();

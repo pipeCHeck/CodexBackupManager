@@ -25,7 +25,7 @@ namespace CodexBackupManager.Restore.Tests;
 /// 공식 <c>create_project</c> 불변식(position = MAX+1, 루트 position 0, metadata '{}', idempotency 키 행), 중복 생성 금지,
 /// fault injection·크래시 복구, 스키마 게이트를 끝까지(Apply) 확인한다.
 /// </summary>
-public sealed class ProjectCreateApplyTests : IDisposable
+public sealed partial class ProjectCreateApplyTests : IDisposable
 {
     private const string OriginalCwd = @"C:\Fixture\Proj";
 

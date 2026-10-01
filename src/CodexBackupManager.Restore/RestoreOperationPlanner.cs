@@ -6,6 +6,7 @@ using System.Threading;
 using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Backup.Manifest;
 using CodexBackupManager.Backup.Reading;
+using CodexBackupManager.Codex.Inspection;
 using CodexBackupManager.Codex.Locating;
 using CodexBackupManager.Codex.Rollout;
 using CodexBackupManager.Codex.Threads;
@@ -99,6 +100,26 @@ public static class RestoreOperationPlanner
             return Reject("현재 state DB 프로젝트 스키마가 확인한 형태와 달라 새 프로젝트를 만들 수 없습니다.");
         }
 
+        // Phase 9_5a-03 — 새 프로젝트는 Desktop 사이드바(global-state 레거시 저장소)에도 기록한다. 지금 파일이 게이트를 통과해야 하고,
+        // 그 바이트의 해시를 계획에 고정한다(Snapshot·트랜잭션 안·쓰기 직전에 다시 비교해 계획 뒤 변경을 거부한다).
+        string? globalStateSha256 = null;
+        if (projectCreates.Count > 0)
+        {
+            if (!CanonicalPath.TryCreate(codexHomePath, out CanonicalPath? home, out _))
+            {
+                return Reject("Codex Home 경로를 해석할 수 없습니다.");
+            }
+
+            GlobalStateProjectGate.Result desktop = GlobalStateProjectGate.Check(
+                Path.Combine(codexHomePath, CodexHomeLayout.GlobalStateFileName), home!);
+            if (!desktop.IsSupported)
+            {
+                return Reject($"Codex 데스크톱 앱 상태 파일이 확인한 형태와 달라 새 프로젝트를 만들 수 없습니다(사유: {desktop.Failure}).");
+            }
+
+            globalStateSha256 = desktop.Sha256Hex;
+        }
+
         BackupReader reader = pinnedBackup.Reader;
         BackupManifest manifest = reader.ReadManifest();
         BackupCatalogReader.Result backupCatalog = BackupCatalogReader.Build(reader, cancellationToken);
@@ -165,6 +186,7 @@ public static class RestoreOperationPlanner
             newRolloutFiles, rolloutAppends, threadInserts, rolloutPathUpdates, threadMetadataUpdates)
         {
             ProjectCreates = projectCreates,
+            GlobalStateExpectedSha256 = globalStateSha256,
         };
         return new RestoreOperationPlanResult(restorePlan, []);
     }

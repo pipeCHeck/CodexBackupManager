@@ -149,6 +149,26 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml());
     }
 
+    [Fact]
+    public async Task 메인_창의_사이드바_보정_줄을_바인딩_오류_없이_그린다()
+    {
+        // Phase 9_5a-04 — 이 앱 프로젝트가 사이드바에 없을 때 안내 줄과 [사이드바에 표시] 버튼.
+        _h.RegisterAppProjectInTarget("019a0000-0000-7000-8000-00000000a001", "삼각형 3개", _h.NewFolder("tri"));
+        CodexBackupManager.App.ViewModels.MainViewModel main = _h.CreateMainViewModel(_h.TargetHome);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+        Assert.True(main.HasSidebarRepairNotice);
+
+        AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml(), window =>
+        {
+            System.Windows.Controls.Button button = Descendants<System.Windows.Controls.Button>(window)
+                .Single(b => Equals(b.Content, "사이드바에 표시"));
+            Assert.True(button.IsVisible);
+            Assert.True(button.IsEnabled);
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window),
+                t => t.Text == "이 앱으로 만든 프로젝트 1개가 Codex 사이드바에 보이지 않습니다.");
+        });
+    }
+
     private static string BuildMainWindowXaml()
     {
         string appDir = Path.Combine(RepositoryFixtures.RepositoryRoot, "src", "CodexBackupManager.App");

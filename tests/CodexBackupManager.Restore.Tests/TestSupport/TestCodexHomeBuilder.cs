@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
@@ -31,7 +32,8 @@ public static class TestCodexHomeBuilder
 
         File.WriteAllText(Path.Combine(root, "config.toml"), "# test fixture config\n");
         File.WriteAllText(Path.Combine(root, "session_index.jsonl"), string.Empty);
-        File.WriteAllText(Path.Combine(root, ".codex-global-state.json"), "{}");
+        // Phase 9_5a — 실측 Desktop 형태(레거시 저장소 3키 + 마이그레이션 상태, JS JSON.stringify 형식)의 빈 상태.
+        WriteGlobalState(root, []);
 
         return root;
     }
@@ -183,6 +185,8 @@ public static class TestCodexHomeBuilder
     /// <summary>
     /// Phase 9_1b — 합성 <c>.codex-global-state.json</c>을 쓴다. 레거시 매핑은 현재 Home의 host key(<c>local:</c> + 경로)
     /// 아래에 들어간다. <c>threadAssignmentsMigrated</c>는 실측과 같이 <c>false</c>다.
+    /// Phase 9_5a — 실측 Desktop 형태로 쓴다: <c>local-projects</c> 항목은 5필드(createdAt/updatedAt 포함), <c>project-order</c>,
+    /// 매핑 host 객체(매핑이 없으면 빈 객체)가 항상 있고, 파일은 JS <c>JSON.stringify</c> 형식(한 줄, BOM 없음)이다.
     /// </summary>
     public static void WriteGlobalState(
         string codexHome,
@@ -193,7 +197,7 @@ public static class TestCodexHomeBuilder
         var localProjects = new Dictionary<string, object>();
         foreach (LegacyProject project in legacyProjects)
         {
-            localProjects[project.Id] = new { id = project.Id, name = project.Name, rootPaths = project.RootPaths };
+            localProjects[project.Id] = new { id = project.Id, name = project.Name, rootPaths = project.RootPaths, createdAt = 1_770_000_000_000L, updatedAt = 1_770_000_000_000L };
         }
 
         var assignments = new Dictionary<string, object>();
@@ -206,23 +210,31 @@ public static class TestCodexHomeBuilder
         var root = new Dictionary<string, object>
         {
             ["local-projects"] = localProjects,
+            ["project-order"] = legacyProjects.Select(p => p.Id).ToArray(),
             ["thread-project-assignments"] = assignments,
             ["app-server-projects-migration-by-host"] = new Dictionary<string, object>
             {
                 [hostKey] = new { version = 1, projectsMigrated = true, threadAssignmentsMigrated = false },
             },
+            ["app-server-project-id-by-legacy-project-id-by-host"] = new Dictionary<string, object>
+            {
+                [hostKey] = legacyToDbProjectIds ?? new Dictionary<string, string>(),
+            },
         };
 
-        if (legacyToDbProjectIds is not null)
-        {
-            root["app-server-project-id-by-legacy-project-id-by-host"] = new Dictionary<string, object>
-            {
-                [hostKey] = legacyToDbProjectIds,
-            };
-        }
-
-        File.WriteAllText(Path.Combine(codexHome, ".codex-global-state.json"), JsonSerializer.Serialize(root));
+        WriteDesktopFormat(codexHome, JsonSerializer.Serialize(root));
     }
+
+    /// <summary>(Phase 9_5a) JSON 텍스트를 Desktop과 같은 JS <c>JSON.stringify</c> 형식(한 줄, BOM 없음, 비ASCII 그대로)으로 바꿔 쓴다.</summary>
+    public static void WriteDesktopFormat(string codexHome, string json)
+    {
+        string normalized = CodexBackupManager.Codex.Inspection.GlobalStateJson.Serialize(
+            CodexBackupManager.Codex.Inspection.GlobalStateJson.Parse(json));
+        File.WriteAllBytes(GlobalStatePath(codexHome), CodexBackupManager.Codex.Inspection.GlobalStateJson.StrictUtf8.GetBytes(normalized));
+    }
+
+    /// <summary>(Phase 9_5a) global-state 파일 경로.</summary>
+    public static string GlobalStatePath(string codexHome) => Path.Combine(codexHome, ".codex-global-state.json");
 
     /// <summary>(Phase 9_5) state DB에 SQL을 실행해 모든 행을 돌려준다(테스트 확인용).</summary>
     public static List<object?[]> Query(string codexHome, string sql)

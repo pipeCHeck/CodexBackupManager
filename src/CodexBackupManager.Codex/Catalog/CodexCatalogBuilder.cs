@@ -152,12 +152,25 @@ public static class CodexCatalogBuilder
         }
 
         // Phase 9_5-03 — 새 프로젝트를 만들 수 있는 스키마인지(읽기 전용 PRAGMA). 목록을 만들지 못했으면(위 경고) 만들지 않는다.
+        // Phase 9_5a-01 — Desktop 사이드바에도 보이게 레거시 저장소에 기록할 수 있는 global-state인지도 본다(읽기 전용). 아니면 만들지 않는다.
         if (directoryBuilt)
         {
             ProjectCreationSchemaGate.Result gate = ProjectCreationSchemaGate.Check(database);
+            ProjectCreationSupport support = ProjectCreationSchemaGate.ToSupport(gate);
+            if (support == ProjectCreationSupport.Supported)
+            {
+                GlobalStateProjectGate.Result desktop = GlobalStateProjectGate.Check(
+                    Path.Combine(root, CodexHomeLayout.GlobalStateFileName), installation.Home);
+                if (!desktop.IsSupported)
+                {
+                    support = ProjectCreationSupport.DesktopStateUnsupported;
+                    warnings.Add($"Codex 데스크톱 앱 상태 파일이 확인한 형태와 달라 새 프로젝트를 만들지 않습니다(사유: {desktop.Failure}). 미등록 폴더의 대화는 기타 대화로 가져옵니다.");
+                }
+            }
+
             projectDirectory = new ProjectDirectory(projectDirectory.Projects)
             {
-                ProjectCreation = ProjectCreationSchemaGate.ToSupport(gate),
+                ProjectCreation = support,
             };
         }
 

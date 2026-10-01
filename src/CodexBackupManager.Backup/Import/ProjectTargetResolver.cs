@@ -135,6 +135,7 @@ public static class ProjectTargetResolver
             case ProjectCreationSupport.Supported when IsAbsolute(canonical):
                 return ProjectTarget.Create(reason, canonical.Display, DefaultProjectName(canonical));
             case ProjectCreationSupport.SchemaUnsupported:
+            case ProjectCreationSupport.DesktopStateUnsupported:
                 return ProjectTarget.Uncategorized(ProjectTargetReason.CreationUnsupported, folderPath);
             default:
                 return ProjectTarget.Uncategorized(reason, folderPath);

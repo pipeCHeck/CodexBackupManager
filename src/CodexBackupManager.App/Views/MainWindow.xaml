@@ -96,6 +96,23 @@
                   Margin="10,0,0,0" Padding="10,4" MinWidth="0" FontSize="11" />
         </Grid>
       </Border>
+
+      <!-- Phase 9_5a-04 — 이 앱이 만든 프로젝트가 Codex 사이드바에 없으면 안내한다(대상 0개면 숨김). [사이드바에 표시]는
+           확인을 받은 뒤 Desktop 상태 파일에만 쓴다(Snapshot·Rollback). -->
+      <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="14,11" Margin="0,14,0,0"
+              Visibility="{Binding HasSidebarRepairNotice, Converter={StaticResource BoolToVisibility}}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" Text="{Binding SidebarRepairText}" Foreground="{StaticResource Fg}"
+                     TextWrapping="Wrap" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="사이드바에 표시" Command="{Binding RepairSidebarCommand}"
+                  AutomationProperties.Name="사이드바에 표시"
+                  Margin="10,0,0,0" Padding="10,4" MinWidth="0" FontSize="11" />
+        </Grid>
+      </Border>
     </StackPanel>
 
     <!-- 본문. 위쪽 진단 영역은 필요한 만큼만(Auto) 차지하고, 남는 세로 공간은 전부 프로젝트/

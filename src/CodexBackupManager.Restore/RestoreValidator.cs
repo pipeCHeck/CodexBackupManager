@@ -31,8 +31,12 @@ public static class RestoreValidator
     /// project_id/metadata 갱신 결과가 실제로 반영됐는지 이 값과 대조한다. relation을 다시 판정하지
     /// 않는다는 원칙은 그대로 유지한다 — 이미 실행하기로 확정된 계획과 결과만 비교한다.
     /// </param>
+    /// <param name="legacyProjectsAdded">
+    /// (Phase 9_5a-03) global-state 레거시 저장소에 추가한 항목. 있으면 fresh 카탈로그에서 그 레거시 ID가 DB 프로젝트와 한 프로젝트로 보이는지 본다.
+    /// </param>
     public static Result Validate(
-        ImportPlan plan, RestoreOperationPlan executedPlan, string codexHomePath, CancellationToken cancellationToken = default)
+        ImportPlan plan, RestoreOperationPlan executedPlan, string codexHomePath, CancellationToken cancellationToken = default,
+        IReadOnlyList<GlobalStateAddedProject>? legacyProjectsAdded = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(executedPlan);
@@ -194,6 +198,12 @@ public static class RestoreValidator
             {
                 return projectResult;
             }
+        }
+
+        if (legacyProjectsAdded is { Count: > 0 } &&
+            GlobalStateProjectStep.VerifyMerged(catalog.ProjectDirectory, legacyProjectsAdded) is { } mergeError)
+        {
+            return new Result(false, mergeError);
         }
 
         return new Result(true, null);

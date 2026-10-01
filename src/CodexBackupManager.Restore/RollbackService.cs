@@ -251,13 +251,15 @@ public static class RollbackService
     {
         foreach (SnapshotFileEntry entry in manifest.Files)
         {
+            // Phase 9_5a-03 — global-state 쓰기도 같은 temp 규칙(<target>.cbm-restore-tmp)을 쓴다.
             if (!entry.RelativeLabel.StartsWith("new-rollout-", StringComparison.Ordinal) &&
-                !entry.RelativeLabel.StartsWith("appended-rollout-", StringComparison.Ordinal))
+                !entry.RelativeLabel.StartsWith("appended-rollout-", StringComparison.Ordinal) &&
+                !string.Equals(entry.RelativeLabel, GlobalStateWriter.SnapshotLabel, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            string tempPath = entry.OriginalAbsolutePath + ".cbm-restore-tmp";
+            string tempPath = entry.OriginalAbsolutePath + GlobalStateWriter.TempSuffix;
             if (!File.Exists(tempPath))
             {
                 continue;
