@@ -6,7 +6,10 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using CodexBackupManager.Backup.Import;
+using CodexBackupManager.Codex;
+using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Codex.Inspection;
+using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Paths;
 using CodexBackupManager.Restore.Tests.TestSupport;
 using CodexBackupManager.Restore.Undo;
@@ -294,6 +297,7 @@ public sealed partial class ProjectCreateApplyTests
         Assert.Equal(0, result.DeletedProjectCount);
         Assert.Single(Rows($"SELECT id FROM projects WHERE id = '{projectId}'"));
         Assert.Contains(legacyId, File.ReadAllText(GlobalStatePath), StringComparison.Ordinal); // 사이드바 항목도 남는다
+        Assert.NotNull(FreshCatalog().ProjectDirectory.FindById(projectId));                 // 9_4-10: 프로젝트 목록에도 남는다
         Assert.DoesNotContain(mixed.New1, TestCodexHomeBuilder.ReadThreadIds(_pcBHome));    // 대화는 되돌렸다
         Assert.Null(TestCodexHomeBuilder.ReadThreadColumn(_pcBHome, mixed.Linked, "project_id") as string);
     }
@@ -355,6 +359,69 @@ public sealed partial class ProjectCreateApplyTests
         MixedImport mixed = ImportMixed();
         File.AppendAllText(Path.Combine(mixed.SnapshotDirectory, UndoRecordStore.FileName), " ");
         Assert.Equal(UndoUnavailableReason.RecordCorrupt, ImportUndoService.Assess(_pcBHome, mixed.SnapshotDirectory, _snapshotRoot).Unavailable);
+    }
+
+    // ── 9_4-10 ────────────────────────────────────────────────────────────────
+
+    private CodexCatalog FreshCatalog()
+        => CodexCatalogBuilder.Build(new CodexDetectionService().DetectFromUserSelection(_pcBHome).Installation!);
+
+    private static string? GroupKeyIn(CodexCatalog catalog, string threadId)
+        => UndoRecordBuilder.GroupKeyOf(catalog, catalog.AllConversations.Single(e => string.Equals(e.ThreadId, threadId, StringComparison.OrdinalIgnoreCase)));
+
+    [Fact]
+    public void U8_되돌린_뒤_fresh_카탈로그에서_새_대화는_없고_이어받기와_옮기기_대화는_가져오기_직전_그룹에_있다()
+    {
+        MixedImport mixed = ImportMixed();
+        RestoreTransactionJournal journal = RestoreTransactionJournalStore.TryRead(mixed.SnapshotDirectory)!;
+        UndoRecord record = UndoRecordStore.TryRead(mixed.SnapshotDirectory, journal.UndoRecordSha256!)!;
+        // 가져오기 직전에는 둘 다 기타 대화였다(null). 새로 가져온 대화는 기록하지 않는다.
+        Assert.Equal(
+            new[] { mixed.Linked, mixed.Updated }.Order(StringComparer.OrdinalIgnoreCase),
+            record.BeforeGroups!.Select(g => g.ThreadId).Order(StringComparer.OrdinalIgnoreCase));
+        Assert.All(record.BeforeGroups!, g => Assert.Null(g.GroupKey));
+
+        string projectId = CreatedProjectId(mixed);
+        CodexCatalog afterImport = FreshCatalog();
+        Assert.NotNull(GroupKeyIn(afterImport, mixed.Linked)); // 가져온 뒤에는 새 프로젝트 그룹 아래
+        Assert.NotNull(afterImport.ProjectDirectory.FindById(projectId));
+
+        UndoResult result = Undo(mixed.SnapshotDirectory);
+
+        Assert.True(result.Outcome == RestoreOutcome.Succeeded, $"{result.Outcome}: {result.Message}");
+        CodexCatalog afterUndo = FreshCatalog();
+        Assert.DoesNotContain(afterUndo.AllConversations, e => e.ThreadId == mixed.New1 || e.ThreadId == mixed.New2);
+        Assert.Null(GroupKeyIn(afterUndo, mixed.Linked));
+        Assert.Null(GroupKeyIn(afterUndo, mixed.Updated));
+        Assert.Null(afterUndo.ProjectDirectory.FindById(projectId));
+    }
+
+    [Fact]
+    public void U8_사후_카탈로그_확인에_실패하면_되돌리기_Snapshot으로_가져오기_직후_상태로_돌아간다()
+    {
+        MixedImport mixed = ImportMixed();
+        string projectId = CreatedProjectId(mixed);
+        RestoreTransactionJournal journal = RestoreTransactionJournalStore.TryRead(mixed.SnapshotDirectory)!;
+        UndoRecord record = UndoRecordStore.TryRead(mixed.SnapshotDirectory, journal.UndoRecordSha256!)!;
+        // 옮긴 대화의 "가져오기 직전 그룹"을 일부러 틀리게 적는다 — 행 값은 제대로 돌아가도 카탈로그 확인에서 걸려야 한다.
+        UndoRecord wrong = record with
+        {
+            BeforeGroups = record.BeforeGroups!.Select(g => g.ThreadId == mixed.Linked ? g with { GroupKey = "not-the-original-group" } : g).ToList(),
+        };
+        string sha = UndoRecordStore.Write(mixed.SnapshotDirectory, wrong);
+        RestoreTransactionJournalStore.Write(mixed.SnapshotDirectory, journal with { UndoRecordSha256 = sha });
+        Assert.True(ImportUndoService.Assess(_pcBHome, mixed.SnapshotDirectory, _snapshotRoot).CanUndo);
+        string afterImport = Dump();
+
+        UndoResult result = Undo(mixed.SnapshotDirectory);
+
+        Assert.Equal(RestoreOutcome.RolledBack, result.Outcome);
+        Assert.Equal(ImportUndoService.RolledBackMessage, result.Message);
+        Assert.Equal(afterImport, Dump());
+        Assert.Equal(projectId, Column(mixed.Linked, "project_id"));
+        Assert.Equal(RestoreTransactionState.Completed, RestoreTransactionJournalStore.TryRead(mixed.SnapshotDirectory)!.State);
+        Assert.Equal(RestoreTransactionState.RolledBack, RestoreTransactionJournalStore.TryRead(Path.Combine(_snapshotRoot, result.UndoSnapshotId!))!.State);
+        Assert.Empty(IncompleteApplyRecoveryService.FindIncompleteForHome(_snapshotRoot, _pcBHome));
     }
 
     // ── 9_4-T4 ────────────────────────────────────────────────────────────────

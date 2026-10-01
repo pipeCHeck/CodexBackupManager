@@ -3,8 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using CodexBackupManager.Codex;
+using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Codex.Inspection;
 using CodexBackupManager.Codex.Locating;
+using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Paths;
 using Microsoft.Data.Sqlite;
 
@@ -835,6 +838,59 @@ public static class ImportUndoService
             if (deleted.Contains(project.DbProjectId) == exists)
             {
                 return "새 프로젝트가 예상대로 지워지거나 남지 않았습니다.";
+            }
+        }
+
+        db.Close();
+        return ValidateCatalog(home, record, projects, deleted);
+    }
+
+    /// <summary>
+    /// (Phase 9_4-10) Apply 사후 검증과 같이 fresh 카탈로그로 본다 — 되돌린 새 대화는 목록에 없고, 이어받기·옮기기를 되돌린 대화는
+    /// 가져오기 직전 그룹에 있고, 지운 프로젝트는 프로젝트 목록에 없고 남겨 둔 프로젝트는 그대로 있다.
+    /// </summary>
+    private static string? ValidateCatalog(string home, UndoRecord record, IReadOnlyList<UndoProjectDecision> projects, List<string> deleted)
+    {
+        if (new CodexDetectionService().DetectFromUserSelection(home).Installation is not { } installation)
+        {
+            return "되돌린 뒤 Codex Home을 다시 읽을 수 없습니다.";
+        }
+
+        CodexCatalog catalog = CodexCatalogBuilder.Build(installation);
+        var byId = new Dictionary<string, ConversationEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (ConversationEntry entry in catalog.AllConversations)
+        {
+            byId.TryAdd(entry.ThreadId, entry);
+        }
+
+        foreach (UndoInsertedThread inserted in record.InsertedThreads)
+        {
+            if (byId.ContainsKey(inserted.ThreadId))
+            {
+                return "되돌린 새 대화가 아직 목록에 보입니다.";
+            }
+        }
+
+        foreach (UndoBeforeGroup before in record.BeforeGroups ?? [])
+        {
+            if (!byId.TryGetValue(before.ThreadId, out ConversationEntry? entry))
+            {
+                return "되돌린 대화를 목록에서 다시 읽을 수 없습니다.";
+            }
+
+            if (!string.Equals(UndoRecordBuilder.GroupKeyOf(catalog, entry), before.GroupKey, StringComparison.Ordinal))
+            {
+                return "되돌린 대화가 가져오기 직전 위치로 돌아가지 않았습니다.";
+            }
+        }
+
+        foreach (UndoProjectDecision project in projects)
+        {
+            bool listed = catalog.ProjectDirectory.FindById(project.DbProjectId) is not null ||
+                          catalog.ProjectDirectory.FindById(project.SidebarEntry?.LegacyProjectId) is not null;
+            if (deleted.Contains(project.DbProjectId) == listed)
+            {
+                return "지운 프로젝트가 목록에 남아 있거나 남겨 둔 프로젝트가 목록에서 사라졌습니다.";
             }
         }
 

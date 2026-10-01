@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Codex.Locating;
+using CodexBackupManager.Domain.Codex.Catalog;
 using Microsoft.Data.Sqlite;
 
 namespace CodexBackupManager.Restore.Undo;
@@ -29,7 +30,8 @@ internal static class UndoRecordBuilder
         IReadOnlySet<string> reusedProjectIds,
         GlobalStateWriteResult? globalState,
         SnapshotManifest snapshot,
-        string snapshotDirectory)
+        string snapshotDirectory,
+        IReadOnlyDictionary<string, string?>? beforeGroupKeys = null)
     {
         string stateDbPath = Path.Combine(codexHomePath, CodexHomeLayout.FindStateDatabaseFileNames(codexHomePath)[0]);
 
@@ -83,8 +85,18 @@ internal static class UndoRecordBuilder
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         List<UndoTraceBaseline> baselines = CodexTraceInspector.Count(codexHomePath, tracedThreads).Values.ToList();
 
+        List<UndoBeforeGroup> beforeGroups = updated.Select(u => u.ThreadId).Concat(appended.Select(a => a.ThreadId)).Concat(links.Select(l => l.ThreadId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(id => beforeGroupKeys is not null && beforeGroupKeys.TryGetValue(id, out string? key)
+                ? new UndoBeforeGroup(id, key)
+                : throw new InvalidOperationException("이 PC에 있던 대화의 가져오기 직전 위치를 알 수 없습니다."))
+            .ToList();
+
         var record = new UndoRecord(
-            UndoRecord.CurrentVersion, snapshot.SnapshotId, newFiles, appended, inserted, updated, links, projects, entries, baselines);
+            UndoRecord.CurrentVersion, snapshot.SnapshotId, newFiles, appended, inserted, updated, links, projects, entries, baselines)
+        {
+            BeforeGroups = beforeGroups,
+        };
         string sha = UndoRecordStore.Write(snapshotDirectory, record);
 
         List<string> threadIds = inserted.Select(i => i.ThreadId).Concat(updated.Select(u => u.ThreadId)).Concat(links.Select(l => l.ThreadId))
@@ -100,6 +112,36 @@ internal static class UndoRecordBuilder
             projects.Select(p => p.DbProjectId).ToList());
         return (summary, sha);
     }
+
+    /// <summary>
+    /// (Phase 9_4-10) Apply가 쓰기 전에 만든 fresh 카탈로그에서, 이 PC에 이미 있는 Plan 대화가 속한 그룹(<see cref="GroupKeyOf"/>).
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string?> BeforeGroupKeys(ImportPlan plan, CodexCatalog catalog)
+    {
+        var localById = new Dictionary<string, ConversationEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (ConversationEntry entry in catalog.AllConversations)
+        {
+            localById.TryAdd(entry.ThreadId, entry);
+        }
+
+        var keys = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (ImportPlanConversation conversation in plan.Conversations)
+        {
+            if (localById.TryGetValue(conversation.ThreadId, out ConversationEntry? entry))
+            {
+                keys[conversation.ThreadId] = GroupKeyOf(catalog, entry);
+            }
+        }
+
+        return keys;
+    }
+
+    /// <summary>
+    /// (Phase 9_4-10) 카탈로그가 이 대화를 묶는 그룹 키 — <c>CodexCatalogBuilder</c>의 그룹 규칙과 같다
+    /// (원시 배정 ID를 ProjectDirectory로 정규화, 모르는 ID는 그대로, 배정이 없으면 "기타 대화" = <c>null</c>).
+    /// </summary>
+    internal static string? GroupKeyOf(CodexCatalog catalog, ConversationEntry entry)
+        => entry.Project.ProjectId is { } rawProjectId ? catalog.ProjectDirectory.FindById(rawProjectId)?.Key ?? rawProjectId : null;
 
     /// <summary>이 Apply가 UPDATE한 기존 행의 컬럼(rollout_path, 값이 있던 메타데이터 컬럼).</summary>
     private static Dictionary<string, List<string>> UpdatedColumns(RestoreOperationPlan executedPlan)

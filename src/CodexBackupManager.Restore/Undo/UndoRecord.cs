@@ -44,6 +44,13 @@ public sealed record UndoGlobalStateEntry(string LegacyProjectId, string DbProje
 public sealed record UndoTraceBaseline(string ThreadId, long? HistoryRows, long? AtomStateMentions, long? SessionIndexLines);
 
 /// <summary>
+/// (Phase 9_4-10) 가져오기 직전 fresh 카탈로그에서 이 PC에 이미 있던 대화(이어받기·옮기기)가 속한 그룹
+/// (<see cref="Domain.Codex.Projects.KnownProject.Key"/>, 등록 목록에 없는 원시 ID면 그 ID). <c>null</c>은 "기타 대화"다.
+/// 되돌린 뒤 fresh 카탈로그에서 그 대화가 이 그룹에 다시 있는지 본다.
+/// </summary>
+public sealed record UndoBeforeGroup(string ThreadId, string? GroupKey);
+
+/// <summary>
 /// (Phase 9_4-01/08) 성공한 가져오기의 역연산 항목 목록. 가져오기 Snapshot 디렉터리 안의 <c>undo-record.json</c>에 저장하고, journal에는 그 해시만 둔다.
 /// 새 쓰기 종류가 생기면 목록 하나와 <see cref="ImportUndoService"/>의 처리만 더한다.
 /// </summary>
@@ -61,6 +68,12 @@ public sealed record UndoRecord(
 {
     /// <summary>현재 형식 버전.</summary>
     public const int CurrentVersion = 1;
+
+    /// <summary>
+    /// (Phase 9_4-10) 이어받기·옮기기 대화의 가져오기 직전 그룹. 이 필드가 생기기 전(9_4-1 개발 빌드)에 만든 기록은 <c>null</c>이고,
+    /// 그때는 그룹 확인을 하지 않는다(행 값 확인은 그대로 한다).
+    /// </summary>
+    public IReadOnlyList<UndoBeforeGroup>? BeforeGroups { get; init; }
 }
 
 /// <summary>(Phase 9_4-01) <see cref="UndoRecord"/> 파일 읽기·쓰기(temp + flush + move, 읽을 때 journal의 해시와 비교).</summary>

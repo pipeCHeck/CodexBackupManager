@@ -1,46 +1,64 @@
 # Codex Backup Manager
 
-OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내보내기 · 불러오기 · 복원하는 **Windows 데스크톱 프로그램**.
+OpenAI Codex(CLI/Desktop)의 로컬 프로젝트와 대화를 골라 `.codexbackup` 파일 하나로 내보내고, 다른 PC에서
+가져와 다시 쓸 수 있게 하는 **Windows 데스크톱 프로그램**.
 
-> **현재 상태: Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
-> **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
-> **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
-> **Phase 07_01(Restore Hardening + Apply UI) + Phase 07_02(Release Safety Gate) +**
-> **Phase 07_03(Final Restore Edge-Case Hardening) + Phase 8(Release / Self-contained EXE) +**
-> **Phase 08_01(CI Stabilization / Final Release Gate) + Phase 08_02~08_06(Release Prep 문서 정리 /**
-> **UI 폴리싱 / Versioning) + Phase 08_07(Folder-based Self-contained 전환) +**
-> **Phase 08_08(CI/문서 규격 정합성) 완료. GitHub Actions Windows CI GREEN —**
-> **v0.1.3 Release 가능.**
-> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, 07_01/07_02/07_03을 거치며 실제 원본
-> `.codex` clone으로 재현한 crash/동시성 edge case를 포함해 Restore 안전성을 반복적으로
-> 검증·강화했습니다 — New Import와 안전이 증명된 IncomingAhead fast-forward만 지원하고,
-> Diverged 자동 merge 등 고위험 기능은 여전히 지원하지 않습니다. **Phase 8에서 Restore
-> 기능/알고리즘은 전혀 바꾸지 않고** v0.1.0 self-contained/single-file `CodexBackupManager.exe`
-> 배포물을 만들었습니다(당시 배포 형태 — 지금은 다르다, 아래 Phase 08_07 참고) —
-> `scripts/publish-release.ps1`로 재현 가능하고, Windows CI(`.github/workflows/windows-ci.yml`)가
-> push/PR마다 빌드+테스트를 확인합니다. Phase 8 커밋을 push한 뒤 첫 GitHub Actions 실행(run
-> #1)은 CI 환경의 timing 문제로 테스트 2건이 실패했었고, **Phase 08_01**에서 두 테스트를 전부
-> 결정적(deterministic)으로 고쳤습니다 — 이후 **GitHub Actions run #2가 Build & Test (Release) /
-> self-contained single-file publish artifact job 모두 실제로 GREEN**임을 확인했습니다(자세한
-> 내용은 `docs/project-status-and-handoff.md` 참고). 그 뒤 **Phase 08_02**(GitHub Actions GREEN
-> 확인 결과에 맞춰 README/인계 문서 정리), **Phase 08_03**(UI 폴리싱 — 버튼 문구를 "새로고침"으로
-> 변경, 창이 비활성 상태여도 선택 항목이 또렷이 보이도록 선택 강조색을 명시적으로 고정, 하단에
-> "Made by" 표시 추가), **Phase 08_04**(하단 안내 문구를 2줄 footer로 재배치해 좁은 창에서도
-> 왼쪽 버튼과 겹치지 않게 정리), **Phase 08_05**(Versioning 정리 — 버전을 `0.1.1`로 patch
-> bump하고 `Directory.Build.props`를 단일 기준으로 확정, `scripts/publish-release.ps1`이 버전을
-> 자동으로 읽어 ZIP 이름을 만들도록 수정), **Phase 08_06**(v0.1.1 기준 문서 정합성 정리)을
-> 거쳤습니다. **Phase 08_07**에서는 최종 배포 형태를 self-contained **단일 exe**에서
-> self-contained **폴더형**(`CodexBackupManager.exe`+앱 DLL+.NET 런타임+SQLite native 파일이
-> 그대로 한 폴더에 존재, `PublishSingleFile=false`)으로 바꾸고 버전을 `0.1.2`로 patch bump했습니다
-> — 대상 PC에 .NET Runtime을 별도로 설치할 필요는 여전히 없습니다. **Phase 08_08**에서는
-> GitHub Actions workflow가 여전히 옛 single-file 옵션(`PublishSingleFile=true` +
-> `IncludeNativeLibrariesForSelfExtract=true`)을 쓰고 있던 것을 발견해, 별도 하드코딩 대신
-> `scripts/publish-release.ps1`을 그대로 호출하는 `package-release` job으로 교체했고,
-> `CLAUDE.md`/README/인계 문서에 남아 있던 single-file 기준 서술을 폴더형 최종 규격에 맞게
-> 정리하고 버전을 `0.1.3`으로 patch bump했습니다 — Restore/Backup/Codex/Domain 기능과 UI는
-> Phase 08_02~08_08 전부에서 전혀 바뀌지 않았습니다. 배포 사용자용 안내는
-> `docs/dist-readme.txt`(배포 ZIP에 동봉)와 `docs/release-notes-v0.1.3.md`
-> 참고. 개발 내용 상세는 `docs/safe-restore-phase7.md` §10~12 참고.
+> **현재 버전: 0.2.0** — 가져오기를 다시 만든 버전(Phase 9). 가져올 대화를 트리에서 고르고, 프로젝트마다
+> 작업 폴더를 지정하고(등록 안 된 폴더면 Codex 프로젝트를 새로 만들어 사이드바에도 표시), 성공한 가져오기를
+> 되돌릴 수 있다. 백업 형식(Backup Format V1)은 그대로라 0.1.x 백업도 가져올 수 있다.
+> 바뀐 점: [`docs/release-notes-v0.2.0.md`](./docs/release-notes-v0.2.0.md) · 배포 폴더 안내: [`docs/dist-readme.txt`](./docs/dist-readme.txt)
+> · Phase 1~8 경과는 아래 [개발 기록](#개발-기록) 참고.
+
+---
+
+## 사용 방법
+
+### 1. 이 PC에서 내보내기
+
+1. `CodexBackupManager.exe`를 실행하면 Codex 폴더(`.codex`)를 자동으로 찾는다. 못 찾으면 [Codex 폴더 선택]으로
+   직접 지정한다.
+2. 목록에서 내보낼 프로젝트나 대화를 체크하고 [백업 내보내기]를 누른다. 목록 보기, 대화 내용 보기, 내보내기는
+   Codex가 실행 중이어도 된다.
+3. 완료 창에 백업 파일과 **다른 PC로 따로 옮겨야 할 작업 폴더** 목록이 나온다. [목록을 텍스트 파일로 저장…]으로
+   저장해 둘 수 있다. 백업에는 대화 데이터만 들어 있고 **작업 폴더 안의 파일(소스 코드 등)은 들어 있지 않다.**
+
+### 2. 다른 PC에서 가져오기
+
+1. **Codex를 종료한다.** 가져오기(분석·미리보기·적용)는 Codex가 꺼진 상태에서만 시작한다. 실행 중이면
+   가져오기 화면이 종료를 기다린다.
+2. [백업 가져오기]로 백업 파일을 연다. 이 단계에서는 아무것도 바꾸지 않는다.
+3. 왼쪽 트리에서 가져올 대화를 체크한다. 대화마다 상태(새 대화, 이어받기, 이미 있음, 충돌 등)와 들어갈 위치가
+   보이고, 오른쪽에서 백업 속 대화 내용을 미리 읽을 수 있다. 검색칸은 대화 제목과 프로젝트 이름으로 찾는다.
+
+### 3. 작업 폴더 지정 · 새 폴더
+
+프로젝트마다 "이 PC에서 쓸 작업 폴더"를 정한다.
+
+- **Codex에 등록된 폴더** → 그 프로젝트에 연결한다. 원본 폴더가 이 PC에서도 등록돼 있으면 처음부터 골라져 있다.
+- **등록 안 된 폴더** → 그 폴더로 Codex 프로젝트를 새로 만들고, Codex 데스크톱 앱 사이드바에도 표시한다.
+  원하지 않으면 "새 프로젝트를 만들지 않고 기타 대화로 가져오기"를 고른다.
+- **쓸 폴더가 아직 없으면** [새 폴더 만들기] → "새 폴더 위치"([변경…]으로 바꿀 수 있다) 아래에 프로젝트 이름으로
+  빈 폴더를 만들고 작업 폴더로 지정한다.
+- 백업의 **"기타 대화"**는 프로젝트 없는 채팅으로 들어간다.
+- 이 PC에 이미 있는 대화가 "기타 대화"에 있으면, 그 대화를 지정한 프로젝트로 **옮기기**만 할 수도 있다(내용은
+  그대로, 소속만 바꾼다). Codex 데스크톱 앱이 위치를 따로 기록한 대화는 옮기지 않는다.
+
+### 4. 가져오기
+
+1. 아래쪽 "대화 N개 가져오기"를 누르고, 확인 창에서 새로 가져올 대화·새로 만들 프로젝트 등을 확인한 뒤 적용한다.
+2. 적용 직전에 바꿀 파일의 복구 지점(Snapshot)을 만든다. 중간에 실패하면 자동으로 원래대로 돌린다.
+3. 결과 화면에서 대화별 결과를 확인하고, Codex를 실행해 가져온 대화를 연다.
+
+### 5. 기록 · 되돌리기
+
+- 메인 화면 [가져오기 기록]에서 이 Codex 폴더의 가져오기 기록을 최신순으로 본다.
+- 성공한 가져오기는 결과 화면의 [이 가져오기 되돌리기] 또는 기록 창의 [되돌리기]로 되돌린다. 그 가져오기가
+  쓴 것만 거꾸로 되돌리고(새 대화 삭제, 이어받기·옮기기 원상 복귀, 새 프로젝트 삭제), 되돌리기 전에도 복구
+  지점을 만든다.
+- **Codex에서 열어 봤거나 이어서 쓴 대화가 있으면 되돌리지 않는다**(부분 되돌리기 없음). 새로 만든 프로젝트를
+  Codex에서 쓰고 있으면 대화만 되돌리고 프로젝트는 남겨 둔다. 0.2.0 이전 가져오기는 되돌릴 수 없다.
+- 기록(Snapshot)은 자동으로 지우지 않는다. 기록 창의 [선택 삭제]·[30일 지난 기록 정리]로 확인을 받은 뒤 지운다.
+- 이 앱이 만들었는데 Codex 사이드바에 안 보이는 프로젝트가 있으면 메인 화면에 [사이드바에 표시]가 나온다.
 
 ---
 
@@ -50,10 +68,14 @@ OpenAI Codex의 로컬 프로젝트/대화 데이터를 조회 · 선택 · 내�
 
 - **탐색/Viewer/Export/Import Preview는 전부 Read-Only.** 이 경로에서는 Codex Home 아래 어떤 파일도
   만들거나 바꾸거나 지우지 않고, SQLite도 `Mode=ReadOnly` + `Pooling=False`로만 연다.
-- **실제 write는 [적용] 버튼(Apply, Phase 7/07_01/07_02)에서만, 그것도 제한적으로 일어난다** — Codex가
-  완전히 종료되어 있는지 확인하고, 그 순간 다시 fresh preflight를 통과한 뒤, 반드시 복구용 Snapshot을
-  먼저 만들고 나서야 rollout 파일/`threads` 테이블에 쓴다. 실패하면 Snapshot으로 자동 Rollback한다
+- **실제 write는 가져오기 적용, 가져오기 되돌리기, [사이드바에 표시]에서만, 그것도 제한적으로 일어난다** —
+  Codex가 완전히 종료되어 있는지 확인하고, 그 순간 다시 현재 상태를 확인한 뒤, 반드시 복구용 Snapshot을
+  먼저 만들고 나서야 쓴다. 쓰고 나면 결과를 다시 읽어 검증하고, 실패하면 Snapshot으로 자동 Rollback한다
   (상세: [`docs/safe-restore-phase7.md`](./docs/safe-restore-phase7.md)).
+- 쓰는 곳은 rollout 파일, state DB의 `threads` 행과 소속(`project_id`·`cwd`), 새 프로젝트의
+  `projects`/`project_roots`/`project_idempotency_keys` 행, Codex 데스크톱 앱 상태 파일
+  (`.codex-global-state.json`)의 `local-projects`·`project-order`·레거시→DB 프로젝트 매핑뿐이다(0.2.0부터
+  프로젝트 행과 앱 상태 파일이 추가됐다).
 - 프로그램 설정과 로그는 `%APPDATA%\CodexBackupManager\`에만 둔다.
 - 확인되지 않은 값을 추측해서 채우지 않는다. 모르면 "확인 불가"로 표시한다.
 
@@ -121,8 +143,8 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1
 결과물은 다음 3가지로 나온다(Phase 08_07부터 폴더형):
 
 ```
-artifacts\release\CodexBackupManager-v0.1.3-win-x64\      실제 배포용 폴더(exe+DLL+런타임+README.txt)
-artifacts\release\CodexBackupManager-v0.1.3-win-x64.zip   위 폴더를 그대로 압축한 ZIP(최상위가 폴더 하나)
+artifacts\release\CodexBackupManager-v0.2.0-win-x64\      실제 배포용 폴더(exe+DLL+런타임+README.txt)
+artifacts\release\CodexBackupManager-v0.2.0-win-x64.zip   위 폴더를 그대로 압축한 ZIP(최상위가 폴더 하나)
 artifacts\release\SHA256SUMS.txt                          ZIP의 SHA-256
 ```
 
@@ -130,7 +152,8 @@ artifacts\release\SHA256SUMS.txt                          ZIP의 SHA-256
 `docs\dist-readme.txt`(`README.txt`로 이름 변경)가 들어간다 — PDB/테스트 바이너리/소스는
 포함하지 않는다. 사용자는 ZIP을 풀어 나온 폴더를 통째로 원하는 위치에 두고 그 안의
 `CodexBackupManager.exe`를 실행하면 된다(exe만 따로 옮기면 실행되지 않는다). 배포용 릴리스
-노트는 [`docs/release-notes-v0.1.3.md`](./docs/release-notes-v0.1.3.md) 참고.
+노트는 [`docs/release-notes-v0.2.0.md`](./docs/release-notes-v0.2.0.md) 참고(이전 버전:
+[`docs/release-notes-v0.1.3.md`](./docs/release-notes-v0.1.3.md)).
 
 ---
 
@@ -144,7 +167,12 @@ CodexBackupManager/
 │  ├─ phase0-codex-investigation-2026-09-11.md   조사 원본 기록
 │  ├─ codex-storage-format.md                    구현 기준 문서 ★ 먼저 읽을 것
 │  ├─ codexbackup-format-v1.md                   Backup Format V1 스펙(FROZEN) + Restore Sufficiency Audit
-│  └─ import-preview-phase6.md                   Phase 6 Import Preview 스펙(RevisionRelation/fast-forward/divergence/metadata diff/path remapping)
+│  ├─ import-preview-phase6.md                   Phase 6 Import Preview 스펙(RevisionRelation/fast-forward/divergence/metadata diff/path remapping)
+│  ├─ safe-restore-phase7.md                     Phase 7 Safe Restore 스펙(Snapshot/Rollback/journal)
+│  ├─ import-ux-redesign-phase9.md               Phase 9 가져오기 재설계 설계 문서
+│  ├─ phase9-implementation-plan.md              Phase 9 단계별 작업과 점검 기록
+│  ├─ release-notes-v0.2.0.md, release-notes-v0.1.3.md   릴리스 노트
+│  └─ dist-readme.txt                            배포 폴더에 README.txt로 들어가는 사용 안내
 ├─ scripts/verify-phase1.ps1
 ├─ src/
 │  ├─ CodexBackupManager.Domain/     의존성 0. 값 객체와 모델만
@@ -199,21 +227,77 @@ CodexBackupManager/
 │  │                                 판정 → metadata diff → path mapping까지, Codex에는 쓰지 않는다
 │  │    Import/BackupCatalogReader  backup의 payload/rollouts/만으로 로컬과 같은 lineage 재구성
 │  │    Import/ImportConflictAnalyzer, MetadataDifferenceAnalyzer, ProjectPathMapper
+│  ├─ CodexBackupManager.Restore/    Codex에 쓰는 유일한 계층 (Phase 7~9)
+│  │    RestoreExecutor              Codex 종료 확인 → preflight → Snapshot → 적용 → 검증 → Rollback
+│  │    SnapshotService, RollbackService, RestoreTransactionJournal, IncompleteApplyRecoveryService
+│  │    GlobalStateWriter, SidebarRepairService  Desktop 상태 파일의 사이드바 항목(Phase 9_5a)
+│  │    Undo/…                       가져오기 기록·되돌리기·Snapshot 정리(Phase 9_4)
 │  └─ CodexBackupManager.App/        WPF (MVVM). 로직 없음
 └─ tests/
    ├─ CodexBackupManager.Domain.Tests/
    ├─ CodexBackupManager.Codex.Tests/    Revisions/ConversationRevisionComparerTests(Phase 6) 포함
    ├─ CodexBackupManager.Backup.Tests/  Import/ImportPreviewBuilderTests 등(Phase 6) 포함
+   ├─ CodexBackupManager.Restore.Tests/  적용·Rollback·되돌리기(합성 Codex Home, CrashSim으로 강제 종료 재현)
    ├─ CodexBackupManager.App.Tests/  ViewModel 단위 테스트(Selection tri-state, Viewer 독립성,
    │                                 MainViewModelImportPreviewTests 등)
    └─ Fixtures/CodexHome/            합성 가짜 Codex Home (실제 데이터 아님)
 ```
 
-의존 방향은 단방향이다: `App → Backup → Codex → Domain`.
+의존 방향은 단방향이다: `App → Restore → Backup → Codex → Domain`.
 
 ---
 
-## Phase 1이 표시하는 것
+## 개발 기록
+
+> 아래는 Phase 1~8 당시의 기록이다. 가져오기 화면(Phase 6/7 절의 Import Preview 패널과 [적용] 버튼)은 0.2.0(Phase 9)에서
+> 새 가져오기 화면으로 바뀌었다 — 지금 쓰는 방법은 위 [사용 방법](#사용-방법)을 따른다. Phase 9 설계와 단계별 기록은
+> [`docs/import-ux-redesign-phase9.md`](./docs/import-ux-redesign-phase9.md), [`docs/phase9-implementation-plan.md`](./docs/phase9-implementation-plan.md)에 있다.
+
+### Phase 1~8 경과
+
+> **Phase 8_08 시점 상태(v0.1.3): Phase 1(Codex 탐색) + Phase 2(Read Model) + Phase 3(Conversation Viewer)**
+> **+ Phase 4(Selection) + Phase 5(Export, `.codexbackup`) + Phase 05_01(Backup V1 Freeze)**
+> **+ Phase 6~06_03(Import Preview/ImportPlan/Preflight) + Phase 7(Safe Restore) +**
+> **Phase 07_01(Restore Hardening + Apply UI) + Phase 07_02(Release Safety Gate) +**
+> **Phase 07_03(Final Restore Edge-Case Hardening) + Phase 8(Release / Self-contained EXE) +**
+> **Phase 08_01(CI Stabilization / Final Release Gate) + Phase 08_02~08_06(Release Prep 문서 정리 /**
+> **UI 폴리싱 / Versioning) + Phase 08_07(Folder-based Self-contained 전환) +**
+> **Phase 08_08(CI/문서 규격 정합성) 완료. GitHub Actions Windows CI GREEN —**
+> **v0.1.3 Release 가능.**
+> Codex에 실제로 쓰는 첫 기능이 Phase 7에서 들어갔고, 07_01/07_02/07_03을 거치며 실제 원본
+> `.codex` clone으로 재현한 crash/동시성 edge case를 포함해 Restore 안전성을 반복적으로
+> 검증·강화했습니다 — New Import와 안전이 증명된 IncomingAhead fast-forward만 지원하고,
+> Diverged 자동 merge 등 고위험 기능은 여전히 지원하지 않습니다. **Phase 8에서 Restore
+> 기능/알고리즘은 전혀 바꾸지 않고** v0.1.0 self-contained/single-file `CodexBackupManager.exe`
+> 배포물을 만들었습니다(당시 배포 형태 — 지금은 다르다, 아래 Phase 08_07 참고) —
+> `scripts/publish-release.ps1`로 재현 가능하고, Windows CI(`.github/workflows/windows-ci.yml`)가
+> push/PR마다 빌드+테스트를 확인합니다. Phase 8 커밋을 push한 뒤 첫 GitHub Actions 실행(run
+> #1)은 CI 환경의 timing 문제로 테스트 2건이 실패했었고, **Phase 08_01**에서 두 테스트를 전부
+> 결정적(deterministic)으로 고쳤습니다 — 이후 **GitHub Actions run #2가 Build & Test (Release) /
+> self-contained single-file publish artifact job 모두 실제로 GREEN**임을 확인했습니다(자세한
+> 내용은 `docs/project-status-and-handoff.md` 참고). 그 뒤 **Phase 08_02**(GitHub Actions GREEN
+> 확인 결과에 맞춰 README/인계 문서 정리), **Phase 08_03**(UI 폴리싱 — 버튼 문구를 "새로고침"으로
+> 변경, 창이 비활성 상태여도 선택 항목이 또렷이 보이도록 선택 강조색을 명시적으로 고정, 하단에
+> "Made by" 표시 추가), **Phase 08_04**(하단 안내 문구를 2줄 footer로 재배치해 좁은 창에서도
+> 왼쪽 버튼과 겹치지 않게 정리), **Phase 08_05**(Versioning 정리 — 버전을 `0.1.1`로 patch
+> bump하고 `Directory.Build.props`를 단일 기준으로 확정, `scripts/publish-release.ps1`이 버전을
+> 자동으로 읽어 ZIP 이름을 만들도록 수정), **Phase 08_06**(v0.1.1 기준 문서 정합성 정리)을
+> 거쳤습니다. **Phase 08_07**에서는 최종 배포 형태를 self-contained **단일 exe**에서
+> self-contained **폴더형**(`CodexBackupManager.exe`+앱 DLL+.NET 런타임+SQLite native 파일이
+> 그대로 한 폴더에 존재, `PublishSingleFile=false`)으로 바꾸고 버전을 `0.1.2`로 patch bump했습니다
+> — 대상 PC에 .NET Runtime을 별도로 설치할 필요는 여전히 없습니다. **Phase 08_08**에서는
+> GitHub Actions workflow가 여전히 옛 single-file 옵션(`PublishSingleFile=true` +
+> `IncludeNativeLibrariesForSelfExtract=true`)을 쓰고 있던 것을 발견해, 별도 하드코딩 대신
+> `scripts/publish-release.ps1`을 그대로 호출하는 `package-release` job으로 교체했고,
+> `CLAUDE.md`/README/인계 문서에 남아 있던 single-file 기준 서술을 폴더형 최종 규격에 맞게
+> 정리하고 버전을 `0.1.3`으로 patch bump했습니다 — Restore/Backup/Codex/Domain 기능과 UI는
+> Phase 08_02~08_08 전부에서 전혀 바뀌지 않았습니다. 배포 사용자용 안내는
+> `docs/dist-readme.txt`(배포 ZIP에 동봉)와 `docs/release-notes-v0.1.3.md`
+> 참고. 개발 내용 상세는 `docs/safe-restore-phase7.md` §10~12 참고.
+
+---
+
+### Phase 1이 표시하는 것
 
 ```
 Codex Backup Manager                              ● Codex 연결됨
@@ -252,7 +336,7 @@ Codex를 찾지 못하면 후보 경로별 탈락 사유를 함께 보여주고 
 
 ---
 
-## Phase 2가 표시하는 것
+### Phase 2가 표시하는 것
 
 Phase 1의 탐지 정보 아래에, 실제 Codex 대화를 **프로젝트 → 사용자 대화** 트리로 보여준다.
 `thread_source == "user"`인 대화만 그룹에 노출하고(`subagent`/`guardian_review`는 숨기되 버리지 않는다),
@@ -293,7 +377,7 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
-## Phase 3가 표시하는 것
+### Phase 3가 표시하는 것
 
 프로젝트 트리에서 대화를 선택하면 오른쪽에 실제 User / Assistant 메시지를 보여준다.
 
@@ -313,7 +397,7 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 - **가상화 WPF message list**: 메시지 수백~수천 개도 부드럽게 스크롤되도록 `ListBox` +
   `VirtualizingPanel`(Recycling 모드)로 렌더링한다.
 
-### 내부 주입 콘텐츠 필터
+#### 내부 주입 콘텐츠 필터
 
 `response_item` 폴백 경로에서 실제 사용자가 타이핑하지 않은 시스템 주입 콘텐츠(예:
 `<environment_context>`, `<recommended_plugins>`)를 걸러낸다. OpenAI Codex 공식 소스
@@ -327,7 +411,7 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
-## Phase 4가 표시하는 것
+### Phase 4가 표시하는 것
 
 프로젝트/대화 앞에 체크박스가 생겨, 백업 대상(프로젝트 전체 또는 개별 대화, 여러 개 동시)을 미리
 선택해 둘 수 있다. 아직 Export 자체는 만들지 않는다 — 이 Phase는 "무엇을 백업할지 고르는" 상태만
@@ -355,7 +439,7 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
-## Phase 5가 표시하는 것
+### Phase 5가 표시하는 것
 
 하단에 **[백업 내보내기]** 버튼이 생긴다. 선택한 대화 수가 0개면 비활성화되고, `SaveFileDialog`로
 저장 위치를 고르면(기본 파일 이름은 대화 제목이 아니라 시각 기반) 백그라운드에서 Export가 진행되고
@@ -380,7 +464,7 @@ JSONL 스캔 1.7초, 전체 빌드 1.8초, WPF 앱 WorkingSet 약 205MB(1.45GB �
 
 ---
 
-## Phase 6이 표시하는 것
+### Phase 6이 표시하는 것
 
 하단에 **[백업 불러오기]** 버튼이 생긴다. `.codexbackup` 파일을 고르면(`OpenFileDialog`)
 `BackupValidator`로 즉시 검증하고, 통과하면 카탈로그/뷰어 영역을 덮는 **Import Preview** 패널이
@@ -414,7 +498,7 @@ write도 없다. 실제로 적용하려면 같은 화면의 **[적용]** 버튼�
 
 ---
 
-## Phase 7/07_01이 표시하는 것
+### Phase 7/07_01이 표시하는 것
 
 Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 대화상자("백업 내용을 Codex에
 적용합니다. 적용 전에 현재 상태의 복구용 Snapshot을 생성합니다. Codex가 완전히 종료되어 있어야
@@ -442,7 +526,7 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 
 ---
 
-## UI/UX 개선 (Phase 4 사후)
+### UI/UX 개선 (Phase 4 사후)
 
 기능은 그대로 두고 가독성 · 레이아웃 · 렌더링 품질만 다듬은 작업. 새 기능(Export/Import)은 없다.
 
@@ -497,7 +581,8 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 08_05 | Versioning — 버전 `0.1.0`→`0.1.1` patch bump, `Directory.Build.props`를 단일 기준으로 확정, `scripts/publish-release.ps1`이 버전을 자동으로 읽고 실제 빌드 버전과 검증하도록 수정 | **완료** |
 | 08_06 | v0.1.1 기준 문서 정합성 정리(README/handoff의 "GitHub Actions 확인 필요" 등 잔여 문구 정리, 기능/코드 변경 없음) | **완료** |
 | 08_07 | Folder-based Self-contained 전환 — 배포 형태를 single-file exe에서 폴더형(`PublishSingleFile=false`)으로 변경, `scripts/publish-release.ps1` 재작성, 버전 `0.1.1`→`0.1.2` patch bump | **완료** |
-| 08_08 | CI/문서 규격 정합성 — `windows-ci.yml`의 packaging job이 `scripts/publish-release.ps1`을 그대로 호출하도록 교체(옛 single-file 옵션 제거), `CLAUDE.md`§38/README/handoff의 남은 single-file 서술을 폴더형으로 정리, 버전 `0.1.2`→`0.1.3` patch bump | **완료 — v0.1.3 Release 가능** |
+| 08_08 | CI/문서 규격 정합성 — `windows-ci.yml`의 packaging job이 `scripts/publish-release.ps1`을 그대로 호출하도록 교체(옛 single-file 옵션 제거), `CLAUDE.md`§38/README/handoff의 남은 single-file 서술을 폴더형으로 정리, 버전 `0.1.2`→`0.1.3` patch bump | **완료 — v0.1.3 릴리스** |
+| 9 | 가져오기 재설계 — 새 가져오기 화면(트리·체크·내용 미리보기·검색), 작업 폴더 지정, 미등록 폴더의 Codex 프로젝트 자동 생성과 사이드바 표시, [새 폴더 만들기], 이미 있는 대화 옮기기, [사이드바에 표시], 내보내기 완료 안내, 가져오기 기록·되돌리기·Snapshot 정리, 버전 `0.2.0` | **구현 완료 — 최종 E2E·문서 정리 중** |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure
@@ -521,10 +606,14 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
 - Export가 `attachments\`(붙여넣기 텍스트)/`visualizations\`/`generated_images\` 폴더의 실제 파일은
   아직 포함하지 않는다 — 구조적으로 안전하게 참조를 추적할 방법을 찾지 못했다(`docs/codexbackup-format-v1.md` §2 참고).
   `local_image` 참조(스크린샷 등)는 포함한다.
-- **(Phase 07_01/07_02)** Import된 대화가 Codex Desktop 앱 사이드바에 올바른 프로젝트로 묶여
-  보이는지는 아직 검증하지 못했다 — Core/CLI의 project 배정 authority(`threads.project_id`)는
-  공식 소스로 확정했지만 Electron Desktop 소스는 조사하지 못했고, `CODEX_HOME`을 통한 안전한
-  격리 실행도 CLI에서만 확인했다(`docs/safe-restore-phase7.md` §11.7).
+- **(Phase 9)** Codex 데스크톱 앱 사이드바 반영은 실측으로 확인했다 — 대화 소속은 `threads.project_id`로
+  반영되고, 새 프로젝트가 사이드바에 보이려면 앱 상태 파일(`.codex-global-state.json`)의 레거시 저장소 항목이
+  필요하다(그래서 0.2.0이 그 항목을 쓴다). 다만 0.2.0 개발 중 "기타 대화"를 프로젝트로 만든 경우 오래된 채팅
+  일부가 사이드바에 보이지 않은 사례가 있었고, 원인은 확정하지 못했다.
+- **(Phase 9)** Codex 데스크톱 앱이 `thread-project-assignments`/`projectless-thread-ids`에 위치를 따로 기록한
+  대화는 프로젝트로 옮기지 않는다. 백업의 "기타 대화"를 프로젝트로 묶어 가져오는 기능도 없다.
+- **(Phase 9)** 되돌리기는 0.2.0으로 한 성공한 가져오기만, 기록 전체 단위로만 된다(부분 되돌리기 없음).
+  가져온 뒤 Codex에서 열어 본 흔적이 있으면 거부한다.
 - **(Phase 07_02)** 실제 원본 `.codex` clone으로 New/IncomingAhead(단일 segment fast-forward) E2E는
   직접 확인했지만, segment 전환이 포함된 IncomingAhead와 `Diverged`/`LocalAhead`의 실제 데이터
   사례는 이 PC에 없어 여전히 합성 데이터로만 검증했다(`docs/safe-restore-phase7.md` §11.2/11.9).
@@ -536,9 +625,9 @@ Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.m
   환경(Windows Sandbox/별도 VM)에서의 실기 검증은 수행하지 못했다** — 개발 머신에는 이미 .NET
   SDK가 있어서다. 배포 EXE는 code-signing되지 않았다 — 첫 실행 시 Windows SmartScreen 경고가 뜰
   수 있다(`docs/dist-readme.txt` 참고).
-- **(Phase 8)** Snapshot(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`)은 v0.1.3에서도 자동 삭제
-  정책을 넣지 않았다 — 완료된 Snapshot도 계속 쌓인다(사용자가 직접 정리해야 한다). 자동 cleanup은
-  v1.1 이후 후보로 남겨 뒀다.
+- **(Phase 8 → 9)** Snapshot(`%LOCALAPPDATA%\CodexBackupManager\Snapshots\`)은 여전히 자동으로 지우지
+  않는다. 0.2.0부터 [가져오기 기록] 창에서 선택 삭제와 "30일 지난 되돌릴 수 없는 기록 정리"를 할 수 있다
+  (확인 후에만, 진행 중·미완료 기록과 다른 Codex Home의 기록은 지우지 않는다).
 
 ---
 

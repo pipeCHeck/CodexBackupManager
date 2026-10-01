@@ -173,6 +173,7 @@ public static class RestoreExecutor
         PinnedBackupSource? pinnedBackup = null;
         RestoreOperationPlan opPlan;
         SnapshotCreateResult snapshot;
+        IReadOnlyDictionary<string, string?> beforeGroupKeys;
         bool proceedingToMutation = false;
         try
         {
@@ -200,6 +201,7 @@ public static class RestoreExecutor
             }
 
             opPlan = planResult.Plan!;
+            beforeGroupKeys = Undo.UndoRecordBuilder.BeforeGroupKeys(plan, freshLocalCatalog);
             if (opPlan.IsEmpty)
             {
                 return new RestoreResult(RestoreOutcome.NothingToDo, "적용할 변경 사항이 없습니다(모두 이미 최신 상태입니다).", null, null);
@@ -310,7 +312,7 @@ public static class RestoreExecutor
             {
                 (ImportRecordSummary summary, string recordSha) = Undo.UndoRecordBuilder.BuildAndWrite(
                     codexHomePath, plan, opPlan.WithEffectiveProjectIds(effectiveProjectIds), mutation.ReusedProjectIds, mutation.GlobalState,
-                    snapshot.Manifest!, snapshot.SnapshotDirectory!);
+                    snapshot.Manifest!, snapshot.SnapshotDirectory!, beforeGroupKeys);
                 completed = completed with { Summary = summary, UndoRecordSha256 = recordSha };
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
