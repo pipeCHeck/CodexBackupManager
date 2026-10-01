@@ -683,3 +683,23 @@ PC에 실물 `.zst`가 0개, 기존 알려진 한계와 동일). 3단계 이상 
    - 새로 가져올 대화가 없는 프로젝트의 목적지는 Preflight와 Planner가 확인하지 않는다(`ImportPlan.UsesProjectTarget`).
 5. 선택 요약(`ImportSelection.Compute`)과 Plan(`ImportPlanBuilder.Build(preview, path, choices)`)은 같은 규칙과 같은 코드 경로를 쓴다.
    백업의 "기타 대화" 그룹 키는 `ImportUserChoices.UncategorizedProjectKey = "(uncategorized)"`다.
+
+### 10.4 새 프로젝트 생성 (9_5-1 · 9_5a · 9_5-11)
+- `ProjectTargetKind.CreateNew`: 판정할 폴더가 등록 프로젝트가 아니면(미등록 또는 레거시 전용) 새 프로젝트 제안이다.
+  - 다음일 때는 `Uncategorized`/`CreationUnsupported`다.
+    - `ProjectDirectory.ProjectCreation`이 `Supported`가 아님
+    - DB 스키마 게이트 실패
+    - Desktop 상태 파일 게이트 실패(`DesktopStateUnsupported`)
+- `ProjectTargetDecision.NewProjectName`(trim, 빈 값은 결정 오류, 기본값 폴더 이름), `ProjectTargetDecision.CreateProject`(기본 `true`, `false`면 같은 사유의 Uncategorized).
+- 백업 "기타 대화" 그룹(`UncategorizedProjectKey`)은 **항상** `Uncategorized`(NotApplicable)다. 폴더·이름 결정은 `UncategorizedGroupDecisionError`(차단)다.
+- `ImportSelectionSummary.NewProjects`: 같은 canonical 루트는 `NewProjectGrouping` 한 규칙으로 하나다(요약·Planner·결과 화면 공통). 새 대화나 옮길 대화가 가는 목적지만 센다.
+- 선택 없는 이전 방식 Plan(`UserChoices = null`)은 프로젝트를 만들지 않는다.
+- fresh 재판정: CreateNew로 고정한 목적지가 Apply 시점에 달라지면 거부한다. Uncategorized로 고정했는데 fresh가 CreateNew면 같은 상태로 본다.
+
+### 10.5 이미 있는 대화 옮기기 (9_3-1 · 9_3-07)
+- `ImportConversationPreview.LocalDbProjectId`/`LocalCwd`/`DesktopPlacement`(Unavailable/NotRecorded/Assigned/Projectless)
+- `ImportUserChoices.RelinkThreadIds`(기본 빈 집합)
+- `ImportSelectionConversation.Relink`(`RelinkStatus` 9종)와 `.IsRelinkSelected`, `ImportSelectionSummary.RelinkCount`
+- 대상 판정: Identical/IncomingAhead/LocalAhead, 보관됨 아님, 목적지가 LinkExisting(DB ID) 또는 CreateNew, 현재 그룹이 목적지와 다름.
+  - Desktop 배정·projectless·상태 파일 확인 불가면 제외한다.
+- `ImportPlan.Relinks`: 계획 시점 project_id·cwd를 고정한다. 옮길 대화는 Import에서 빠져도 Preflight의 로컬 revision 일치 검사를 받는다.

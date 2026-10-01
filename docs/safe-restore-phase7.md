@@ -906,3 +906,50 @@ clone도 이번 Phase에서는 별도로 만들지 않았다(순수 합성 fixtu
 - §11.9의 한계(Desktop 사이드바, segment-transition IncomingAhead 실제 clone, 물리적으로 불안전한
   실제 Blocked 사례, 다중 신규 segment 복합 케이스, `local_image`/새 프로젝트 자동 생성/`Diverged`
   자동 merge/`.jsonl.zst` Update 미지원)는 이번 Phase의 범위가 아니었으므로 그대로 남아 있다.
+
+---
+
+## 13. Phase 9 — 프로젝트 생성 · 사이드바 기록 · 연결 변경 · 되돌리기 (2026-10-01)
+
+> 설계: `docs/import-ux-redesign-phase9.md`, 진행·점검 기록: `docs/phase9-implementation-plan.md` §13.
+> Phase 7/8의 파이프라인(Codex 실행 이중 확인 → fresh preflight → Operation Plan → Snapshot → 쓰기 → 사후 검증 → 실패 시 Rollback)은 그대로이고, 쓰기 종류만 늘었다.
+
+### 13.1 쓰기 종류(Apply)
+| 대상 | 쓰기 | 근거 |
+|---|---|---|
+| state DB `projects`·`project_roots`·`project_idempotency_keys` | INSERT(공식 `create_project` 순서: 키 조회 → 트랜잭션 안 루트 재확인 → projects → roots → thread → 키) | 9_5-1 |
+| state DB `threads` | INSERT(project_id·cwd = 새/기존 프로젝트), 연결 변경 `UPDATE … WHERE id AND project_id IS @expected AND cwd IS @expectedCwd`(영향 행 1) | 9_5-1, 9_3-1 |
+| `.codex-global-state.json` | `local-projects` 항목, `project-order` 끝, 레거시→DB 매핑(새 프로젝트일 때만) | 9_5a-1 |
+
+- 같은 SQLite 트랜잭션 안에서 DB를 쓰고, global-state는 **DB 커밋 뒤** temp+atomic replace로 쓴다. 실패하면 Snapshot으로 둘 다 Rollback한다.
+- global-state 게이트(`GlobalStateProjectGate`): 왕복 바이트 동일(JS `JSON.stringify` 형식), 5필드 구조, host 키 1개, `projectsMigrated=true`. 실패하면 생성 자체를 포기한다.
+- global-state 해시는 계획에 고정해 Snapshot·트랜잭션 안·쓰기 직전에 다시 비교한다(연결 변경만 있는 Plan 포함).
+- `thread-project-assignments`·`projectless-thread-ids`는 쓰지 않는다.
+
+### 13.2 사이드바 보정(SidebarRepairService)
+- 이 앱 키 접두사(`codex-backup-manager:import:v1:`)를 가진 DB 프로젝트 중 레거시 매핑이 없는 것을 global-state에 추가한다. DB는 바꾸지 않는다.
+- 같은 락·Journal·Snapshot(global-state)·Rollback 구성을 쓰고, IncompleteApplyRecovery가 복구한다. V1에서는 되돌리기를 지원하지 않는다.
+
+### 13.3 되돌리기(ImportUndoService)
+- 성공한 Apply의 Snapshot에 `undo-record.json`(역연산 목록)을 두고, journal에는 그 SHA-256과 경로 없는 Summary를 둔다. 이 기록이 없는 Apply(0.2.0 이전)는 되돌리기 불가다.
+- 역연산 7종: 새 rollout 파일, 이어 붙인 rollout, INSERT한 행, UPDATE한 행, 연결 변경, 새 프로젝트, global-state 추가분
+- 전제 조건(하나라도 실패하면 기록 전체 거부, 쓰기 0)
+  - 행 fingerprint: `updated_at*`, `recency_at*`, `preview` 등 Desktop이 바꾸는 컬럼을 빼고 cwd·rollout_path는 canonical로 비교한다.
+  - rollout 길이·해시가 같아야 한다.
+  - Codex 흔적(thread_history `thread_id` 테이블, `electron-persisted-atom-state` 언급, session_index 줄)이 가져오기 직후 기준값과 같아야 한다.
+- 새 프로젝트는 다른 thread·Desktop 배정·고정·항목 변경이 있으면 남겨 둔다.
+- 순서: 락 → Codex 확인 → 미완료 확인 → 판정 → 되돌리기 전용 Snapshot → journal Undoing → Codex 재확인 → DB 트랜잭션 → 파일 → global-state → 사후 검증(행·파일·global-state·fresh catalog) → Completed + 가져오기 journal Undone
+- Snapshot 사본 전체를 live에 덮어쓰지 않는다. Rollback(실패 시)은 되돌리기 Snapshot 바이트로 한다.
+
+### 13.4 Snapshot 정리(SnapshotRetentionService)
+- 선택 삭제와 "30일 지난 되돌리기 불가 기록 정리"가 있다. 확인을 받은 뒤에만 지우고, 자동 삭제는 없다.
+- 미완료(Prepared/Applying/Undoing)·다른 Home·루트 밖·링크/정션은 거부한다.
+
+### 13.5 검증(관리 대화방, 실제 `.codex` 복제본, 원본 해시 불변)
+| 단계 | 결과 |
+|---|---|
+| 9_5-1 프로젝트 생성 | 22/22 |
+| 9_5a-1 사이드바 기록·보정 | 40/40 |
+| 9_3-1 옮기기 | 16/16 |
+| 9_4-1 되돌리기(행 해시·global-state 바이트·sessions 트리 완전 복원, 흔적 시 거부) | 13/13 |
+| 9_F 기본 E2E(PC A→B) + 경로 재지정 Case 0~4 | 실패 0 |

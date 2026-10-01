@@ -358,6 +358,13 @@ Cache=Private            페이지 캐시를 공유하지 않는다
 
 ## 5. 프로젝트 ↔ 대화 연결 — 3중 구조
 
+> **Phase 9 갱신(2026-10-01)** — 이 절은 Phase 0 조사 기준이다. Phase 9 실측(문서 맨 끝 "Phase 9 실측 추가" 네 절)으로 확정된 것:
+> - `threads.project_id`는 `projects(id)` 외래키(ON DELETE SET NULL)다. Desktop은 DB `project_id`만 채워진 대화도 그 프로젝트 아래에 보여 준다(9_0-A).
+> - Desktop 사이드바 **프로젝트 목록**은 global-state 레거시 저장소(`local-projects`·`project-order`·`app-server-project-id-by-legacy-project-id-by-host`)에서 온다. DB에만 있는 프로젝트는 보이지 않는다(9_0-B).
+> - DB `project_idempotency_keys.key`는 Desktop이 만든 프로젝트의 레거시 ID다. `project-order` 순서 번호 = DB `position`이다.
+> - Desktop이 정한 대화 소속은 `thread-project-assignments`에만 있다(DB `project_id`는 NULL).
+
+
 조사 시점 이 PC는 **마이그레이션 중간 상태**였다. 세 경로를 모두 읽을 수 있어야 한다.
 
 ### (A) 정식 경로 — `state_<N>.sqlite`
