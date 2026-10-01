@@ -425,6 +425,21 @@ public ImportRecordSummary? Summary { get; init; }   // 기록 화면용(개수,
 - global-state 플래그(`projectsMigrated=true`, `threadAssignmentsMigrated=false`, `pendingThreadAssignmentIds`)는
   Desktop이 연결 정보를 DB로 옮기는 중임을 시사한다. Electron 소스는 비공개라 동작은 **실측으로만 확정**한다.
 
+**9_0-B 결과 (2026-10-01): (b) — 새로 만든 DB 전용 프로젝트는 Desktop 사이드바에 보이지 않는다. 9_5a(global-state 레거시 저장소 기록)가 필요하다.**
+- 이 앱이 만든 DB 전용 프로젝트 2개("삼각형 3개", "과제 수행")는 `projects`/`project_roots`/키 행과 대화 `project_id`가 정상이다. Desktop도 대화에 마우스를 올리면 "📁 삼각형 3개"를 보여 준다(DB 연결은 읽는다).
+  그러나 **사이드바 프로젝트 목록에는 나타나지 않고**, 대화는 프로젝트 없는 목록에 섞여 보인다.
+- 원인(실측, 읽기 전용): Desktop 사이드바 프로젝트 목록은 global-state의 레거시 저장소에서 온다.
+  - `local-projects`: 레거시 ID → `{id, name, rootPaths, createdAt, updatedAt}`
+  - `project-order`: 레거시 ID 배열
+  - `app-server-project-id-by-legacy-project-id-by-host["local:<CODEX_HOME>"]`: 레거시 ID → DB ID
+- Desktop이 직접 만든 프로젝트는 모두 두 저장소에 함께 있다.
+  - 레거시 ID: 최근 것은 UUIDv4, 오래된 것은 `local-` + SHA-256(루트)의 앞 32자
+  - DB `project_idempotency_keys.key`가 그 **레거시 ID**다(53/53)
+  - `project-order`의 순서 번호가 DB `projects.position`과 46/46 같다
+  - 지운 프로젝트 7개는 매핑과 키만 남는다(DB 행 없음)
+- Desktop을 실행한 뒤에도 global-state에서 바뀐 것은 `electron-persisted-atom-state`, `selected-project`, `environment-catalog-cache-v1`뿐이다. 새 DB 프로젝트를 레거시 쪽에 자동으로 추가하지 않았다.
+- global-state 파일 형식: UTF-8(BOM 없음), 한 줄 compact JSON(JS `JSON.stringify` 형식), 비ASCII 문자는 그대로 쓴다. Python `json.dumps(ensure_ascii=False, separators=(',', ':'))`로 바이트까지 같게 다시 만들 수 있다.
+
 **9_0-A 결과 (2026-10-01): (a) — DB(`threads.project_id`)가 Desktop 기준으로도 authoritative.**
 - 이 앱이 `threads.project_id`에 쓴 연결을 Codex Desktop 사이드바가 그대로 반영했다. 조건은 `threadAssignmentsMigrated=false`, global-state 배정 없음이다.
   → **9_5a(global-state 쓰기) 불필요.** 9_5는 DB 방식으로 진행한다.
