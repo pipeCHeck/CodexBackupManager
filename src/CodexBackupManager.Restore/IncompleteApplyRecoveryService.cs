@@ -67,7 +67,8 @@ public static class IncompleteApplyRecoveryService
             RestoreTransactionJournalReadResult read = RestoreTransactionJournalStore.TryReadDetailed(snapshotDir);
             switch (read.Status)
             {
-                case RestoreTransactionJournalReadStatus.Valid when read.Journal!.State == RestoreTransactionState.Applying:
+                // Phase 9_4-03 — 되돌리기 Snapshot의 Undoing도 미완료다(복구는 그 되돌리기 Snapshot 기준).
+                case RestoreTransactionJournalReadStatus.Valid when read.Journal!.State is RestoreTransactionState.Applying or RestoreTransactionState.Undoing:
                     found.Add(new IncompleteApply(snapshotDir, read.Journal, IncompleteApplyReason.StuckApplying));
                     break;
                 case RestoreTransactionJournalReadStatus.Corrupt:
@@ -146,7 +147,7 @@ public static class IncompleteApplyRecoveryService
         }
 
         if (journalRead.Status == RestoreTransactionJournalReadStatus.Missing ||
-            journalRead.Journal!.State != RestoreTransactionState.Applying)
+            journalRead.Journal!.State is not (RestoreTransactionState.Applying or RestoreTransactionState.Undoing))
         {
             return new RestoreResult(
                 RestoreOutcome.NotReady,
@@ -220,7 +221,7 @@ public static class IncompleteApplyRecoveryService
 
             RestoreTransactionJournalStore.Write(
                 snapshotDirectory,
-                new RestoreTransactionJournal(manifest.SnapshotId, manifest.CodexHomePath, RestoreTransactionState.RolledBack, DateTimeOffset.UtcNow));
+                journalRead.Journal with { State = RestoreTransactionState.RolledBack, UpdatedAtUtc = DateTimeOffset.UtcNow });
 
             return new RestoreResult(
                 RestoreOutcome.RolledBack,

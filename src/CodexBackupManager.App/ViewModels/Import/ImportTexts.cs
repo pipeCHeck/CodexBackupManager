@@ -372,6 +372,97 @@ public static class ImportTexts
         _ => null,
     };
 
+    // ── Phase 9_4 되돌리기 문구 ─────────────────────────────────────────────────
+
+    /// <summary>(Phase 9_4-04) 기록 단위로 되돌릴 수 없는 이유.</summary>
+    public static string UndoUnavailableText(CodexBackupManager.Restore.Undo.UndoUnavailableReason reason) => reason switch
+    {
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.OldFormat => "이 기록은 이전 버전에서 만들어져 되돌리기를 지원하지 않습니다.",
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.SidebarRepair => "사이드바 보정 기록은 되돌리기를 지원하지 않습니다.",
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.UndoRecord => "되돌리기 작업의 기록입니다.",
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.NotCompleted => "완료되지 않은 기록이라 되돌릴 수 없습니다.",
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.AlreadyUndone => "이미 되돌린 기록입니다.",
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.OtherHome => "다른 Codex 폴더의 기록입니다.",
+        CodexBackupManager.Restore.Undo.UndoUnavailableReason.RecordCorrupt => "기록이 손상되어 되돌릴 수 없습니다.",
+        _ => "되돌릴 수 있습니다.",
+    };
+
+    /// <summary>(Phase 9_4-03) 대화가 되돌리기를 막는 이유.</summary>
+    public static string UndoBlockText(CodexBackupManager.Restore.Undo.UndoBlockReason reason) => reason switch
+    {
+        CodexBackupManager.Restore.Undo.UndoBlockReason.OpenedInCodex => "Codex에서 이미 열어 본 대화라 되돌릴 수 없습니다.",
+        CodexBackupManager.Restore.Undo.UndoBlockReason.TraceUnknown => "Codex에서 열어 봤는지 확인할 수 없어 되돌리지 않습니다.",
+        CodexBackupManager.Restore.Undo.UndoBlockReason.RolloutChanged => "가져온 뒤 이어서 쓴 대화라 되돌릴 수 없습니다.",
+        CodexBackupManager.Restore.Undo.UndoBlockReason.RowChanged => "가져온 뒤 바뀐 대화라 되돌릴 수 없습니다.",
+        CodexBackupManager.Restore.Undo.UndoBlockReason.LinkChanged => "옮긴 뒤 위치가 바뀐 대화라 되돌릴 수 없습니다.",
+        _ => "가져온 대화가 이 PC에서 지워져 되돌릴 수 없습니다.",
+    };
+
+    /// <summary>(Phase 9_4-03) 새 프로젝트를 남겨 둔 이유.</summary>
+    public static string ProjectKeepText(CodexBackupManager.Restore.Undo.ProjectKeepReason? reason) => reason switch
+    {
+        CodexBackupManager.Restore.Undo.ProjectKeepReason.ProjectChanged or CodexBackupManager.Restore.Undo.ProjectKeepReason.SidebarEntryChanged =>
+            "만든 뒤 프로젝트가 바뀌어 프로젝트는 남겨 두었습니다.",
+        CodexBackupManager.Restore.Undo.ProjectKeepReason.DesktopStateUnavailable => "Codex 데스크톱 앱 상태 파일을 확인하지 못해 프로젝트는 남겨 두었습니다.",
+        _ => "Codex에서 이 프로젝트를 사용 중이라 프로젝트는 남겨 두었습니다.",
+    };
+
+    /// <summary>(Phase 9_4-07) 되돌리기 가능 여부 한 줄(막는 대화는 최대 3개 제목과 이유).</summary>
+    public static string UndoAssessmentText(CodexBackupManager.Restore.Undo.UndoAssessment assessment, IReadOnlyDictionary<string, string> titles)
+    {
+        ArgumentNullException.ThrowIfNull(assessment);
+        ArgumentNullException.ThrowIfNull(titles);
+        if (assessment.Unavailable != CodexBackupManager.Restore.Undo.UndoUnavailableReason.None)
+        {
+            return UndoUnavailableText(assessment.Unavailable);
+        }
+
+        if (assessment.Blockers.Count > 0)
+        {
+            List<string> lines = assessment.Blockers
+                .GroupBy(b => b.ThreadId, StringComparer.OrdinalIgnoreCase)
+                .Select(g => $"'{(titles.TryGetValue(g.Key, out string? t) ? t : FallbackTitle(g.Key))}' — {UndoBlockText(g.First().Reason)}")
+                .ToList();
+            return "되돌릴 수 없습니다(부분 되돌리기는 지원하지 않습니다): " + string.Join(" / ", lines.Take(3)) +
+                   (lines.Count > 3 ? $" 외 {lines.Count - 3}개" : string.Empty);
+        }
+
+        int deletes = assessment.Projects.Count(p => p.Delete);
+        int keeps = assessment.Projects.Count - deletes;
+        return "되돌릴 수 있습니다." +
+               (deletes > 0 ? $" 새로 만든 프로젝트 {deletes}개도 지웁니다." : string.Empty) +
+               (keeps > 0 ? $" 새로 만든 프로젝트 {keeps}개는 사용 중이라 남겨 둡니다." : string.Empty);
+    }
+
+    /// <summary>(Phase 9_4-09) 되돌리기 결과 문구.</summary>
+    public static string UndoResultText(CodexBackupManager.Restore.Undo.UndoResult result, IReadOnlyDictionary<string, string> titles)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(titles);
+        switch (result.Outcome)
+        {
+            case RestoreOutcome.Succeeded:
+                string text = $"가져오기를 되돌렸습니다. 대화 {result.UndoneConversationCount}개 · 지운 프로젝트 {result.DeletedProjectCount}개";
+                foreach (CodexBackupManager.Restore.Undo.UndoProjectDecision kept in result.KeptProjects)
+                {
+                    text += $"{Environment.NewLine}'{kept.Name}': {ProjectKeepText(kept.KeepReason)}";
+                }
+
+                return text;
+            case RestoreOutcome.NotReady when result.Assessment is { } assessment && !assessment.CanUndo:
+                return UndoAssessmentText(assessment, titles);
+            case RestoreOutcome.RollbackFailedCritical:
+                return $"CRITICAL: {result.Message}";
+            default:
+                return result.Message;
+        }
+    }
+
+    /// <summary>(Phase 9_4-07) 되돌리기 확인 문구.</summary>
+    public const string UndoConfirmMessage =
+        "이 가져오기가 만든 대화·파일·프로젝트를 지우고, 이어받은 대화와 옮긴 대화를 가져오기 전 상태로 되돌립니다." + "\n" +
+        "되돌리기 전에 복구 지점(Snapshot)을 만듭니다. Codex가 완전히 종료되어 있어야 합니다. 계속하시겠습니까?";
+
     /// <summary>(Phase 9_3-00) Desktop이 위치를 따로 기록한 대화.</summary>
     public const string RelinkDesktopRecorded =
         "Codex 데스크톱 앱이 이 대화의 위치를 따로 기록하고 있어 이 앱에서 옮기지 않습니다. Codex에서 직접 옮겨 주세요.";

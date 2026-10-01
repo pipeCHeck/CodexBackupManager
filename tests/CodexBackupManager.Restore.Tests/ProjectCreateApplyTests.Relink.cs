@@ -219,6 +219,32 @@ public sealed partial class ProjectCreateApplyTests
         Assert.False(plan.UsesProjectTarget(plan.Projects.Single()));
     }
 
+    [Fact]
+    public void R7_cwd로_이미_목적지_프로젝트에_보이는_대화는_DB_값이_비어도_옮기기를_숨긴다()
+    {
+        // 9_3-07 — 첫 가져오기는 "만들지 않기"로 기타 대화에 넣는다(DB project_id NULL, cwd = 원본 cwd).
+        string threadId = NewId();
+        string folder = NewFolder("cwd-fallback");
+        string backupPath = Export(new SourceConversation(threadId, "pa", "A", folder));
+        ImportPreview first = Preview(backupPath);
+        AssertSucceeded(Apply(Plan(first, backupPath, Choices(first, new Dictionary<string, ProjectTargetDecision>
+        {
+            [KeyOf("pa")] = ProjectTargetDecision.Suggested with { CreateProject = false },
+        }))));
+        Assert.Null(Column(threadId, "project_id"));
+
+        // 그 뒤 이 PC에 백업 폴더와 대화의 cwd를 루트로 가진 프로젝트가 등록됐다 → 카탈로그는 cwd 대체로 그 프로젝트 아래에 보여 준다.
+        TestCodexHomeBuilder.InsertProject(_pcBHome, RegisteredProjectId, "등록 프로젝트", CanonicalPath.Create(folder).Display, OriginalCwd);
+        ImportPreview preview = Preview(backupPath);
+        Assert.Equal(ProjectTargetKind.LinkExisting, TargetOf(preview, "pa").Kind);
+        ImportUserChoices choices = Choices(preview) with { RelinkThreadIds = new HashSet<string>([threadId]) };
+
+        ImportSelectionConversation selected = SelectionOf(preview, choices, threadId);
+        Assert.Null(selected.Preview.LocalDbProjectId);
+        Assert.Equal(RelinkStatus.AlreadyThere, selected.Relink);
+        Assert.False(selected.IsRelinkSelected);
+    }
+
     // ── 9_3-T2 ────────────────────────────────────────────────────────────────
 
     [Fact]

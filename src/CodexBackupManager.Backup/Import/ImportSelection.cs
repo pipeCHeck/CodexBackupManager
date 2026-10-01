@@ -312,7 +312,9 @@ public static class ImportSelection
                 ? (conversation.PlannedAction, conversation.Relation == RevisionRelation.LocalAhead ? ImportSkipReason.LocalAhead : ImportSkipReason.None)
                 : (ImportPlannedAction.Skip, ExcludedSkipReason(conversation));
 
-            RelinkStatus relink = project is null ? RelinkStatus.NotApplicable : GetRelinkStatus(conversation, project.Resolution);
+            RelinkStatus relink = project is null
+                ? RelinkStatus.NotApplicable
+                : GetRelinkStatus(conversation, project.Resolution, preview.LocalProjectDirectory);
             bool relinkRequestedHere = relinkRequested.Remove(conversation.ThreadId);
             bool relinkSelected = relinkRequestedHere && relink == RelinkStatus.Available;
             if (relinkRequestedHere && !relinkSelected)
@@ -380,7 +382,11 @@ public static class ImportSelection
     /// </summary>
     /// <param name="conversation">백업 대화(이 PC 값과 Desktop 기록은 Preview에 있다).</param>
     /// <param name="resolution">그 백업 프로젝트의 목적지 판정(사용자 결정 반영).</param>
-    public static RelinkStatus GetRelinkStatus(ImportConversationPreview conversation, ProjectTargetResolution resolution)
+    /// <param name="directory">
+    /// (Phase 9_3-07) 이 PC 프로젝트 목록. 주면 카탈로그 기준 현재 그룹(DB project_id → global-state → cwd 대체, 9_1 규칙)이 목적지 프로젝트와
+    /// 같을 때도 AlreadyThere다(Desktop이 이미 그 프로젝트 아래에 보여 주는 대화).
+    /// </param>
+    public static RelinkStatus GetRelinkStatus(ImportConversationPreview conversation, ProjectTargetResolution resolution, ProjectDirectory? directory = null)
     {
         ArgumentNullException.ThrowIfNull(conversation);
         ArgumentNullException.ThrowIfNull(resolution);
@@ -410,7 +416,9 @@ public static class ImportSelection
         }
 
         if (target.Kind == ProjectTargetKind.LinkExisting &&
-            string.Equals(conversation.LocalDbProjectId, target.LinkDbProjectId, StringComparison.Ordinal))
+            (string.Equals(conversation.LocalDbProjectId, target.LinkDbProjectId, StringComparison.Ordinal) ||
+             (location.KnownProjectKey is { } currentKey && directory?.FindById(target.LinkDbProjectId)?.Key is { } targetKey &&
+              string.Equals(currentKey, targetKey, StringComparison.Ordinal))))
         {
             return RelinkStatus.AlreadyThere;
         }

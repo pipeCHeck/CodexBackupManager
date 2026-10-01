@@ -414,6 +414,8 @@
                 Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibility}}" />
         <!-- Phase 9_2-2 — 가져오기 작업 공간을 연다(파일 선택 → Codex 종료 확인 → 분석 → 선택 → 적용). -->
         <Button Content="백업 가져오기" Command="{Binding OpenImportWorkspaceCommand}" Margin="0,0,8,0" />
+        <!-- Phase 9_4-02 — 현재 Codex Home의 가져오기·보정 기록, 되돌리기, Snapshot 정리. -->
+        <Button Content="가져오기 기록" Command="{Binding OpenImportHistoryCommand}" Margin="0,0,8,0" />
         <StackPanel VerticalAlignment="Center" Margin="10,0,0,0" MaxWidth="420">
           <TextBlock Text="{Binding ExportStatusText}" Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
                      Visibility="{Binding ExportStatusText, Converter={StaticResource NullToCollapsed}}" />

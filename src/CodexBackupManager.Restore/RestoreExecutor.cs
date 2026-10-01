@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using CodexBackupManager.Backup.Import;
 using CodexBackupManager.Codex;
@@ -302,7 +303,21 @@ public static class RestoreExecutor
                 throw new InvalidOperationException(validation.FailureReason ?? "post-apply validation 실패");
             }
 
-            TryWriteJournalBestEffort(snapshot.SnapshotDirectory!, snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Completed);
+            // Phase 9_4-01 — 이 Apply가 쓴 것을 역연산 기록으로 남긴다(되돌리기용). 만들지 못해도 적용 결과는 이미 성공이다 —
+            // 그 기록은 "되돌리기 불가"로 보인다.
+            var completed = new RestoreTransactionJournal(snapshot.Manifest!.SnapshotId, codexHomePath, RestoreTransactionState.Completed, DateTimeOffset.UtcNow);
+            try
+            {
+                (ImportRecordSummary summary, string recordSha) = Undo.UndoRecordBuilder.BuildAndWrite(
+                    codexHomePath, plan, opPlan.WithEffectiveProjectIds(effectiveProjectIds), mutation.ReusedProjectIds, mutation.GlobalState,
+                    snapshot.Manifest!, snapshot.SnapshotDirectory!);
+                completed = completed with { Summary = summary, UndoRecordSha256 = recordSha };
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
+            {
+            }
+
+            TryWriteJournalBestEffort(snapshot.SnapshotDirectory!, completed);
             return new RestoreResult(RestoreOutcome.Succeeded, "적용이 완료됐습니다.", null, snapshot.Manifest!.SnapshotId);
         }
         catch (Exception ex)
@@ -341,10 +356,13 @@ public static class RestoreExecutor
     /// 끝난 결과를 뒤집는 것보다 훨씬 안전하다.
     /// </summary>
     private static void TryWriteJournalBestEffort(string snapshotDirectory, string snapshotId, string codexHomePath, RestoreTransactionState state)
+        => TryWriteJournalBestEffort(snapshotDirectory, new RestoreTransactionJournal(snapshotId, codexHomePath, state, DateTimeOffset.UtcNow));
+
+    internal static void TryWriteJournalBestEffort(string snapshotDirectory, RestoreTransactionJournal journal)
     {
         try
         {
-            RestoreTransactionJournalStore.Write(snapshotDirectory, new RestoreTransactionJournal(snapshotId, codexHomePath, state, DateTimeOffset.UtcNow));
+            RestoreTransactionJournalStore.Write(snapshotDirectory, journal);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -367,7 +385,11 @@ public static class RestoreExecutor
     }
 
     /// <summary>mutation 결과: 실제로 쓴 프로젝트 ID, 그리고 global-state 쓰기 결과(프로젝트를 만들지 않았으면 <c>null</c>).</summary>
-    private sealed record MutationOutcome(IReadOnlyDictionary<string, string> EffectiveProjectIds, GlobalStateWriteResult? GlobalState);
+    private sealed record MutationOutcome(IReadOnlyDictionary<string, string> EffectiveProjectIds, GlobalStateWriteResult? GlobalState)
+    {
+        /// <summary>(Phase 9_4-01) idempotency key로 재사용한 프로젝트의 실제 ID(이 Apply가 만든 것이 아니라 되돌리기에서 지우지 않는다).</summary>
+        public IReadOnlySet<string> ReusedProjectIds { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+    }
 
     private static MutationOutcome ExecuteMutations(
         string codexHomePath,
@@ -404,6 +426,7 @@ public static class RestoreExecutor
         {
             return new MutationOutcome(effectiveProjectIds, null);
         }
+
 
         faultInjection.Check(RestoreFaultInjectionPoint.BeforeSqliteTransaction);
         cancellationToken.ThrowIfCancellationRequested();
@@ -535,7 +558,10 @@ public static class RestoreExecutor
             cancellationToken.ThrowIfCancellationRequested();
         }
 
-        return new MutationOutcome(effectiveProjectIds, globalState);
+        return new MutationOutcome(effectiveProjectIds, globalState)
+        {
+            ReusedProjectIds = new HashSet<string>(reusedProjectIds.Select(id => effectiveProjectIds[id]), StringComparer.Ordinal),
+        };
     }
 
     private static IReadOnlyList<(string Label, string AbsolutePath)> ComputeSnapshotTargets(

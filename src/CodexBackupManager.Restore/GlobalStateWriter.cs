@@ -336,6 +336,162 @@ public static class GlobalStateWriter
     /// <summary>SHA-256(소문자 hex).</summary>
     public static string Sha256(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
+    /// <summary>(Phase 9_4-03) 되돌리기에서 지울 레거시 항목 하나(이 앱이 추가했던 값과 정확히 같아야 지운다).</summary>
+    /// <param name="LegacyProjectId">레거시 ID.</param>
+    /// <param name="DbProjectId">매핑 값(DB 프로젝트 ID).</param>
+    /// <param name="Name">추가했던 이름.</param>
+    /// <param name="RootPaths">추가했던 rootPaths.</param>
+    /// <param name="CreatedAt">추가했던 createdAt(ms).</param>
+    public sealed record GlobalStateProjectRemoval(string LegacyProjectId, string DbProjectId, string Name, IReadOnlyList<string> RootPaths, long CreatedAt);
+
+    /// <summary>
+    /// (Phase 9_4-03) 이 앱이 추가했던 레거시 항목이 지금도 그대로인지(local-projects 항목의 name·rootPaths·createdAt, project-order 원소, 매핑 값).
+    /// 게이트를 통과하지 못하면 <c>false</c>.
+    /// </summary>
+    public static bool CanRemove(byte[] currentBytes, CanonicalPath codexHome, GlobalStateProjectRemoval removal)
+    {
+        ArgumentNullException.ThrowIfNull(currentBytes);
+        ArgumentNullException.ThrowIfNull(removal);
+        if (GlobalStateProjectGate.Evaluate(currentBytes, codexHome, out string? hostKey, out _, out GlobalStateJsonObject? root) != GlobalStateGateFailure.None)
+        {
+            return false;
+        }
+
+        return FindRemovable(root!, hostKey!, removal) is not null;
+    }
+
+    /// <summary>
+    /// (Phase 9_4-03) 순수 변환: 추가했던 레거시 항목(local-projects 항목·project-order 원소·현재 host 매핑)을 지운다. 다른 키·값은 원문 조각 그대로다.
+    /// 항목이 바뀌었거나 게이트를 통과하지 못하면 <see cref="InvalidOperationException"/>.
+    /// </summary>
+    public static byte[] RemoveLegacyProjects(byte[] originalBytes, CanonicalPath codexHome, IReadOnlyList<GlobalStateProjectRemoval> removals)
+    {
+        ArgumentNullException.ThrowIfNull(originalBytes);
+        ArgumentNullException.ThrowIfNull(removals);
+        if (removals.Count == 0)
+        {
+            return originalBytes;
+        }
+
+        GlobalStateGateFailure failure = GlobalStateProjectGate.Evaluate(
+            originalBytes, codexHome, out string? hostKey, out string? text, out GlobalStateJsonObject? root);
+        if (failure != GlobalStateGateFailure.None)
+        {
+            throw new InvalidOperationException($"데스크톱 앱 상태 파일이 확인한 형태와 달라 쓰지 않습니다({failure}).");
+        }
+
+        foreach (GlobalStateProjectRemoval removal in removals)
+        {
+            if (FindRemovable(root!, hostKey!, removal) is not { } found)
+            {
+                throw new InvalidOperationException("지울 사이드바 항목이 추가했을 때와 달라 지우지 않습니다.");
+            }
+
+            found.LocalProjects.Members.RemoveAt(found.LocalIndex);
+            found.Order.Items.RemoveAt(found.OrderIndex);
+            found.Mapping.Members.RemoveAt(found.MappingIndex);
+            foreach (GlobalStateJsonNode node in new GlobalStateJsonNode[] { found.LocalProjects, found.Order, found.Mapping, found.MappingByHost })
+            {
+                node.MarkModified();
+            }
+        }
+
+        root!.MarkModified();
+        byte[] newBytes = GlobalStateJson.StrictUtf8.GetBytes(GlobalStateJson.Serialize(root, text));
+        if (!GlobalStateProjectGate.CheckBytes(newBytes, codexHome).IsSupported)
+        {
+            throw new InvalidOperationException("변환한 데스크톱 앱 상태 파일이 형식 확인을 통과하지 못했습니다.");
+        }
+
+        return newBytes;
+    }
+
+    /// <summary>
+    /// (Phase 9_4-03) 지운 뒤 파일 수준 검증: 게이트 통과, 세 키를 뺀 최상위 키 바이트 동일, 세 키에서는 지운 항목만 빠졌는지. 문제가 없으면 <c>null</c>.
+    /// </summary>
+    public static string? VerifyRemoval(byte[] beforeBytes, byte[] afterBytes, CanonicalPath codexHome, IReadOnlyList<GlobalStateProjectRemoval> removals)
+    {
+        ArgumentNullException.ThrowIfNull(beforeBytes);
+        ArgumentNullException.ThrowIfNull(afterBytes);
+        ArgumentNullException.ThrowIfNull(removals);
+        if (GlobalStateProjectGate.Evaluate(beforeBytes, codexHome, out string? hostBefore, out string? textBefore, out GlobalStateJsonObject? before) != GlobalStateGateFailure.None ||
+            GlobalStateProjectGate.Evaluate(afterBytes, codexHome, out string? hostAfter, out string? textAfter, out GlobalStateJsonObject? after) != GlobalStateGateFailure.None)
+        {
+            return "되돌린 데스크톱 앱 상태 파일이 형식 확인을 통과하지 못했습니다.";
+        }
+
+        if (!string.Equals(hostBefore, hostAfter, StringComparison.Ordinal) ||
+            !before!.Members.Select(m => m.Key).SequenceEqual(after!.Members.Select(m => m.Key), StringComparer.Ordinal))
+        {
+            return "되돌린 데스크톱 앱 상태 파일의 최상위 구성이 바뀌었습니다.";
+        }
+
+        string mappingKey = Codex.Inspection.GlobalStateReader.LegacyProjectIdMappingKey;
+        foreach (KeyValuePair<string, GlobalStateJsonNode> member in before.Members)
+        {
+            if (member.Key is not (GlobalStateProjectGate.LocalProjectsKey or GlobalStateProjectGate.ProjectOrderKey) &&
+                member.Key != mappingKey &&
+                !SameRaw(textBefore!, member.Value, textAfter!, after.Get(member.Key)!))
+            {
+                return "되돌리기가 바꾸지 않아야 할 데스크톱 앱 상태 키를 바꿨습니다.";
+            }
+        }
+
+        var removedIds = new HashSet<string>(removals.Select(r => r.LegacyProjectId), StringComparer.Ordinal);
+        bool SameExceptRemoved(List<KeyValuePair<string, GlobalStateJsonNode>> b, List<KeyValuePair<string, GlobalStateJsonNode>> a)
+        {
+            List<KeyValuePair<string, GlobalStateJsonNode>> kept = b.Where(m => !removedIds.Contains(m.Key)).ToList();
+            return kept.Count == a.Count && PrefixSame(textBefore!, kept, textAfter!, a);
+        }
+
+        var lpBefore = (GlobalStateJsonObject)before.Get(GlobalStateProjectGate.LocalProjectsKey)!;
+        var lpAfter = (GlobalStateJsonObject)after.Get(GlobalStateProjectGate.LocalProjectsKey)!;
+        var orderBefore = (GlobalStateJsonArray)before.Get(GlobalStateProjectGate.ProjectOrderKey)!;
+        var orderAfter = (GlobalStateJsonArray)after.Get(GlobalStateProjectGate.ProjectOrderKey)!;
+        var hostMapBefore = (GlobalStateJsonObject)((GlobalStateJsonObject)before.Get(mappingKey)!).Get(hostBefore!)!;
+        var hostMapAfter = (GlobalStateJsonObject)((GlobalStateJsonObject)after.Get(mappingKey)!).Get(hostAfter!)!;
+        List<GlobalStateJsonNode> orderKept = orderBefore.Items.Where(i => !removedIds.Contains(((GlobalStateJsonString)i).Value)).ToList();
+        bool orderOk = orderKept.Count == orderAfter.Items.Count &&
+                       orderKept.Select((n, i) => SameRaw(textBefore!, n, textAfter!, orderAfter.Items[i])).All(x => x);
+        if (!SameExceptRemoved(lpBefore.Members, lpAfter.Members) || !orderOk || !SameExceptRemoved(hostMapBefore.Members, hostMapAfter.Members))
+        {
+            return "되돌린 사이드바 항목이 예상과 다릅니다.";
+        }
+
+        return null;
+    }
+
+    private sealed record RemovableEntry(
+        GlobalStateJsonObject LocalProjects, int LocalIndex, GlobalStateJsonArray Order, int OrderIndex,
+        GlobalStateJsonObject MappingByHost, GlobalStateJsonObject Mapping, int MappingIndex);
+
+    private static RemovableEntry? FindRemovable(GlobalStateJsonObject root, string hostKey, GlobalStateProjectRemoval removal)
+    {
+        var localProjects = (GlobalStateJsonObject)root.Get(GlobalStateProjectGate.LocalProjectsKey)!;
+        var order = (GlobalStateJsonArray)root.Get(GlobalStateProjectGate.ProjectOrderKey)!;
+        var mappingByHost = (GlobalStateJsonObject)root.Get(Codex.Inspection.GlobalStateReader.LegacyProjectIdMappingKey)!;
+        var mapping = (GlobalStateJsonObject)mappingByHost.Get(hostKey)!;
+
+        int localIndex = localProjects.Members.FindIndex(m => string.Equals(m.Key, removal.LegacyProjectId, StringComparison.Ordinal));
+        int orderIndex = order.Items.FindIndex(i => i is GlobalStateJsonString s && string.Equals(s.Value, removal.LegacyProjectId, StringComparison.Ordinal));
+        int mappingIndex = mapping.Members.FindIndex(m => string.Equals(m.Key, removal.LegacyProjectId, StringComparison.Ordinal));
+        if (localIndex < 0 || orderIndex < 0 || mappingIndex < 0 ||
+            mapping.Members[mappingIndex].Value is not GlobalStateJsonString { } mapped ||
+            !string.Equals(mapped.Value, removal.DbProjectId, StringComparison.Ordinal) ||
+            order.Items.Count(i => i is GlobalStateJsonString s && s.Value == removal.LegacyProjectId) != 1)
+        {
+            return null;
+        }
+
+        var entry = (GlobalStateJsonObject)localProjects.Members[localIndex].Value;
+        string ms = removal.CreatedAt.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        bool same = entry.Get("name") is GlobalStateJsonString name && string.Equals(name.Value, removal.Name, StringComparison.Ordinal)
+                    && entry.Get("rootPaths") is GlobalStateJsonArray roots
+                    && roots.Items.Select(r => ((GlobalStateJsonString)r).Value).SequenceEqual(removal.RootPaths, StringComparer.Ordinal)
+                    && entry.Get("createdAt") is GlobalStateJsonNumber created && created.Raw == ms;
+        return same ? new RemovableEntry(localProjects, localIndex, order, orderIndex, mappingByHost, mapping, mappingIndex) : null;
+    }
+
     private static bool LocalProjectEntryEquals(GlobalStateJsonObject entry, GlobalStateAddedProject expected)
     {
         string[] keys = entry.Members.Select(m => m.Key).ToArray();

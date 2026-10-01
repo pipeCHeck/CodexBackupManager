@@ -631,6 +631,14 @@
                        Visibility="{Binding SnapshotText, Converter={StaticResource NullToCollapsed}}" />
             <TextBlock Text="{Binding Hint}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0"
                        Visibility="{Binding Hint, Converter={StaticResource NullToCollapsed}}" />
+            <!-- Phase 9_4-07 — 성공한 가져오기는 여기서 되돌릴 수 있다(가능 여부와 사유를 함께). -->
+            <StackPanel Margin="0,10,0,0" DataContext="{Binding DataContext, ElementName=Root}"
+                        Visibility="{Binding IsUndoImportVisible, Converter={StaticResource BoolToVisibility}}">
+              <TextBlock Text="{Binding UndoText}" Style="{StaticResource Caption}" TextWrapping="Wrap"
+                         AutomationProperties.LiveSetting="Polite"
+                         Visibility="{Binding UndoText, Converter={StaticResource NullToCollapsed}}" />
+              <Button Content="이 가져오기 되돌리기" Command="{Binding UndoImportCommand}" HorizontalAlignment="Left" Margin="0,6,0,0" />
+            </StackPanel>
             <StackPanel Orientation="Horizontal" Margin="0,12,0,0"
                         DataContext="{Binding DataContext, ElementName=Root}">
               <Button Content="목록에서 보기" Command="{Binding ShowInListCommand}" />

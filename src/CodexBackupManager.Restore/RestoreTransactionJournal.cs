@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace CodexBackupManager.Restore;
@@ -22,7 +24,37 @@ public enum RestoreTransactionState
 
     /// <summary>실패/취소로 Snapshot 기반 Rollback까지 정상적으로 끝났다.</summary>
     RolledBack,
+
+    /// <summary>
+    /// (Phase 9_4-03) 되돌리기 Snapshot의 journal: 첫 역연산을 시작했다. 이 상태로 남아 있으면 되돌리기가 중단됐다는 뜻이다 —
+    /// <see cref="RestoreTransactionState.Applying"/>과 같이 미완료로 보고, 복구는 이 되돌리기 Snapshot 기준으로 한다.
+    /// </summary>
+    Undoing,
+
+    /// <summary>(Phase 9_4-03) 가져오기 journal: 그 가져오기를 되돌렸다(종료 상태 — 다시 되돌릴 수 없다).</summary>
+    Undone,
 }
+
+/// <summary>
+/// (Phase 9_4-01) 기록 화면용 가져오기 요약. <b>대화 제목·경로 원문은 넣지 않는다</b>(경로는 Snapshot 안의 되돌리기 기록 파일에만 있다).
+/// </summary>
+/// <param name="BackupFileName">백업 파일 이름(경로 없음).</param>
+/// <param name="AppliedAtUtc">적용 시각.</param>
+/// <param name="ImportedCount">새로 가져온 대화 수.</param>
+/// <param name="UpdatedCount">이어받은 대화 수.</param>
+/// <param name="RelinkedCount">옮긴 대화 수.</param>
+/// <param name="CreatedProjectCount">새로 만든 프로젝트 수.</param>
+/// <param name="ThreadIds">이 가져오기가 쓴 대화(thread ID, 화면은 현재 카탈로그에서 제목을 찾는다).</param>
+/// <param name="CreatedProjectIds">새로 만든 프로젝트 DB ID.</param>
+public sealed record ImportRecordSummary(
+    string BackupFileName,
+    DateTimeOffset AppliedAtUtc,
+    int ImportedCount,
+    int UpdatedCount,
+    int RelinkedCount,
+    int CreatedProjectCount,
+    IReadOnlyList<string> ThreadIds,
+    IReadOnlyList<string> CreatedProjectIds);
 
 /// <summary>
 /// 하나의 Apply 시도에 대한 durable transaction marker. Snapshot 디렉터리 안에
@@ -36,7 +68,20 @@ public sealed record RestoreTransactionJournal(
     string SnapshotId,
     string CodexHomePath,
     RestoreTransactionState State,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc)
+{
+    /// <summary>(Phase 9_4-01) 성공한 가져오기의 요약(선택 필드 — 없으면 9_4 이전 기록).</summary>
+    public ImportRecordSummary? Summary { get; init; }
+
+    /// <summary>
+    /// (Phase 9_4-01) 같은 Snapshot 디렉터리의 되돌리기 기록 파일(<c>undo-record.json</c>)의 SHA-256(선택 필드). 없으면 되돌리기를 지원하지 않는다.
+    /// 읽을 때 파일 해시가 이 값과 다르면 손상으로 본다.
+    /// </summary>
+    public string? UndoRecordSha256 { get; init; }
+
+    /// <summary>(Phase 9_4-03) 되돌리기 Snapshot의 journal이면 되돌린 가져오기의 Snapshot ID(선택 필드).</summary>
+    public string? UndoOfSnapshotId { get; init; }
+}
 
 /// <summary>journal 파일을 읽어본 결과의 분류(Phase 07_03 요구사항 3).</summary>
 public enum RestoreTransactionJournalReadStatus
@@ -126,5 +171,18 @@ public static class RestoreTransactionJournalStore
         => !string.IsNullOrWhiteSpace(journal.SnapshotId)
         && !string.IsNullOrWhiteSpace(journal.CodexHomePath)
         && Enum.IsDefined(journal.State)
-        && journal.UpdatedAtUtc != default;
+        && journal.UpdatedAtUtc != default
+        // Phase 9_4-01 — 새 필드는 선택이다. 있으면 그 구조도 맞아야 한다(있는데 깨졌으면 손상으로 본다).
+        && (journal.Summary is null || IsSummaryValid(journal.Summary))
+        && (journal.UndoRecordSha256 is null || IsSha256Hex(journal.UndoRecordSha256))
+        && (journal.UndoOfSnapshotId is null || !string.IsNullOrWhiteSpace(journal.UndoOfSnapshotId));
+
+    private static bool IsSummaryValid(ImportRecordSummary summary)
+        => !string.IsNullOrWhiteSpace(summary.BackupFileName)
+        && summary.AppliedAtUtc != default
+        && summary.ImportedCount >= 0 && summary.UpdatedCount >= 0 && summary.RelinkedCount >= 0 && summary.CreatedProjectCount >= 0
+        && summary.ThreadIds is not null && summary.CreatedProjectIds is not null;
+
+    private static bool IsSha256Hex(string value)
+        => value.Length == 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 }

@@ -258,6 +258,13 @@ public sealed class CrashRecoveryIntegrationTests : IDisposable
         RunCrashSimAndKill(arguments, sentinelPath);
     }
 
+    /// <summary>(Phase 9_4-T3) 되돌리기를 CrashSim으로 돌리고 지정 지점에서 강제 종료한다.</summary>
+    internal static void RunUndoAndKillAtCrashPoint(string codexHomePath, string importSnapshotDirectory, RestoreFaultInjectionPoint crashPoint, string snapshotRoot)
+    {
+        string sentinelPath = Path.Combine(Path.GetTempPath(), $"cbm-crashsim-sentinel-{Guid.NewGuid():N}.txt");
+        RunCrashSimAndKill(["undo", codexHomePath, importSnapshotDirectory, crashPoint.ToString(), sentinelPath, snapshotRoot], sentinelPath);
+    }
+
     /// <summary>(Phase 9_5a-T1) 사이드바 보정을 CrashSim으로 돌리고 지정 지점에서 강제 종료한다.</summary>
     internal static void RunRepairAndKillAtCrashPoint(string codexHomePath, RestoreFaultInjectionPoint crashPoint, string snapshotRoot)
     {

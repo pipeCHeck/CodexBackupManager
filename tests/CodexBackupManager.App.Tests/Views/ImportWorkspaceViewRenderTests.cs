@@ -301,10 +301,40 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         });
     }
 
-    private static string BuildExportCompletedXaml()
+    [Fact]
+    public async Task 가져오기_기록_창과_결과_화면의_되돌리기_줄을_바인딩_오류_없이_그린다()
+    {
+        // Phase 9_4-02/07
+        _h.RemoveFromTarget(ImportWorkspaceHarness.Thread2);
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(ImportWorkspaceHarness.Thread2));
+        await ws.ImportAsync();
+        await ws.UndoAssessTask!;
+        AssertRendersWithoutBindingErrors(ws, window =>
+        {
+            System.Windows.Controls.Button undo = Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, "이 가져오기 되돌리기"));
+            Assert.True(undo.IsVisible);
+            Assert.True(undo.IsEnabled);
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.IsVisible && t.Text == ws.UndoText);
+        });
+
+        var history = new CodexBackupManager.App.ViewModels.ImportHistoryViewModel(
+            _h.TargetHome, _h.SnapshotRoot, new CodexBackupManager.App.Services.FileLogger(Path.Combine(_h.TestDir, "logs")),
+            (_, _) => true, _ => "제목", () => [], () => { });
+        history.SelectedEntry = history.Entries.First();
+        await history.SelectionTask!;
+        AssertRendersWithoutBindingErrors(history, BuildStandaloneWindowXaml("ImportHistoryWindow.xaml"), window =>
+        {
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.IsVisible && t.Text == "가져오기");
+            Assert.True(Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, "되돌리기")).IsEnabled);
+        });
+    }
+
+    private static string BuildExportCompletedXaml() => BuildStandaloneWindowXaml("ExportCompletedWindow.xaml");
+
+    private static string BuildStandaloneWindowXaml(string fileName)
     {
         string appDir = Path.Combine(RepositoryFixtures.RepositoryRoot, "src", "CodexBackupManager.App");
-        string text = File.ReadAllText(Path.Combine(appDir, "Views", "ExportCompletedWindow.xaml"));
+        string text = File.ReadAllText(Path.Combine(appDir, "Views", fileName));
         text = Regex.Replace(text, "\\s+x:Class=\"[^\"]*\"", string.Empty);
         XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
         XElement window = XElement.Parse(text);

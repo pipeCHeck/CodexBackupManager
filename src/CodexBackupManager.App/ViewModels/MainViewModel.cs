@@ -153,6 +153,7 @@ public sealed class MainViewModel : ObservableObject
             () => _ = ImportWorkspace.OpenAsync(), () => IsConnected && !IsBusy && !IsImportWorkspaceOpen && !IsExporting);
         RecoverIncompleteApplyCommand = new RelayCommand(() => _ = RecoverIncompleteApplyAsync(), () => HasIncompleteApply && !IsImportWorkspaceOpen);
         RepairSidebarCommand = new RelayCommand(() => _ = RepairSidebarAsync(), () => CanRepairSidebar);
+        OpenImportHistoryCommand = new RelayCommand(OpenImportHistory, () => IsConnected && !IsBusy && !IsImportWorkspaceOpen && !string.IsNullOrWhiteSpace(HomePath));
 
         _importWorkspace = new ImportWorkspaceViewModel(
             logger, importFilePicker ?? BackupFilePicker.PickOpenLocation, projectPathPicker ?? FolderPicker.PickProjectFolder,
@@ -209,6 +210,41 @@ public sealed class MainViewModel : ObservableObject
     /// 쓰기는 <see cref="SidebarRepairService"/>(Snapshot·Journal·Rollback)가 한다. DB는 바꾸지 않는다.
     /// </summary>
     public RelayCommand RepairSidebarCommand { get; }
+
+    /// <summary>(Phase 9_4-02) [가져오기 기록].</summary>
+    public RelayCommand OpenImportHistoryCommand { get; }
+
+    /// <summary>기록 화면 표시 방법(기본: 메인 창 소유의 모달 창, 테스트는 기록만).</summary>
+    internal Action<ImportHistoryViewModel> ImportHistoryPresenter { get; set; } = Views.ImportHistoryWindow.ShowFor;
+
+    private void OpenImportHistory()
+    {
+        if (string.IsNullOrWhiteSpace(HomePath))
+        {
+            return;
+        }
+
+        string home = HomePath;
+        var titles = (_lastCatalog?.AllConversations ?? [])
+            .GroupBy(c => c.ThreadId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Title.Text, StringComparer.OrdinalIgnoreCase);
+        var history = new ImportHistoryViewModel(
+            home, _snapshotRootProvider(), _logger, _confirmDialog,
+            id => titles.TryGetValue(id, out string? title) ? title : null,
+            ProcessLister,
+            () => _ = AfterUndoAsync(home));
+        ImportHistoryPresenter(history);
+    }
+
+    private async Task AfterUndoAsync(string home)
+    {
+        RefreshIncompleteApplyState(home);
+        RefreshSidebarRepairState(home);
+        if (_lastInstallation is { } installation)
+        {
+            await LoadCatalogAsync(installation).ConfigureAwait(true);
+        }
+    }
 
     /// <summary>사이드바 보정 안내 줄을 보여주는지(대상이 있거나 직전 결과가 있을 때).</summary>
     public bool HasSidebarRepairNotice => _sidebarRepair.Candidates.Count > 0 || _sidebarRepairStatusText is not null;
@@ -319,6 +355,7 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref _isConnected, value))
             {
                 OpenImportWorkspaceCommand.RaiseCanExecuteChanged();
+                OpenImportHistoryCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -1063,6 +1100,7 @@ public sealed class MainViewModel : ObservableObject
         OpenImportWorkspaceCommand.RaiseCanExecuteChanged();
         RecoverIncompleteApplyCommand.RaiseCanExecuteChanged();
         RepairSidebarCommand.RaiseCanExecuteChanged();
+        OpenImportHistoryCommand.RaiseCanExecuteChanged();
     }
 
     // ── Phase 9_5a-04 사이드바 보정 ─────────────────────────────────────────────

@@ -31,6 +31,7 @@ return args[0] switch
 {
     "apply" => RunApply(args, noProcessGuard, withChoices),
     "repair" => RunRepair(args, noProcessGuard),
+    "undo" => RunUndo(args, noProcessGuard),
     "lock-hold" => RunLockHold(args),
     _ => Unknown(args[0]),
 };
@@ -92,6 +93,23 @@ static int RunApply(string[] args, bool noProcessGuard, bool withChoices)
 
     // 정상적으로 여기까지 실행이 돌아왔다면(=crashPoint에서 멈추지 않았다면) 부모가 기대한 시나리오가
     // 아니다 — 부모가 이 출력으로 그 사실을 알 수 있게 한다.
+    Console.WriteLine($"UNEXPECTED-COMPLETION:{result.Outcome}:{result.Message}");
+    return 0;
+}
+
+/// <summary>(Phase 9_4-T3) 되돌리기(<see cref="CodexBackupManager.Restore.Undo.ImportUndoService"/>)를 지정 지점에서 멈춘다.</summary>
+static int RunUndo(string[] args, bool noProcessGuard)
+{
+    if (args.Length < 5)
+    {
+        Console.Error.WriteLine("usage: CrashSim undo <codexHomePath> <importSnapshotDirectory> <crashPoint> <sentinelFilePath> [snapshotRoot]");
+        return 2;
+    }
+
+    var hook = new CrashAtPointHook(Enum.Parse<RestoreFaultInjectionPoint>(args[3]), args[4]);
+    CodexBackupManager.Restore.Undo.UndoResult result = CodexBackupManager.Restore.Undo.ImportUndoService.Undo(
+        args[1], args[2], args.Length > 5 ? args[5] : SnapshotService.DefaultSnapshotRoot(),
+        noProcessGuard ? static () => [] : CodexProcessGuard.SystemRunningProcessLister, hook);
     Console.WriteLine($"UNEXPECTED-COMPLETION:{result.Outcome}:{result.Message}");
     return 0;
 }

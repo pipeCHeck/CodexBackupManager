@@ -104,6 +104,10 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     private string? _editingError;
     private string? _applyStatusText;
     private string? _codexRecheckText;
+    private CodexBackupManager.Restore.Undo.UndoAssessment? _undoAssessment;
+    private string? _undoText;
+    private bool _isUndoing;
+    private bool _importUndone;
     private bool _failureRetryable;
     private ImportResultViewModel? _result;
     private ImportPlan? _appliedPlan;
@@ -167,6 +171,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         RetryCommand = new RelayCommand(() => _ = ReanalyzeAsync(), () => CanRetry);
         ShowInListCommand = new RelayCommand(() => Close(showInList: true), () => State == ImportWorkspaceState.Result && ImportedThreadIds.Count > 0);
         ChangeNewFolderBaseCommand = new RelayCommand(ChangeNewFolderBase, () => CanCreateFolders && CanEditSelection);
+        UndoImportCommand = new RelayCommand(() => _ = UndoImportAsync(), () => CanUndoImport);
     }
 
     // ── 테스트용 seam(InternalsVisibleTo App.Tests). 제품 기본값은 실제 동작이다. ──────────────────
@@ -233,6 +238,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
                 {
                     nameof(IsOpen), nameof(IsWaitingForCodexExit), nameof(IsAnalyzing), nameof(IsFailed),
                     nameof(IsEditorVisible), nameof(IsApplying), nameof(IsResult), nameof(CanEditSelection), nameof(CanRetryAnalysis),
+                    nameof(IsUndoImportVisible), nameof(CanUndoImport),
                 })
                 {
                     OnPropertyChanged(name);
@@ -460,6 +466,101 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// 백업 파일 자체의 문제(손상, 체크섬 불일치, 지원하지 않는 형식)는 거짓이다.
     /// </summary>
     public bool CanRetryAnalysis => State == ImportWorkspaceState.Failed && _failureRetryable;
+
+    // ── Phase 9_4-07 결과 화면 [이 가져오기 되돌리기] ───────────────────────────
+
+    /// <summary>[이 가져오기 되돌리기].</summary>
+    public RelayCommand UndoImportCommand { get; }
+
+    /// <summary>되돌리기 줄을 보여주는지(성공한 가져오기 결과).</summary>
+    public bool IsUndoImportVisible => State == ImportWorkspaceState.Result && _result?.Outcome == RestoreOutcome.Succeeded && _result.SnapshotId is not null;
+
+    /// <summary>지금 되돌릴 수 있는지.</summary>
+    public bool CanUndoImport => IsUndoImportVisible && !_isUndoing && !_importUndone && _undoAssessment is { CanUndo: true };
+
+    /// <summary>되돌리기 가능 여부·사유, 또는 되돌리기 결과.</summary>
+    public string? UndoText
+    {
+        get => _undoText;
+        private set => SetProperty(ref _undoText, value);
+    }
+
+    /// <summary>판정(테스트 확인용).</summary>
+    internal CodexBackupManager.Restore.Undo.UndoAssessment? UndoAssessment => _undoAssessment;
+
+    /// <summary>마지막으로 시작한 되돌리기 판정 작업(테스트가 기다릴 수 있게 둔다).</summary>
+    internal Task? UndoAssessTask { get; private set; }
+
+    private string? SnapshotDirectoryOfResult => _result?.SnapshotId is { } id ? Path.Combine(_snapshotRootProvider(), id) : null;
+
+    private async Task AssessUndoAsync()
+    {
+        _undoAssessment = null;
+        UndoText = "되돌릴 수 있는지 확인하는 중…";
+        RaiseUndoBindings();
+        if (SnapshotDirectoryOfResult is not { } dir || _codexHomeProvider() is not { Length: > 0 } home)
+        {
+            UndoText = null;
+            return;
+        }
+
+        string root = _snapshotRootProvider();
+        try
+        {
+            _undoAssessment = await Task.Run(() => CodexBackupManager.Restore.Undo.ImportUndoService.Assess(home, dir, root)).ConfigureAwait(true);
+            UndoText = ImportTexts.UndoAssessmentText(_undoAssessment, _titles);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            UndoText = $"되돌릴 수 있는지 확인하지 못했습니다({ex.GetType().Name}).";
+        }
+
+        RaiseUndoBindings();
+    }
+
+    /// <summary>[이 가져오기 되돌리기]: 확인 → 되돌리기 → 결과 문구.</summary>
+    internal async Task UndoImportAsync()
+    {
+        if (!CanUndoImport || SnapshotDirectoryOfResult is not { } dir || _codexHomeProvider() is not { Length: > 0 } home)
+        {
+            return;
+        }
+
+        if (!_confirmDialog(ImportTexts.UndoConfirmMessage, "가져오기 되돌리기"))
+        {
+            return;
+        }
+
+        _isUndoing = true;
+        UndoText = "되돌리는 중…";
+        RaiseUndoBindings();
+        string root = _snapshotRootProvider();
+        try
+        {
+            CodexBackupManager.Restore.Undo.UndoResult result = await Task.Run(
+                () => CodexBackupManager.Restore.Undo.ImportUndoService.Undo(home, dir, root, ProcessLister)).ConfigureAwait(true);
+            _importUndone = result.Outcome == RestoreOutcome.Succeeded;
+            UndoText = ImportTexts.UndoResultText(result, _titles);
+            _logger.Info($"가져오기 되돌리기. outcome={result.Outcome} conversations={result.UndoneConversationCount} deletedProjects={result.DeletedProjectCount} keptProjects={result.KeptProjects.Count}");
+        }
+        catch (Exception ex)
+        {
+            _logger.Error("가져오기 되돌리기 중 예기치 않은 오류", ex);
+            UndoText = $"되돌리는 중 예기치 않은 오류가 발생했습니다: {ex.GetType().Name}";
+        }
+        finally
+        {
+            _isUndoing = false;
+            RaiseUndoBindings();
+        }
+    }
+
+    private void RaiseUndoBindings()
+    {
+        OnPropertyChanged(nameof(IsUndoImportVisible));
+        OnPropertyChanged(nameof(CanUndoImport));
+        UndoImportCommand?.RaiseCanExecuteChanged();
+    }
 
     /// <summary>[다시 시도]를 보여주는지.</summary>
     public bool CanRetry => State == ImportWorkspaceState.Result && _result is { IsRetryable: true };
@@ -1488,7 +1589,18 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     private void ShowResult(RestoreResult result, ImportPlan plan)
     {
         Result = new ImportResultViewModel(result, plan, _summary!, _titles, LocalProjects);
+        _importUndone = false;
         State = ImportWorkspaceState.Result;
+        if (result.Outcome == RestoreOutcome.Succeeded)
+        {
+            UndoAssessTask = AssessUndoAsync(); // Phase 9_4-07
+        }
+        else
+        {
+            _undoAssessment = null;
+            UndoText = null;
+            RaiseUndoBindings();
+        }
     }
 
     // ── 닫기 ────────────────────────────────────────────────────────────────
@@ -1526,6 +1638,9 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         ApplyStatusText = null;
         CodexRecheckText = null;
         _failureRetryable = false;
+        _undoAssessment = null;
+        _importUndone = false;
+        UndoText = null;
         _searchText = string.Empty;
         OnPropertyChanged(nameof(SearchText));
         RefreshSummaryBindings();
@@ -1536,7 +1651,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         foreach (RelayCommand command in new[]
         {
             RecheckCodexCommand, CancelAnalysisCommand, ChooseOtherFileCommand, CloseCommand, SelectNewOnlyCommand,
-            SelectAllCommand, ClearAllCommand, ReanalyzeCommand, ImportCommand, CancelApplyCommand, RetryCommand, ShowInListCommand,
+            SelectAllCommand, ClearAllCommand, ReanalyzeCommand, ImportCommand, CancelApplyCommand, RetryCommand, ShowInListCommand, UndoImportCommand,
         })
         {
             command?.RaiseCanExecuteChanged();

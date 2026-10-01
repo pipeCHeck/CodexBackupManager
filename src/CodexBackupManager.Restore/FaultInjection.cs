@@ -63,6 +63,21 @@ public enum RestoreFaultInjectionPoint
 
     /// <summary>(Phase 9_3-T2) 같은 트랜잭션 안에서 연결 변경 UPDATE를 마친 직후(커밋 전).</summary>
     AfterThreadProjectLink,
+
+    /// <summary>(Phase 9_4-T3) 되돌리기: DB 트랜잭션(행 삭제·복원, 프로젝트 삭제) 커밋 직후.</summary>
+    AfterUndoDbCommit,
+
+    /// <summary>(Phase 9_4-T3) 되돌리기: 새로 가져온 rollout 파일을 처음 지운 직후.</summary>
+    AfterUndoFileDelete,
+
+    /// <summary>(Phase 9_4-T3) 되돌리기: 이어 붙인 rollout을 이전 길이로 자른(교체한) 직후.</summary>
+    AfterUndoTruncate,
+
+    /// <summary>(Phase 9_4-T3) 되돌리기: global-state 레거시 항목을 지운 파일로 교체한 직후.</summary>
+    AfterUndoGlobalStateReplace,
+
+    /// <summary>(Phase 9_4-T3) 되돌리기: 사후 검증 직전.</summary>
+    BeforeUndoValidation,
 }
 
 /// <summary>fault injection 훅. 테스트 전용 — 운영 코드는 <see cref="NoOpRestoreFaultInjectionHook"/>을 쓴다.</summary>
