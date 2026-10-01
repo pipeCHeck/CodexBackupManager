@@ -277,7 +277,9 @@ public sealed class ImportWorkspacePreviewTests : IDisposable
 
         Assert.Equal(CodexBackupManager.Restore.RestoreOutcome.Succeeded, ws.Result!.Outcome);
         List<ImportResultItem> items = ws.Result.Groups.SelectMany(g => g.Items).ToList();
-        Assert.Contains(items, i => i.Title == thread1.Title && i.Text == "이어받음");
+        // 9_5-10: 이어받은 대화는 실제 위치와 함께 "기존 위치 유지"로 보인다(목적지 아래가 아니다).
+        Assert.Contains(items, i => i.Title == thread1.Title && i.Text == "이어받음 · 이 PC 위치: Alpha 프로젝트 (기존 위치 유지)");
+        Assert.Contains(ws.Result.Groups, g => g.Destination == "→ 기존 위치 유지" && g.Items.Any(i => i.Text.StartsWith("이어받음", StringComparison.Ordinal)));
         Assert.Contains(items, i => i.Text == "새로 가져옴");
         Assert.Contains(Thread1, ws.Result.ImportedThreadIds);
 

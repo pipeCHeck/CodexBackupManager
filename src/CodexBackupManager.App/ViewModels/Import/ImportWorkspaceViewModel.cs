@@ -14,6 +14,7 @@ using CodexBackupManager.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Catalog;
 using CodexBackupManager.Domain.Codex.Import;
 using CodexBackupManager.Domain.Codex.Projects;
+using CodexBackupManager.Domain.Paths;
 using CodexBackupManager.Restore;
 
 namespace CodexBackupManager.App.ViewModels.Import;
@@ -112,6 +113,14 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     private bool _isContentLoading;
     private string? _contentNotice;
 
+    // Phase 9_5-07 ~ 09 — [새 폴더 만들기]. 이 화면에서 앱이 만든 폴더만 기억하고(기준 폴더는 넣지 않는다), 쓰이지 않으면 비어 있을 때만 지운다.
+    private readonly NewProjectFolderOptions? _newFolders;
+    private readonly List<string> _createdFolders = [];
+    private readonly Dictionary<string, string> _createdFolderByProjectKey = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _folderCreateErrors = new(StringComparer.Ordinal);
+    private string? _newFolderBase;
+    private string? _newFolderBaseError;
+
     /// <summary>생성자.</summary>
     /// <param name="logger">로거.</param>
     /// <param name="importFilePicker">백업 파일 선택(취소 시 <c>null</c>).</param>
@@ -120,6 +129,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <param name="snapshotRootProvider">Snapshot 루트.</param>
     /// <param name="codexHomeProvider">현재 Codex Home 경로(없으면 <c>null</c>).</param>
     /// <param name="hasIncompleteApply">완료되지 못한 이전 적용이 있는지(있으면 가져오기를 막는다).</param>
+    /// <param name="newProjectFolders">(Phase 9_5-07) [새 폴더 만들기]의 기준 폴더·생성기. <c>null</c>이면 그 기능을 끈다.</param>
     public ImportWorkspaceViewModel(
         FileLogger logger,
         Func<string?> importFilePicker,
@@ -127,8 +137,10 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         Func<string, string, bool> confirmDialog,
         Func<string> snapshotRootProvider,
         Func<string?> codexHomeProvider,
-        Func<bool> hasIncompleteApply)
+        Func<bool> hasIncompleteApply,
+        NewProjectFolderOptions? newProjectFolders = null)
     {
+        _newFolders = newProjectFolders;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _importFilePicker = importFilePicker ?? throw new ArgumentNullException(nameof(importFilePicker));
         _projectPathPicker = projectPathPicker ?? throw new ArgumentNullException(nameof(projectPathPicker));
@@ -149,6 +161,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         CancelApplyCommand = new RelayCommand(() => _applyCancellation?.Cancel(), () => State == ImportWorkspaceState.Applying);
         RetryCommand = new RelayCommand(() => _ = ReanalyzeAsync(), () => CanRetry);
         ShowInListCommand = new RelayCommand(() => Close(showInList: true), () => State == ImportWorkspaceState.Result && ImportedThreadIds.Count > 0);
+        ChangeNewFolderBaseCommand = new RelayCommand(ChangeNewFolderBase, () => CanCreateFolders && CanEditSelection);
     }
 
     // ── 테스트용 seam(InternalsVisibleTo App.Tests). 제품 기본값은 실제 동작이다. ──────────────────
@@ -191,6 +204,12 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     /// <summary>현재 Preview(테스트 확인용).</summary>
     internal ImportPreview? CurrentPreview => _preview;
+
+    /// <summary>(Phase 9_5-07) 오늘 날짜("가져온 대화 yyyy-MM-dd" 이름용). 테스트가 고정할 수 있게 둔다.</summary>
+    internal Func<DateTime> Now { get; set; } = static () => DateTime.Now;
+
+    /// <summary>이 화면에서 앱이 만든 폴더 중 아직 남아 있는 것(테스트 확인용).</summary>
+    internal IReadOnlyList<string> CreatedFolders => _createdFolders;
 
     // ── 상태 ─────────────────────────────────────────────────────────────
 
@@ -481,6 +500,9 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>[백업 가져오기]: 파일을 고르고, Codex가 꺼져 있으면 분석한다.</summary>
     public async Task OpenAsync()
     {
+        // Phase 9_5-09 — 다른 백업 파일로 화면을 다시 시작하면, 이전 화면에서 만들고 쓰지 않은 빈 폴더를 정리한다.
+        CleanupCreatedFolders(KeepFoldersUsedBySuccessfulApply());
+        _newFolderBase = null;
         ResetAnalysis();
         State = ImportWorkspaceState.Opening;
         string? path = _importFilePicker();
@@ -909,12 +931,25 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var decisions = new Dictionary<string, ProjectTargetDecision>(_choices.ProjectDecisions, StringComparer.Ordinal)
+        ApplyFolderDecision(key, folder, newProjectName: null);
+    }
+
+    /// <summary>
+    /// 폴더 결정을 적용한다([다른 폴더…]와 [새 폴더 만들기]가 같은 경로를 쓴다). 이 행에 이 화면이 만든 폴더가 있었고 이번에 다른 폴더로
+    /// 바뀌었으면, 바꾸기가 확정된 뒤 그 폴더가 비어 있을 때만 지운다(Phase 9_5-09).
+    /// </summary>
+    private void ApplyFolderDecision(string key, string folder, string? newProjectName)
+    {
+        _folderCreateErrors.Remove(key);
+        UpdateChoices(_choices! with
         {
-            [key] = ProjectTargetDecision.Folder(folder),
-        };
-        UpdateChoices(_choices with { ProjectDecisions = decisions });
+            ProjectDecisions = new Dictionary<string, ProjectTargetDecision>(_choices.ProjectDecisions, StringComparer.Ordinal)
+            {
+                [key] = ProjectTargetDecision.Folder(folder) with { NewProjectName = newProjectName },
+            },
+        });
         _logger.Info($"가져오기: 작업 폴더 지정. reason={_summary?.Projects.FirstOrDefault(p => p.ProjectKey == key)?.Target.Reason}");
+        ReleaseCreatedFolderOf(key, unlessSameAs: folder);
     }
 
     /// <summary>[원래대로]: 제안 목적지로 되돌린다.</summary>
@@ -929,7 +964,200 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         {
             [key] = ProjectTargetDecision.Suggested,
         };
+        _folderCreateErrors.Remove(key);
         UpdateChoices(_choices with { ProjectDecisions = decisions });
+        ReleaseCreatedFolderOf(key, unlessSameAs: null);
+    }
+
+    // ── Phase 9_5-07 ~ 09 [새 폴더 만들기] ─────────────────────────────────────
+
+    /// <summary>[새 폴더 만들기]를 쓸 수 있는지(기능이 켜져 있을 때).</summary>
+    public bool CanCreateFolders => _newFolders is not null;
+
+    /// <summary>지금 쓰는 새 폴더 기준 위치(설정값, 없으면 기본값 <c>문서\ChatGPT</c>).</summary>
+    public string? NewFolderBase => _newFolders is null ? null : _newFolderBase ??= _newFolders.LoadSavedBase() ?? _newFolders.DefaultBase();
+
+    /// <summary>"새 폴더 위치: …" 한 줄(사람이 읽는 경로 표기).</summary>
+    public string? NewFolderBaseText => NewFolderBase is { } basePath ? "새 폴더 위치: " + ImportTexts.DisplayPath(basePath) : null;
+
+    /// <summary>기준 폴더를 쓸 수 없을 때의 안내(없으면 <c>null</c>).</summary>
+    public string? NewFolderBaseError
+    {
+        get => _newFolderBaseError ?? (NewFolderBase is { } basePath ? ValidateNewFolderBase(basePath) : null);
+        private set => SetProperty(ref _newFolderBaseError, value);
+    }
+
+    /// <summary>[변경…]: 새 폴더 기준 위치를 고른다(기존 폴더 선택 대화상자). 쓸 수 없는 위치면 저장하지 않고 안내한다.</summary>
+    public RelayCommand ChangeNewFolderBaseCommand { get; }
+
+    private string? ValidateNewFolderBase(string basePath)
+        => NewProjectFolderService.ValidateBase(basePath, _codexHomeProvider(), _newFolders!.ProtectedRoots());
+
+    private void ChangeNewFolderBase()
+    {
+        if (_newFolders is null || !CanEditSelection)
+        {
+            return;
+        }
+
+        string? picked = _projectPathPicker();
+        if (string.IsNullOrWhiteSpace(picked))
+        {
+            return;
+        }
+
+        if (ValidateNewFolderBase(picked) is { } error)
+        {
+            NewFolderBaseError = error; // 기준 폴더는 바꾸지 않는다
+            _logger.Info("가져오기: 새 폴더 위치 변경 거부.");
+            return;
+        }
+
+        bool saved = _newFolders.SaveBase(picked);
+        _newFolderBase = picked;
+        NewFolderBaseError = saved ? null : "새 폴더 위치를 설정에 저장하지 못했습니다(이번 화면에서만 씁니다).";
+        OnPropertyChanged(nameof(NewFolderBase));
+        OnPropertyChanged(nameof(NewFolderBaseText));
+        _logger.Info($"가져오기: 새 폴더 위치 변경. saved={saved}");
+    }
+
+    /// <summary>행의 [새 폴더 만들기] 실패 안내(없으면 <c>null</c>).</summary>
+    internal string? FolderCreateErrorFor(string projectKey)
+        => _folderCreateErrors.TryGetValue(projectKey, out string? error) ? error : null;
+
+    /// <summary>
+    /// [새 폴더 만들기]: 기준 폴더 아래 원래 이름(정리한 이름)으로 새 폴더를 즉시 만들고, 그 폴더를 고른 것과 똑같이 처리한다(→ CreateNew).
+    /// 새 프로젝트 이름 칸에는 정리 전 원래 이름(앞뒤 공백 제거)을 넣는다. 실패하면 목적지를 바꾸지 않고 그 행에 안내한다.
+    /// </summary>
+    internal void CreateNewFolder(ImportProjectNodeViewModel node)
+    {
+        if (_newFolders is null || !CanEditSelection || node.ProjectKey is not { } key || _choices is null || _preview is null)
+        {
+            return;
+        }
+
+        string basePath = NewFolderBase!;
+        string originalName = OriginalFolderName(node);
+        NewProjectFolderResult created = ValidateNewFolderBase(basePath) is { } baseError
+            ? NewProjectFolderResult.Failed(baseError.TrimEnd('.'))
+            : _newFolders.CreateFolder(basePath, originalName);
+
+        if (!created.Success)
+        {
+            _folderCreateErrors[key] = $"폴더를 만들지 못했습니다({created.FailureReason}). [폴더 선택…]으로 직접 골라 주세요.";
+            node.Update(_summary!.Projects.First(p => p.ProjectKey == key));
+            _logger.Warning("가져오기: 새 폴더 만들기 실패.");
+            return;
+        }
+
+        string folder = created.FolderPath!;
+        _createdFolders.Add(folder);
+        ApplyFolderDecision(key, folder, originalName);
+        _createdFolderByProjectKey[key] = folder;
+        _logger.Info($"가져오기: 새 폴더 만듦. createdBase={created.CreatedBase} sessionFolders={_createdFolders.Count}");
+    }
+
+    /// <summary>
+    /// 새 폴더의 원래 이름: 백업 프로젝트 행은 백업 프로젝트 표시 이름. 백업 "기타 대화" 그룹은 지금 체크된 대화가 1개면 그 제목,
+    /// 0개나 여러 개면 "가져온 대화 yyyy-MM-dd"(이 PC 날짜). 앞뒤 공백은 지운다.
+    /// </summary>
+    private string OriginalFolderName(ImportProjectNodeViewModel node)
+    {
+        if (node.ProjectKey == ImportUserChoices.UncategorizedProjectKey)
+        {
+            List<ImportConversationNodeViewModel> included = node.Conversations.Where(c => c.Result.IsIncludedByUser).ToList();
+            return included.Count == 1
+                ? included[0].Title.Trim()
+                : "가져온 대화 " + Now().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        return node.DisplayName.Trim();
+    }
+
+    /// <summary>
+    /// 행의 목적지가 이 화면이 만든 폴더에서 다른 곳으로 바뀌었으면, 다른 행도 쓰지 않을 때 그 폴더를 (비어 있을 때만) 지운다.
+    /// </summary>
+    private void ReleaseCreatedFolderOf(string key, string? unlessSameAs)
+    {
+        if (!_createdFolderByProjectKey.TryGetValue(key, out string? previous) ||
+            (unlessSameAs is not null && string.Equals(previous, unlessSameAs, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        _createdFolderByProjectKey.Remove(key);
+        if (!_createdFolderByProjectKey.Values.Contains(previous, StringComparer.OrdinalIgnoreCase) && !IsFolderInAnyDecision(previous))
+        {
+            DeleteCreatedFolders([previous]);
+        }
+    }
+
+    private bool IsFolderInAnyDecision(string folder)
+        => _choices is not null && _choices.ProjectDecisions.Values.Any(d =>
+            !d.UseSuggestion && d.FolderPath is { } path && CanonicalPath.AreSameLocation(path, folder));
+
+    /// <summary>성공한 적용에 쓰인 폴더(새 프로젝트 루트 등). 성공이 아니면 빈 목록.</summary>
+    private IReadOnlyList<string> KeepFoldersUsedBySuccessfulApply()
+    {
+        if (_result?.Outcome != RestoreOutcome.Succeeded || _appliedPlan is not { } plan)
+        {
+            return [];
+        }
+
+        return plan.Projects
+            .Where(p => plan.UsesProjectTarget(p) && p.ResolvedTarget?.FolderPath is not null)
+            .Select(p => p.ResolvedTarget!.FolderPath!)
+            .ToList();
+    }
+
+    /// <summary>이 화면이 만든 폴더 중 <paramref name="keep"/>에 없는 것을 (비어 있을 때만) 지운다. 목록은 비운다.</summary>
+    private void CleanupCreatedFolders(IReadOnlyList<string> keep)
+    {
+        List<string> candidates = _createdFolders
+            .Where(folder => !keep.Any(k => CanonicalPath.AreSameLocation(k, folder)))
+            .ToList();
+        DeleteCreatedFolders(candidates);
+        _createdFolders.Clear();
+        _createdFolderByProjectKey.Clear();
+        _folderCreateErrors.Clear();
+    }
+
+    private void DeleteCreatedFolders(IReadOnlyList<string> folders)
+    {
+        int deleted = 0, kept = 0, failed = 0;
+        foreach (string folder in folders)
+        {
+            // 세 조건: 이 화면에서 앱이 만든 폴더(_createdFolders), 비재귀 삭제, 지우기 직전 비어 있음 재확인(TryDeleteIfEmpty).
+            if (!_createdFolders.Contains(folder, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (NewProjectFolderService.TryDeleteIfEmpty(folder, out bool error))
+            {
+                deleted++;
+            }
+            else if (error)
+            {
+                failed++;
+            }
+            else
+            {
+                kept++;
+            }
+
+            _createdFolders.RemoveAll(f => string.Equals(f, folder, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (failed > 0)
+        {
+            _logger.Warning($"가져오기: 만든 빈 폴더 정리 실패. failed={failed}");
+        }
+
+        if (deleted + kept > 0)
+        {
+            _logger.Info($"가져오기: 만든 폴더 정리. deleted={deleted} keptNotEmpty={kept}");
+        }
     }
 
     /// <summary>
@@ -1206,6 +1434,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     {
         bool changed = _result?.Outcome == RestoreOutcome.Succeeded;
         IReadOnlyList<string> highlight = showInList ? ImportedThreadIds : [];
+        CleanupCreatedFolders(KeepFoldersUsedBySuccessfulApply()); // Phase 9_5-09
         StopPolling();
         _analysisCancellation?.Cancel();
         ResetAnalysis();
@@ -1252,12 +1481,25 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         {
             project.ChooseFolderCommand.RaiseCanExecuteChanged();
             project.ResetFolderCommand.RaiseCanExecuteChanged();
+            project.CreateFolderCommand.RaiseCanExecuteChanged();
         }
+
+        ChangeNewFolderBaseCommand?.RaiseCanExecuteChanged();
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
+        // 앱 종료 중: 최선만 다한다(예외를 밖으로 내지 않는다, 종료를 막지 않는다).
+        try
+        {
+            CleanupCreatedFolders(KeepFoldersUsedBySuccessfulApply());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _logger.Warning($"가져오기: 종료 중 폴더 정리 실패. type={ex.GetType().Name}");
+        }
+
         DisposePreviewer();
         StopPolling();
         _analysisCancellation?.Cancel();

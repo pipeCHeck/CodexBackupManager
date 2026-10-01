@@ -152,7 +152,8 @@ public sealed class MainViewModel : ObservableObject
 
         _importWorkspace = new ImportWorkspaceViewModel(
             logger, importFilePicker ?? BackupFilePicker.PickOpenLocation, projectPathPicker ?? FolderPicker.PickProjectFolder,
-            _confirmDialog, _snapshotRootProvider, () => string.IsNullOrWhiteSpace(HomePath) ? null : HomePath, () => HasIncompleteApply);
+            _confirmDialog, _snapshotRootProvider, () => string.IsNullOrWhiteSpace(HomePath) ? null : HomePath, () => HasIncompleteApply,
+            NewProjectFolderOptions.ForSettings(settings, _snapshotRootProvider));
         _importWorkspace.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ImportWorkspaceViewModel.IsOpen))

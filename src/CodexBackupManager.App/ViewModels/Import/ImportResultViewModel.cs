@@ -67,7 +67,7 @@ public sealed class ImportResultViewModel
             case RestoreOutcome.Succeeded:
                 CountsText = $"새로 가져옴 {imported} · 이어받음 {updated} · 건너뜀 {skipped}" +
                              (summary.NewProjects.Count > 0 ? $" · 새 프로젝트 {summary.NewProjects.Count}" : string.Empty);
-                groups.AddRange(BuildSucceededGroups(plan, titles, localProjects));
+                groups.AddRange(BuildSucceededGroups(plan, summary, titles, localProjects));
                 ImportedThreadIds = plan.Conversations
                     .Where(c => c.IsSelected && c.PlannedAction is ImportPlannedAction.Import or ImportPlannedAction.Update)
                     .Select(c => c.ThreadId)
@@ -121,7 +121,7 @@ public sealed class ImportResultViewModel
     public IReadOnlyList<string> ImportedThreadIds { get; }
 
     private static IEnumerable<ImportResultGroup> BuildSucceededGroups(
-        ImportPlan plan, IReadOnlyDictionary<string, string> titles, ProjectDirectory localProjects)
+        ImportPlan plan, ImportSelectionSummary summary, IReadOnlyDictionary<string, string> titles, ProjectDirectory localProjects)
     {
         // Phase 9_5-05 — 새로 만든 프로젝트는 합쳐진 이름(같은 루트면 첫 번째)으로 보여준다(Planner와 같은 규칙).
         IReadOnlyList<NewProjectGroup> created = NewProjectGrouping.Group(plan.Projects
@@ -143,13 +143,34 @@ public sealed class ImportResultViewModel
                     ? $"→ '{localProjects.FindById(target.LinkDbProjectId)?.DisplayName ?? project.DisplayName}' 프로젝트 ({(target.FolderPath is { } folder ? ImportTexts.DisplayPath(folder) : string.Empty)})"
                     : "→ 기타 대화";
 
-            var items = group
-                .Select(c => new ImportResultItem(
-                    titles.TryGetValue(c.ThreadId, out string? t) ? t : ImportTexts.FallbackTitle(c.ThreadId),
-                    c.PlannedAction == ImportPlannedAction.Import ? "새로 가져옴" : "이어받음"))
+            string TitleOf(ImportPlanConversation c) => titles.TryGetValue(c.ThreadId, out string? t) ? t : ImportTexts.FallbackTitle(c.ThreadId);
+
+            // Phase 9_5-10 — 목적지(새 프로젝트/연결 프로젝트/기타 대화)로 실제로 들어가는 것은 새 대화뿐이다. 이어받은 대화는 이 PC에서
+            // 원래 있던 곳에 그대로 남으므로(연결 변경은 9_3) 목적지 아래에 두지 않고 실제 위치와 함께 따로 보여준다.
+            var imports = group.Where(c => c.PlannedAction == ImportPlannedAction.Import)
+                .Select(c => new ImportResultItem(TitleOf(c), "새로 가져옴"))
                 .ToList();
-            yield return new ImportResultGroup(header, destination, items);
+            var updates = group.Where(c => c.PlannedAction == ImportPlannedAction.Update)
+                .Select(c => new ImportResultItem(TitleOf(c), "이어받음 · " + CurrentLocationText(summary, c.ThreadId) + "(기존 위치 유지)"))
+                .ToList();
+
+            if (imports.Count > 0)
+            {
+                yield return new ImportResultGroup(header, destination, imports);
+            }
+
+            if (updates.Count > 0)
+            {
+                yield return new ImportResultGroup(header, "→ 기존 위치 유지", updates);
+            }
         }
+    }
+
+    private static string CurrentLocationText(ImportSelectionSummary summary, string threadId)
+    {
+        ImportSelectionConversation? conversation = summary.Conversations
+            .FirstOrDefault(c => string.Equals(c.ThreadId, threadId, StringComparison.OrdinalIgnoreCase));
+        return ImportTexts.LocalLocation(conversation?.Preview.LocalLocation) is { } location ? $"이 PC 위치: {location} " : string.Empty;
     }
 
     private static ImportResultGroup BuildCurrentLocationGroup(ImportSelectionSummary summary)

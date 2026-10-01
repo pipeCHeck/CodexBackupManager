@@ -94,6 +94,32 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
     }
 
     [Fact]
+    public async Task 새_폴더_만들기_버튼과_새_폴더_위치_줄을_바인딩_오류_없이_그린다()
+    {
+        // Phase 9_5-07/08 — 프로젝트 행과 기타 대화 그룹의 [새 폴더 만들기], 왼쪽 아래 "새 폴더 위치: … [변경…]", 실패 안내 줄.
+        _h.RemoveFromTarget(ImportWorkspaceHarness.Thread1);
+        string backup = await _h.ExportAsync();
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
+        ImportProjectNodeViewModel alpha = ws.Projects.First(p => p.Conversations.Any(c => c.ThreadId == ImportWorkspaceHarness.Thread1));
+        _h.CreateFolderOverride = (_, _) => CodexBackupManager.App.Services.NewProjectFolderResult.Failed("IOException");
+        alpha.CreateFolderCommand.Execute(null); // 실패 안내 줄도 함께 그린다
+        Assert.NotNull(alpha.FolderCreateError);
+
+        AssertRendersWithoutBindingErrors(ws, window =>
+        {
+            var buttons = Descendants<System.Windows.Controls.Button>(window)
+                .Where(b => Equals(b.Content, "새 폴더 만들기") && b.Visibility == Visibility.Visible)
+                .ToList();
+            Assert.Contains(buttons, b => ReferenceEquals(b.DataContext, alpha));
+            Assert.Contains(buttons, b => b.DataContext is ImportProjectNodeViewModel { ProjectKey: CodexBackupManager.Backup.Import.ImportUserChoices.UncategorizedProjectKey });
+
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == ws.NewFolderBaseText);
+            Assert.Contains(Descendants<System.Windows.Controls.Button>(window), b => Equals(b.Content, "변경…"));
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == alpha.FolderCreateError);
+        });
+    }
+
+    [Fact]
     public async Task Codex_대기와_실패_화면을_바인딩_오류_없이_그린다()
     {
         string backup = await _h.ExportAsync();

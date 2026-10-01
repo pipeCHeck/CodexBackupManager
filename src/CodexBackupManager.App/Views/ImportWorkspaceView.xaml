@@ -243,6 +243,7 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
               <RowDefinition Height="*" />
+              <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <!-- 검색 + 빠른 선택 -->
@@ -326,8 +327,14 @@
                                   Visibility="{Binding IsCreationOffered, Converter={StaticResource BoolToVisibility}}" />
                         <TextBlock Text="{Binding DecisionError}" Foreground="{StaticResource Bad}" FontSize="11" TextWrapping="Wrap"
                                    Visibility="{Binding DecisionError, Converter={StaticResource NullToCollapsed}}" />
+                        <TextBlock Text="{Binding FolderCreateError}" Foreground="{StaticResource Bad}" FontSize="11" TextWrapping="Wrap"
+                                   Visibility="{Binding FolderCreateError, Converter={StaticResource NullToCollapsed}}" />
                         <WrapPanel Margin="0,6,0,0" Visibility="{Binding IsFolderEditable, Converter={StaticResource BoolToVisibility}}">
                           <Button Content="{Binding ChooseFolderText}" Command="{Binding ChooseFolderCommand}" Style="{StaticResource SmallButton}" />
+                          <!-- Phase 9_5-07 — 아래 "새 폴더 위치"에 이 프로젝트 이름으로 빈 폴더를 만들고 바로 작업 폴더로 지정한다. -->
+                          <Button Content="새 폴더 만들기" Command="{Binding CreateFolderCommand}" Style="{StaticResource SmallButton}"
+                                  ToolTip="새 폴더 위치에 이 이름으로 빈 폴더를 만들고 작업 폴더로 지정합니다."
+                                  Visibility="{Binding ShowCreateFolder, Converter={StaticResource BoolToVisibility}}" />
                           <Button Content="원래대로" Command="{Binding ResetFolderCommand}" Style="{StaticResource SmallButton}"
                                   Visibility="{Binding IsFolderUserSelected, Converter={StaticResource BoolToVisibility}}" />
                           <Button Content="새로고침" Command="{Binding DataContext.ReanalyzeCommand, ElementName=Root}" Style="{StaticResource SmallButton}"
@@ -377,6 +384,18 @@
                 </HierarchicalDataTemplate>
               </TreeView.ItemTemplate>
             </TreeView>
+
+            <!-- Phase 9_5-08 — [새 폴더 만들기]가 폴더를 만드는 곳. [변경…]은 폴더 선택 대화상자이고 고르면 설정에 저장한다. -->
+            <StackPanel Grid.Row="2" Margin="0,8,0,0" Visibility="{Binding CanCreateFolders, Converter={StaticResource BoolToVisibility}}">
+              <DockPanel LastChildFill="True">
+                <Button DockPanel.Dock="Right" Content="변경…" Command="{Binding ChangeNewFolderBaseCommand}" Style="{StaticResource SmallButton}"
+                        AutomationProperties.Name="새 폴더 위치 변경" />
+                <TextBlock Text="{Binding NewFolderBaseText}" Style="{StaticResource Caption}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" ToolTip="{Binding NewFolderBase}" />
+              </DockPanel>
+              <TextBlock Text="{Binding NewFolderBaseError}" Foreground="{StaticResource Warn}" FontSize="11" TextWrapping="Wrap" Margin="0,3,0,0"
+                         Visibility="{Binding NewFolderBaseError, Converter={StaticResource NullToCollapsed}}" />
+            </StackPanel>
           </Grid>
         </Border>
 

@@ -157,6 +157,7 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
         Conversations = conversations;
         ChooseFolderCommand = new RelayCommand(() => _owner.ChooseFolder(this), () => CanChangeFolder);
         ResetFolderCommand = new RelayCommand(() => _owner.ResetFolder(this), () => IsFolderUserSelected && CanChangeFolder);
+        CreateFolderCommand = new RelayCommand(() => _owner.CreateNewFolder(this), () => CanChangeFolder && _owner.CanCreateFolders);
     }
 
     /// <summary>표시 이름.</summary>
@@ -309,6 +310,15 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
     /// <summary>[원래대로].</summary>
     public RelayCommand ResetFolderCommand { get; }
 
+    /// <summary>(Phase 9_5-07) [새 폴더 만들기].</summary>
+    public RelayCommand CreateFolderCommand { get; }
+
+    /// <summary>(Phase 9_5-07) [새 폴더 만들기] 버튼을 보여주는지(기능이 켜져 있고 폴더를 바꿀 수 있는 행).</summary>
+    public bool ShowCreateFolder => IsFolderEditable && _owner.CanCreateFolders;
+
+    /// <summary>(Phase 9_5-07) [새 폴더 만들기] 실패 안내(없으면 <c>null</c>).</summary>
+    public string? FolderCreateError => _project is { } p ? _owner.FolderCreateErrorFor(p.ProjectKey) : null;
+
     /// <summary>검색 필터로 보이는지.</summary>
     public bool IsVisible
     {
@@ -334,5 +344,6 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
         OnPropertyChanged(string.Empty); // 표시 속성 전부 다시 읽는다(값을 저장하지 않으므로 비용이 작다).
         ChooseFolderCommand.RaiseCanExecuteChanged();
         ResetFolderCommand.RaiseCanExecuteChanged();
+        CreateFolderCommand.RaiseCanExecuteChanged();
     }
 }

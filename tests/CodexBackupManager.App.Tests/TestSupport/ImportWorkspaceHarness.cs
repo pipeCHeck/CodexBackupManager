@@ -227,7 +227,8 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         Func<string?> filePicker,
         Func<string?>? folderPicker = null,
         Func<string, string, bool>? confirm = null,
-        Func<bool>? hasIncompleteApply = null)
+        Func<bool>? hasIncompleteApply = null,
+        NewProjectFolderOptions? newProjectFolders = null)
     {
         var workspace = new ImportWorkspaceViewModel(
             new FileLogger(Path.Combine(TestDir, "logs")),
@@ -236,10 +237,36 @@ internal sealed class ImportWorkspaceHarness : IDisposable
             confirm ?? ((_, _) => true),
             () => SnapshotRoot,
             () => TargetHome,
-            hasIncompleteApply ?? (() => false));
+            hasIncompleteApply ?? (() => false),
+            newProjectFolders ?? TestNewProjectFolders());
         Configure(workspace);
         return workspace;
     }
+
+    // ── Phase 9_5-2 [새 폴더 만들기] — 모두 temp(TestDir) 아래다. 사용자 문서 폴더에는 만들지 않는다. ─────────────
+
+    /// <summary>기본 새 폴더 위치(처음에는 없다 — 첫 만들기 때 생긴다).</summary>
+    public string DefaultNewFolderBase => Path.Combine(TestDir, "new-folder-base");
+
+    /// <summary>"설정 파일"에 저장된 새 폴더 위치(가짜 설정).</summary>
+    public string? SavedNewFolderBase { get; set; }
+
+    /// <summary>이 앱의 데이터 폴더 대역(기준 폴더 거부 대상).</summary>
+    public string AppDataRoot => Path.Combine(TestDir, "appdata");
+
+    /// <summary>폴더 생성기를 바꾼다(실패 재현용). <c>null</c>이면 실제 생성기.</summary>
+    public Func<string, string, NewProjectFolderResult>? CreateFolderOverride { get; set; }
+
+    public NewProjectFolderOptions TestNewProjectFolders() => new(
+        () => SavedNewFolderBase,
+        path =>
+        {
+            SavedNewFolderBase = path;
+            return true;
+        },
+        () => DefaultNewFolderBase,
+        () => [AppDataRoot, SnapshotRoot],
+        (basePath, name) => (CreateFolderOverride ?? NewProjectFolderService.Create)(basePath, name));
 
     public void Configure(ImportWorkspaceViewModel workspace)
     {
