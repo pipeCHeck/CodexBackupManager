@@ -151,7 +151,7 @@ public sealed class ImportResultViewModel
                 .Select(c => new ImportResultItem(TitleOf(c), "새로 가져옴"))
                 .ToList();
             var updates = group.Where(c => c.PlannedAction == ImportPlannedAction.Update)
-                .Select(c => new ImportResultItem(TitleOf(c), "이어받음 · " + CurrentLocationText(summary, c.ThreadId) + "(기존 위치 유지)"))
+                .Select(c => new ImportResultItem(TitleOf(c), ImportTexts.UpdatedResultText(CurrentLocation(summary, c.ThreadId))))
                 .ToList();
 
             if (imports.Count > 0)
@@ -166,12 +166,9 @@ public sealed class ImportResultViewModel
         }
     }
 
-    private static string CurrentLocationText(ImportSelectionSummary summary, string threadId)
-    {
-        ImportSelectionConversation? conversation = summary.Conversations
-            .FirstOrDefault(c => string.Equals(c.ThreadId, threadId, StringComparison.OrdinalIgnoreCase));
-        return ImportTexts.LocalLocation(conversation?.Preview.LocalLocation) is { } location ? $"이 PC 위치: {location} " : string.Empty;
-    }
+    private static ConversationLocalLocation? CurrentLocation(ImportSelectionSummary summary, string threadId)
+        => summary.Conversations
+            .FirstOrDefault(c => string.Equals(c.ThreadId, threadId, StringComparison.OrdinalIgnoreCase))?.Preview.LocalLocation;
 
     private static ImportResultGroup BuildCurrentLocationGroup(ImportSelectionSummary summary)
     {

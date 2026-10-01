@@ -78,6 +78,20 @@ public sealed class ImportTextsTests
         Assert.Null(ImportTexts.LocalLocation(null));
     }
 
+    [Fact]
+    public void 이어받은_대화_결과_문구는_괄호를_한_번만_쓰고_나머지는_가운뎃점으로_잇는다()
+    {
+        // 9_2-35 — "기타 대화 (보관됨) (기존 위치 유지)" 같은 괄호 겹침을 없앤다.
+        string archived = ImportTexts.UpdatedResultText(new ConversationLocalLocation(true, null, null, true));
+        string project = ImportTexts.UpdatedResultText(new ConversationLocalLocation(true, "db-1", "알파", false));
+        string missing = ImportTexts.UpdatedResultText(null);
+
+        Assert.Equal("이어받음 · 이 PC 위치: 기타 대화 (보관됨) · 기존 위치 유지", archived);
+        Assert.Equal("이어받음 · 이 PC 위치: 알파 프로젝트 · 기존 위치 유지", project);
+        Assert.Equal("이어받음 · 기존 위치 유지", missing);
+        Assert.All(new[] { archived, project, missing }, text => Assert.True(text.Count(ch => ch == '(') <= 1, text));
+    }
+
     private static ImportConversationPreview Conv(string id, RevisionRelation relation, string? title = null, bool compressed = false, bool selected = true, params string[] ancestors)
         => new(id, selected, title, relation, ImportConflictAnalyzer.Decide(relation), MetadataDifferences.None, [], null, null)
         {

@@ -152,6 +152,17 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         File.WriteAllText(file, existing.TrimEnd(lf) + lf + string.Join(lf, lines) + lf);
     }
 
+    /// <summary>원본 PC 대화의 이름(화면 제목)을 바꾼다 — fixture 대화 제목은 모두 같아서 검색 테스트가 하나를 구별할 때 쓴다.</summary>
+    public void SetSourceThreadName(string threadId, string name)
+    {
+        using SqliteConnection connection = Open(SourceHome);
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE threads SET name = $name, title = $name WHERE id = $id";
+        cmd.Parameters.AddWithValue("$name", name);
+        cmd.Parameters.AddWithValue("$id", threadId);
+        cmd.ExecuteNonQuery();
+    }
+
     /// <summary>대상 PC에서 대화를 지운다(행 + rollout 파일) — 가져오기에서 "새 대화"가 된다.</summary>
     public void RemoveFromTarget(params string[] threadIds)
     {

@@ -149,14 +149,17 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         _codexHomeProvider = codexHomeProvider ?? throw new ArgumentNullException(nameof(codexHomeProvider));
         _hasIncompleteApply = hasIncompleteApply ?? throw new ArgumentNullException(nameof(hasIncompleteApply));
 
-        RecheckCodexCommand = new RelayCommand(() => _ = RecheckCodexAsync(), () => State == ImportWorkspaceState.WaitingForCodexExit);
+        // Phase 9_2-34 — 종료 대기 화면에서는 가운데 [다시 확인]과 우측 상단 [다시 분석]이 같은 메서드(ReanalyzeAsync)를 부른다.
+        RecheckCodexCommand = new RelayCommand(() => _ = ReanalyzeAsync(), () => State == ImportWorkspaceState.WaitingForCodexExit);
         CancelAnalysisCommand = new RelayCommand(() => _analysisCancellation?.Cancel(), () => State == ImportWorkspaceState.Analyzing);
         ChooseOtherFileCommand = new RelayCommand(() => _ = OpenAsync(), () => State is ImportWorkspaceState.Failed);
         CloseCommand = new RelayCommand(() => Close(showInList: false), () => State is not (ImportWorkspaceState.Applying or ImportWorkspaceState.Analyzing or ImportWorkspaceState.Confirming or ImportWorkspaceState.Closed));
         SelectNewOnlyCommand = new RelayCommand(SelectNewOnly, () => CanEditSelection);
         SelectAllCommand = new RelayCommand(SelectAll, () => CanEditSelection);
         ClearAllCommand = new RelayCommand(ClearAll, () => CanEditSelection);
-        ReanalyzeCommand = new RelayCommand(() => _ = ReanalyzeAsync(), () => State is ImportWorkspaceState.Editing or ImportWorkspaceState.Result);
+        ReanalyzeCommand = new RelayCommand(
+            () => _ = ReanalyzeAsync(),
+            () => State is ImportWorkspaceState.Editing or ImportWorkspaceState.Result or ImportWorkspaceState.WaitingForCodexExit);
         ImportCommand = new RelayCommand(() => _ = ImportAsync(), () => CanImport);
         CancelApplyCommand = new RelayCommand(() => _applyCancellation?.Cancel(), () => State == ImportWorkspaceState.Applying);
         RetryCommand = new RelayCommand(() => _ = ReanalyzeAsync(), () => CanRetry);
@@ -349,7 +352,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>마지막 선택 요약.</summary>
     public ImportSelectionSummary? Summary => _summary;
 
-    /// <summary>검색어(제목 부분 일치). 표시만 바꾸고 선택은 유지한다.</summary>
+    /// <summary>검색어(대화 제목 또는 프로젝트 이름 부분 일치). 표시만 바꾸고 선택은 유지한다.</summary>
     public string SearchText
     {
         get => _searchText;
@@ -517,9 +520,10 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         await StartAnalysisIfCodexStoppedAsync().ConfigureAwait(true);
     }
 
-    private async Task RecheckCodexAsync() => await StartAnalysisIfCodexStoppedAsync().ConfigureAwait(true);
-
-    /// <summary>선택과 폴더 결정을 유지한 채 다시 분석한다([다시 분석], [새로고침], [다시 시도]).</summary>
+    /// <summary>
+    /// 선택과 폴더 결정을 유지한 채 다시 분석한다([다시 분석], [새로고침], [다시 시도], 종료 대기 화면의 [다시 확인]).
+    /// Codex가 아직 실행 중이면 종료 대기 화면에 남는다. 첫 열기에서 온 대기면 선택이 아직 없어(<see cref="Choices"/> = <c>null</c>) 기본 선택으로 시작한다.
+    /// </summary>
     private async Task ReanalyzeAsync()
     {
         if (_backupFilePath is null)
@@ -1216,14 +1220,28 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
             bool anyVisible = false;
             foreach (ImportConversationNodeViewModel conversation in project.Conversations)
             {
-                bool matches = query.Length == 0 || conversation.Title.Contains(query, StringComparison.CurrentCultureIgnoreCase);
-                bool shown = project.IsDependencyGroup ? matches && conversation.IsAutoIncluded : matches;
+                bool shown = IsShownBySearch(query, project.DisplayName, project.IsDependencyGroup, conversation.Title, conversation.IsAutoIncluded);
                 conversation.IsVisible = shown;
                 anyVisible |= shown;
             }
 
             project.IsVisible = project.IsDependencyGroup ? anyVisible : anyVisible || query.Length == 0;
         }
+    }
+
+    /// <summary>
+    /// 검색어(앞뒤 공백 제거됨)로 대화 한 줄을 보일지(표시 규칙만, 선택은 바꾸지 않는다). Phase 9_2-33 — 백업 프로젝트 그룹 이름이
+    /// 맞으면 그 그룹의 대화를 모두 보인다. "필요한 원본 대화(자동 포함)" 그룹은 이름으로 찾지 않고, 실제로 자동 포함된 대화만 보인다.
+    /// </summary>
+    internal static bool IsShownBySearch(string query, string projectName, bool isDependencyGroup, string title, bool isAutoIncluded)
+    {
+        bool titleMatches = query.Length == 0 || title.Contains(query, StringComparison.CurrentCultureIgnoreCase);
+        if (isDependencyGroup)
+        {
+            return titleMatches && isAutoIncluded;
+        }
+
+        return titleMatches || projectName.Contains(query, StringComparison.CurrentCultureIgnoreCase);
     }
 
     /// <summary>트리 선택이 바뀌었을 때(View가 부른다).</summary>

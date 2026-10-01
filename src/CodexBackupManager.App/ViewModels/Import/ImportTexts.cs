@@ -147,6 +147,15 @@ public static class ImportTexts
     }
 
     /// <summary>
+    /// 결과 화면의 이어받은 대화 한 줄. 괄호는 위치 안의 "(보관됨)" 한 번만 쓰고 나머지는 " · "로 잇는다(Phase 9_2-35).
+    /// 예: "이어받음 · 이 PC 위치: 기타 대화 (보관됨) · 기존 위치 유지".
+    /// </summary>
+    public static string UpdatedResultText(ConversationLocalLocation? location)
+        => LocalLocation(location) is { } text
+            ? $"이어받음 · 이 PC 위치: {text} · 기존 위치 유지"
+            : "이어받음 · 기존 위치 유지";
+
+    /// <summary>
     /// 작업 폴더 상태 문구(설계 §7.3, 9_2는 CreateNew 대신 A안 문구). "사용자가 지정함"은 실제로 연결될 때만 쓴다.
     /// </summary>
     /// <param name="target">목적지.</param>

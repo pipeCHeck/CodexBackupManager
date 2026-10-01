@@ -248,9 +248,9 @@
 
             <!-- 검색 + 빠른 선택 -->
             <WrapPanel>
-              <TextBox Width="170" Margin="0,0,8,4" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                       Style="{StaticResource SearchBox}" Tag="대화 제목 검색"
-                       ToolTip="제목으로 찾기(선택은 그대로 유지됩니다)" AutomationProperties.Name="대화 검색" />
+              <TextBox Width="240" Margin="0,0,8,4" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                       Style="{StaticResource SearchBox}" Tag="대화 제목 또는 프로젝트 이름 검색"
+                       ToolTip="대화 제목이나 프로젝트 이름으로 찾기(선택은 그대로 유지됩니다)" AutomationProperties.Name="대화 또는 프로젝트 검색" />
               <Button Content="새 대화만" Command="{Binding SelectNewOnlyCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
               <Button Content="전체 선택" Command="{Binding SelectAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
               <Button Content="모두 해제" Command="{Binding ClearAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />

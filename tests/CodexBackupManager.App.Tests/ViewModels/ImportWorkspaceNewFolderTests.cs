@@ -328,7 +328,7 @@ public sealed class ImportWorkspaceNewFolderTests : IDisposable
         ImportResultGroup kept = ws.Result.Groups.Single(g => g.Destination == "→ 기존 위치 유지");
         ImportResultItem update = Assert.Single(kept.Items);
         Assert.StartsWith("이어받음 · 이 PC 위치: 기타 대화", update.Text);
-        Assert.EndsWith("(기존 위치 유지)", update.Text);
+        Assert.Equal("이어받음 · 이 PC 위치: 기타 대화 (보관됨) · 기존 위치 유지", update.Text); // 9_2-35: 괄호는 한 번만
 
         Assert.IsType<string>(ReadThreadColumn(_h.TargetHome, Thread2, "project_id"));
         Assert.IsType<DBNull>(ReadThreadColumn(_h.TargetHome, Thread3, "project_id")); // 이어받은 대화는 옮기지 않는다

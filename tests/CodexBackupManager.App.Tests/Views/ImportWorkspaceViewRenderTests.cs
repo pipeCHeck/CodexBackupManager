@@ -276,9 +276,13 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         {
             // 9_2-24 자리 표시 문구: 비어 있으면 보이고, 입력하면 사라진다.
             System.Windows.Controls.TextBox search = Descendants<System.Windows.Controls.TextBox>(window)
-                .Single(t => Equals(t.Tag, "대화 제목 검색"));
+                .Single(t => Equals(t.Tag, "대화 제목 또는 프로젝트 이름 검색")); // 9_2-33: 프로젝트 이름도 찾는다
             var placeholder = (FrameworkElement)search.Template.FindName("Placeholder", search);
             Assert.Equal(Visibility.Visible, placeholder.Visibility);
+            var unconstrained = new System.Windows.Controls.TextBlock { Text = (string)search.Tag, FontSize = search.FontSize, FontFamily = search.FontFamily, Padding = new Thickness(2, 0, 0, 0) };
+            unconstrained.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            Assert.True(unconstrained.DesiredSize.Width + search.Padding.Left + search.Padding.Right + 2 <= search.ActualWidth,
+                $"자리 표시 문구 폭 {unconstrained.DesiredSize.Width} > 검색 칸 {search.ActualWidth}");
             search.Text = "fixture";
             Pump();
             Assert.Equal(Visibility.Collapsed, placeholder.Visibility);
