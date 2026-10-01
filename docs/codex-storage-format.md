@@ -566,3 +566,4 @@ Codex Home 아래 어떤 파일도 생성/수정/삭제하지 않는다.
 - 결론
   - 이 앱이 DB `project_id`만 바꿔도 되는 대화: 배정이 없고 projectless도 아닌 대화(이 앱이 가져온 대화, 예: "Inspect Airp flight project")
   - 배정이나 projectless에 들어 있는 대화: Desktop이 global-state 기록을 우선할 수 있다(검증 안 됨). 9_3 V1에서는 옮기지 않는다
+- (9_4-1 점검 추가) `thread_history_1.sqlite`에서 `thread_id` 컬럼을 가진 테이블은 `thread_turns`, `thread_items`, `thread_history_projection_state`, `thread_realtime_items` 4개다(그 밖에 `_sqlx_migrations`).
