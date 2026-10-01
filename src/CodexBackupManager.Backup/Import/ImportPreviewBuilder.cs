@@ -102,6 +102,11 @@ public static class ImportPreviewBuilder
             conversationPreviews[conversation.ThreadId] = conversationPreview with
             {
                 LocalLocation = ResolveLocalLocation(conversation.ThreadId, localByThreadId, localGroupByThreadId, localCatalog.ProjectDirectory),
+                LocalDbProjectId = localByThreadId.TryGetValue(conversation.ThreadId, out ConversationEntry? localEntry) && !string.IsNullOrWhiteSpace(localEntry.Row.ProjectId)
+                    ? localEntry.Row.ProjectId
+                    : null,
+                LocalCwd = localEntry?.Row.Cwd,
+                DesktopPlacement = ResolveDesktopPlacement(conversation.ThreadId, localCatalog.ThreadPlacement),
                 IsCompressedRollout = HasCompressedRollout(conversation.ThreadId, backupCatalog.Chains),
                 RequiredAncestorThreadIds = ResolveAncestors(conversation.ThreadId, backupCatalog.Chains),
             };
@@ -157,6 +162,22 @@ public static class ImportPreviewBuilder
         {
             LocalProjectDirectory = localCatalog.ProjectDirectory,
         };
+    }
+
+    /// <summary>(Phase 9_3-00) Desktop global-state 기록 여부. 파일을 믿을 수 없으면 Unavailable.</summary>
+    internal static DesktopPlacementStatus ResolveDesktopPlacement(string threadId, DesktopThreadPlacement placement)
+    {
+        if (!placement.IsAvailable)
+        {
+            return DesktopPlacementStatus.Unavailable;
+        }
+
+        if (placement.AssignedThreadIds.Contains(threadId))
+        {
+            return DesktopPlacementStatus.Assigned;
+        }
+
+        return placement.ProjectlessThreadIds.Contains(threadId) ? DesktopPlacementStatus.Projectless : DesktopPlacementStatus.NotRecorded;
     }
 
     private static ConversationLocalLocation ResolveLocalLocation(

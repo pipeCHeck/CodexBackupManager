@@ -66,11 +66,19 @@ public sealed class ImportResultViewModel
         {
             case RestoreOutcome.Succeeded:
                 CountsText = $"새로 가져옴 {imported} · 이어받음 {updated} · 건너뜀 {skipped}" +
+                             (plan.Relinks.Count > 0 ? $" · 옮김 {plan.Relinks.Count}" : string.Empty) +
                              (summary.NewProjects.Count > 0 ? $" · 새 프로젝트 {summary.NewProjects.Count}" : string.Empty);
                 groups.AddRange(BuildSucceededGroups(plan, summary, titles, localProjects));
+                if (BuildRelinkGroup(plan, summary, titles, localProjects) is { } relinkGroup)
+                {
+                    groups.Add(relinkGroup);
+                }
+
                 ImportedThreadIds = plan.Conversations
                     .Where(c => c.IsSelected && c.PlannedAction is ImportPlannedAction.Import or ImportPlannedAction.Update)
                     .Select(c => c.ThreadId)
+                    .Concat(plan.Relinks.Select(r => r.ThreadId))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 break;
 
@@ -150,7 +158,8 @@ public sealed class ImportResultViewModel
             var imports = group.Where(c => c.PlannedAction == ImportPlannedAction.Import)
                 .Select(c => new ImportResultItem(TitleOf(c), "새로 가져옴"))
                 .ToList();
-            var updates = group.Where(c => c.PlannedAction == ImportPlannedAction.Update)
+            // Phase 9_3-04 — 이어받고 옮기기도 한 대화는 "기존 위치 유지"가 아니다. 아래 "프로젝트 옮기기" 묶음에서 보여준다.
+            var updates = group.Where(c => c.PlannedAction == ImportPlannedAction.Update && !IsRelinked(plan, c.ThreadId))
                 .Select(c => new ImportResultItem(TitleOf(c), ImportTexts.UpdatedResultText(CurrentLocation(summary, c.ThreadId))))
                 .ToList();
 
@@ -164,6 +173,34 @@ public sealed class ImportResultViewModel
                 yield return new ImportResultGroup(header, "→ 기존 위치 유지", updates);
             }
         }
+    }
+
+    private static bool IsRelinked(ImportPlan plan, string threadId)
+        => plan.Relinks.Any(r => string.Equals(r.ThreadId, threadId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// (Phase 9_3-04) "옮김: 기타 대화 → 'Alpha'"(새 프로젝트면 "→ 새로 만든 프로젝트 '이름'"). 이어받기도 한 대화는 "이어받음 · 옮김: …".
+    /// </summary>
+    private static ImportResultGroup? BuildRelinkGroup(
+        ImportPlan plan, ImportSelectionSummary summary, IReadOnlyDictionary<string, string> titles, ProjectDirectory localProjects)
+    {
+        if (plan.Relinks.Count == 0)
+        {
+            return null;
+        }
+
+        var items = new List<ImportResultItem>();
+        foreach (ImportPlanRelink relink in plan.Relinks)
+        {
+            string title = titles.TryGetValue(relink.ThreadId, out string? t) ? t : ImportTexts.FallbackTitle(relink.ThreadId);
+            string from = ImportTexts.LocalLocation(CurrentLocation(summary, relink.ThreadId)) ?? "기타 대화";
+            string to = ImportTexts.RelinkDestination(summary, relink.TargetProjectKey, localProjects, created: true);
+            bool updated = plan.Conversations.Any(c =>
+                string.Equals(c.ThreadId, relink.ThreadId, StringComparison.OrdinalIgnoreCase) && c.PlannedAction == ImportPlannedAction.Update);
+            items.Add(new ImportResultItem(title, (updated ? "이어받음 · " : string.Empty) + $"옮김: {from} → {to}"));
+        }
+
+        return new ImportResultGroup("프로젝트 옮기기", null, items);
     }
 
     private static ConversationLocalLocation? CurrentLocation(ImportSelectionSummary summary, string threadId)

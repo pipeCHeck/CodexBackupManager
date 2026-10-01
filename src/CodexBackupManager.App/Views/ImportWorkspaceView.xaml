@@ -380,6 +380,15 @@
                           <TextBlock Text="{Binding RowLocationText}" Style="{StaticResource Caption}" FontSize="10"
                                      TextTrimming="CharacterEllipsis" ToolTip="{Binding RowLocationText}"
                                      Visibility="{Binding RowLocationText, Converter={StaticResource NullToCollapsed}}" />
+                          <!-- Phase 9_3-01 — 이미 있는 대화를 이 백업 프로젝트의 목적지로 옮기기(가져오기 체크와 따로, 기본 해제).
+                               옮길 수 없으면 흐린 체크와 이유 한 줄(툴팁 아님). -->
+                          <CheckBox Content="{Binding RelinkLabel}" IsChecked="{Binding IsRelinkChecked, Mode=TwoWay}"
+                                    IsEnabled="{Binding IsRelinkEnabled}" FontSize="11" Margin="0,2,0,0"
+                                    AutomationProperties.Name="{Binding RelinkLabel}"
+                                    Visibility="{Binding IsRelinkVisible, Converter={StaticResource BoolToVisibility}}" />
+                          <TextBlock Text="{Binding RelinkReasonText}" Style="{StaticResource Caption}" FontSize="10" TextWrapping="Wrap"
+                                     Margin="18,0,0,0"
+                                     Visibility="{Binding RelinkReasonText, Converter={StaticResource NullToCollapsed}}" />
                         </StackPanel>
                         <Border Grid.Column="2" Style="{StaticResource BadgeBorder}" VerticalAlignment="Center"
                                 ToolTip="{Binding DisabledReason}">

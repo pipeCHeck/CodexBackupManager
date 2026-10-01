@@ -102,8 +102,9 @@ public static class RestoreOperationPlanner
 
         // Phase 9_5a-03 — 새 프로젝트는 Desktop 사이드바(global-state 레거시 저장소)에도 기록한다. 지금 파일이 게이트를 통과해야 하고,
         // 그 바이트의 해시를 계획에 고정한다(Snapshot·트랜잭션 안·쓰기 직전에 다시 비교해 계획 뒤 변경을 거부한다).
+        // Phase 9_3-06 — 연결 변경이 있으면 프로젝트를 만들지 않아도 같은 게이트와 해시 고정을 한다(계획 뒤 Desktop 배정 변경 감지).
         string? globalStateSha256 = null;
-        if (projectCreates.Count > 0)
+        if (projectCreates.Count > 0 || plan.Relinks.Count > 0)
         {
             if (!CanonicalPath.TryCreate(codexHomePath, out CanonicalPath? home, out _))
             {
@@ -114,10 +115,19 @@ public static class RestoreOperationPlanner
                 Path.Combine(codexHomePath, CodexHomeLayout.GlobalStateFileName), home!);
             if (!desktop.IsSupported)
             {
-                return Reject($"Codex 데스크톱 앱 상태 파일이 확인한 형태와 달라 새 프로젝트를 만들 수 없습니다(사유: {desktop.Failure}).");
+                return Reject($"Codex 데스크톱 앱 상태 파일이 확인한 형태와 달라 새 프로젝트를 만들거나 대화를 옮길 수 없습니다(사유: {desktop.Failure}).");
             }
 
             globalStateSha256 = desktop.Sha256Hex;
+        }
+
+        // Phase 9_3-02 — 연결 변경. fresh 카탈로그로 후보 조건을 다시 본다(배정에 들어감, 위치가 계획과 다름, 보관됨이면 거부 — 쓰기 0).
+        // 내용이 바뀌었는지(다르게 이어졌는지)는 Preflight가 옮길 대화의 로컬 revision으로 이미 확인했다.
+        var relinkRejections = new List<string>();
+        List<PlannedThreadProjectLink> projectLinks = PlanRelinks(plan, freshLocalCatalog, createByProjectKey, relinkRejections);
+        if (relinkRejections.Count > 0)
+        {
+            return new RestoreOperationPlanResult(null, relinkRejections);
         }
 
         BackupReader reader = pinnedBackup.Reader;
@@ -187,6 +197,7 @@ public static class RestoreOperationPlanner
         {
             ProjectCreates = projectCreates,
             GlobalStateExpectedSha256 = globalStateSha256,
+            ThreadProjectLinks = projectLinks,
         };
         return new RestoreOperationPlanResult(restorePlan, []);
     }
@@ -553,6 +564,13 @@ public static class RestoreOperationPlanner
 
         foreach (NewProjectGroup group in NewProjectGrouping.Group(targets))
         {
+            // Phase 9_5-11 — 백업 "기타 대화" 그룹으로는 프로젝트를 만들지 않는다(Selection이 이미 막지만 Planner도 거부한다).
+            if (group.ProjectKeys.Contains(ImportUserChoices.UncategorizedProjectKey))
+            {
+                rejections.Add("백업의 기타 대화로는 새 프로젝트를 만들지 않습니다.");
+                continue;
+            }
+
             if (group.Name.Length == 0)
             {
                 rejections.Add("새 프로젝트 이름이 비어 있습니다.");
@@ -581,6 +599,81 @@ public static class RestoreOperationPlanner
         }
 
         return (creates, byKey);
+    }
+
+    /// <summary>(Phase 9_3-02) 옮길 대화가 지금(fresh)도 옮길 수 있는 상태인지 다시 보고, 목적지 DB ID·cwd를 정한다.</summary>
+    internal static List<PlannedThreadProjectLink> PlanRelinks(
+        ImportPlan plan, CodexCatalog freshLocalCatalog, IReadOnlyDictionary<string, PlannedProjectCreate> createByProjectKey, List<string> rejections)
+    {
+        var links = new List<PlannedThreadProjectLink>();
+        if (plan.Relinks.Count == 0)
+        {
+            return links;
+        }
+
+        Dictionary<string, ConversationEntry> localById = freshLocalCatalog.AllConversations
+            .GroupBy(e => e.ThreadId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        DesktopThreadPlacement placement = freshLocalCatalog.ThreadPlacement;
+
+        foreach (ImportPlanRelink relink in plan.Relinks)
+        {
+            string label = Redact(relink.ThreadId);
+            if (!localById.TryGetValue(relink.ThreadId, out ConversationEntry? local))
+            {
+                rejections.Add($"{label}: 옮길 대화가 이 PC에 없습니다.");
+                continue;
+            }
+
+            if (local.Archived)
+            {
+                rejections.Add($"{label}: 옮길 대화가 보관되었습니다.");
+                continue;
+            }
+
+            if (!placement.IsAvailable)
+            {
+                rejections.Add($"{label}: Codex 데스크톱 앱 상태 파일을 확인하지 못해 옮기지 않습니다.");
+                continue;
+            }
+
+            if (placement.AssignedThreadIds.Contains(relink.ThreadId) || placement.ProjectlessThreadIds.Contains(relink.ThreadId))
+            {
+                rejections.Add($"{label}: Codex 데스크톱 앱이 이 대화의 위치를 따로 기록하게 되어 옮기지 않습니다.");
+                continue;
+            }
+
+            string? currentProjectId = string.IsNullOrWhiteSpace(local.Row.ProjectId) ? null : local.Row.ProjectId;
+            if (!string.Equals(currentProjectId, relink.ExpectedProjectId, StringComparison.Ordinal) ||
+                !string.Equals(local.Row.Cwd, relink.ExpectedCwd, StringComparison.Ordinal))
+            {
+                rejections.Add($"{label}: 미리보기 이후 이 대화의 위치가 바뀌었습니다.");
+                continue;
+            }
+
+            ImportPlanProject? project = plan.Projects.FirstOrDefault(p => ImportUserChoices.ProjectKeyOf(p.ProjectId) == relink.TargetProjectKey);
+            switch (project?.ResolvedTarget)
+            {
+                case { Kind: ProjectTargetKind.CreateNew } when createByProjectKey.TryGetValue(relink.TargetProjectKey, out PlannedProjectCreate? create):
+                    links.Add(new PlannedThreadProjectLink(relink.ThreadId, relink.ExpectedProjectId, relink.ExpectedCwd, create.NewProjectId, create.RootPathDisplay));
+                    break;
+                case { Kind: ProjectTargetKind.LinkExisting, LinkDbProjectId: { Length: > 0 } dbId, FolderPath: { Length: > 0 } folder }
+                    when freshLocalCatalog.ProjectDirectory.FindById(dbId)?.DbProjectId == dbId:
+                    if (string.Equals(currentProjectId, dbId, StringComparison.Ordinal))
+                    {
+                        rejections.Add($"{label}: 이미 그 프로젝트에 있습니다.");
+                        break;
+                    }
+
+                    links.Add(new PlannedThreadProjectLink(relink.ThreadId, relink.ExpectedProjectId, relink.ExpectedCwd, dbId, folder));
+                    break;
+                default:
+                    rejections.Add($"{label}: 옮길 목적지 프로젝트를 확정할 수 없습니다.");
+                    break;
+            }
+        }
+
+        return links;
     }
 
     private static string Sha256Hex(string value)

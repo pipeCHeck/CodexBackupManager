@@ -151,6 +151,13 @@ public static class CodexCatalogBuilder
             warnings.Add("프로젝트 목록을 만들 수 없어 프로젝트 연결 정보 없이 계속합니다.");
         }
 
+        // Phase 9_5a-01 / 9_3-00 — Desktop 상태 파일 게이트(읽기 전용). 새 프로젝트 만들기와 대화 옮기기가 함께 쓴다.
+        GlobalStateProjectGate.Result desktop = GlobalStateProjectGate.Check(
+            Path.Combine(root, CodexHomeLayout.GlobalStateFileName), installation.Home);
+        DesktopThreadPlacement placement = desktop.IsSupported && projectGraph is not null
+            ? new DesktopThreadPlacement(true, projectGraph.AllAssignedThreadIds, projectGraph.ProjectlessThreadIds)
+            : DesktopThreadPlacement.Unavailable;
+
         // Phase 9_5-03 — 새 프로젝트를 만들 수 있는 스키마인지(읽기 전용 PRAGMA). 목록을 만들지 못했으면(위 경고) 만들지 않는다.
         // Phase 9_5a-01 — Desktop 사이드바에도 보이게 레거시 저장소에 기록할 수 있는 global-state인지도 본다(읽기 전용). 아니면 만들지 않는다.
         if (directoryBuilt)
@@ -159,8 +166,6 @@ public static class CodexCatalogBuilder
             ProjectCreationSupport support = ProjectCreationSchemaGate.ToSupport(gate);
             if (support == ProjectCreationSupport.Supported)
             {
-                GlobalStateProjectGate.Result desktop = GlobalStateProjectGate.Check(
-                    Path.Combine(root, CodexHomeLayout.GlobalStateFileName), installation.Home);
                 if (!desktop.IsSupported)
                 {
                     support = ProjectCreationSupport.DesktopStateUnsupported;
@@ -181,6 +186,7 @@ public static class CodexCatalogBuilder
         return new CodexCatalog(projects, allConversations, chains, warnings, DateTimeOffset.UtcNow, stats)
         {
             ProjectDirectory = projectDirectory,
+            ThreadPlacement = placement,
         };
     }
 

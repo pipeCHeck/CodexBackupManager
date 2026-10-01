@@ -192,7 +192,8 @@ public static class TestCodexHomeBuilder
         string codexHome,
         IReadOnlyList<LegacyProject> legacyProjects,
         IReadOnlyDictionary<string, string>? threadAssignments = null,
-        IReadOnlyDictionary<string, string>? legacyToDbProjectIds = null)
+        IReadOnlyDictionary<string, string>? legacyToDbProjectIds = null,
+        IReadOnlyList<string>? projectlessThreadIds = null)
     {
         var localProjects = new Dictionary<string, object>();
         foreach (LegacyProject project in legacyProjects)
@@ -212,6 +213,7 @@ public static class TestCodexHomeBuilder
             ["local-projects"] = localProjects,
             ["project-order"] = legacyProjects.Select(p => p.Id).ToArray(),
             ["thread-project-assignments"] = assignments,
+            ["projectless-thread-ids"] = projectlessThreadIds ?? [],
             ["app-server-projects-migration-by-host"] = new Dictionary<string, object>
             {
                 [hostKey] = new { version = 1, projectsMigrated = true, threadAssignmentsMigrated = false },

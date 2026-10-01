@@ -96,7 +96,8 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
     [Fact]
     public async Task 새_폴더_만들기_버튼과_새_폴더_위치_줄을_바인딩_오류_없이_그린다()
     {
-        // Phase 9_5-07/08 — 프로젝트 행과 기타 대화 그룹의 [새 폴더 만들기], 왼쪽 아래 "새 폴더 위치: … [변경…]", 실패 안내 줄.
+        // Phase 9_5-07/08 — 프로젝트 행의 [새 폴더 만들기], 왼쪽 아래 "새 폴더 위치: … [변경…]", 실패 안내 줄.
+        // Phase 9_5-11 — 백업 "기타 대화" 그룹 행에는 폴더 버튼·이름 칸이 없고 안내 문구가 보인다.
         _h.RemoveFromTarget(ImportWorkspaceHarness.Thread1);
         string backup = await _h.ExportAsync();
         ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
@@ -111,7 +112,14 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
                 .Where(b => Equals(b.Content, "새 폴더 만들기") && b.Visibility == Visibility.Visible)
                 .ToList();
             Assert.Contains(buttons, b => ReferenceEquals(b.DataContext, alpha));
-            Assert.Contains(buttons, b => b.DataContext is ImportProjectNodeViewModel { ProjectKey: CodexBackupManager.Backup.Import.ImportUserChoices.UncategorizedProjectKey });
+            Assert.DoesNotContain(
+                Descendants<System.Windows.Controls.Control>(window),
+                c => c.IsVisible &&
+                     c.DataContext is ImportProjectNodeViewModel { ProjectKey: CodexBackupManager.Backup.Import.ImportUserChoices.UncategorizedProjectKey } &&
+                     (c is System.Windows.Controls.Button { Content: "새 폴더 만들기" or "폴더 선택…" or "다른 폴더…" or "원래대로" } ||
+                      c is System.Windows.Controls.TextBox || c is System.Windows.Controls.CheckBox { Content: string }));
+            Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window),
+                t => t.IsVisible && t.Text == CodexBackupManager.App.ViewModels.Import.ImportTexts.BackupUncategorizedGroupStatus);
 
             Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == ws.NewFolderBaseText);
             Assert.Contains(Descendants<System.Windows.Controls.Button>(window), b => Equals(b.Content, "변경…"));
@@ -140,6 +148,49 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
             // 9_2-37: 백업 파일 자체의 문제 → 가운데 [다시 분석] 없음(우측 상단 버튼은 꺼짐).
             Assert.All(Descendants<System.Windows.Controls.Button>(window).Where(b => Equals(b.Content, "다시 분석")),
                 b => Assert.False(b.IsVisible && b.IsEnabled));
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task 옮기기_체크와_옮길_수_없는_이유를_바인딩_오류_없이_그린다(bool desktopAssigned)
+    {
+        // Phase 9_3-01 — 원본 PC에서 Thread2를 Alpha로 배정해 내보내고, 대상 PC의 등록 폴더를 Alpha의 작업 폴더로 고른다.
+        _h.AssignSourceThreadToAlpha(ImportWorkspaceHarness.Thread2);
+        string folder = _h.NewFolder("work");
+        _h.RegisterTargetProject("019a0000-0000-7000-8000-0000000000e1", "작업 프로젝트", folder);
+        if (desktopAssigned)
+        {
+            string host = ImportWorkspaceHarness.HostKeyJson(_h.TargetHome);
+            File.WriteAllText(ImportWorkspaceHarness.GlobalStatePath(_h.TargetHome),
+                "{\"local-projects\":{},\"project-order\":[],\"thread-project-assignments\":{\"" + ImportWorkspaceHarness.Thread2 + "\":{\"projectKind\":\"local\",\"projectId\":\"x\"}}," +
+                "\"app-server-project-id-by-legacy-project-id-by-host\":{" + host + ":{}},\"app-server-projects-migration-by-host\":{" + host +
+                ":{\"version\":1,\"projectsMigrated\":true,\"threadAssignmentsMigrated\":false}}}");
+        }
+
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(ImportWorkspaceHarness.Thread2), folderPicker: () => folder);
+        ws.Projects.First(p => p.Conversations.Any(c => c.ThreadId == ImportWorkspaceHarness.Thread2)).ChooseFolderCommand.Execute(null);
+        ImportConversationNodeViewModel node = ws.Projects.SelectMany(p => p.Conversations).Single(c => c.ThreadId == ImportWorkspaceHarness.Thread2);
+        node.IsRelinkChecked = true;
+
+        AssertRendersWithoutBindingErrors(ws, window =>
+        {
+            foreach (System.Windows.Controls.TreeViewItem item in Descendants<System.Windows.Controls.TreeViewItem>(window))
+            {
+                item.IsExpanded = true;
+            }
+
+            window.UpdateLayout();
+            Pump();
+            System.Windows.Controls.CheckBox relink = Descendants<System.Windows.Controls.CheckBox>(window)
+                .Single(c => Equals(c.Content, "📁 이 프로젝트로 옮기기"));
+            Assert.True(relink.IsVisible);
+            Assert.Equal(!desktopAssigned, relink.IsEnabled);
+            Assert.Equal(!desktopAssigned, relink.IsChecked);
+            bool reasonShown = Descendants<System.Windows.Controls.TextBlock>(window)
+                .Any(t => t.IsVisible && t.Text == ImportTexts.RelinkDesktopRecorded);
+            Assert.Equal(desktopAssigned, reasonShown);
         });
     }
 

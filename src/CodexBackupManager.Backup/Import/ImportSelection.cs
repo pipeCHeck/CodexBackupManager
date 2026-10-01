@@ -29,6 +29,40 @@ public enum ImportUnselectableReason
     DependencyOnly = 5,
 }
 
+/// <summary>
+/// (Phase 9_3-00) 이 PC에 이미 있는 대화를 그 백업 프로젝트의 목적지로 옮길 수 있는지("📁 이 프로젝트로 옮기기").
+/// <see cref="Available"/>만 고를 수 있다. Desktop* 세 가지는 흐린 체크와 이유를 보여주고, 나머지는 체크를 숨긴다.
+/// </summary>
+public enum RelinkStatus
+{
+    /// <summary>옮길 수 있다.</summary>
+    Available = 0,
+
+    /// <summary>해당 없음(이 PC에 없음·새 대화·백업에 원본으로만 있음) — 숨김.</summary>
+    NotApplicable = 1,
+
+    /// <summary>이 PC에서 보관된 대화 — 숨김.</summary>
+    Archived = 2,
+
+    /// <summary>양쪽이 다르게 이어졌거나 확인할 수 없는 대화(Diverged/Unverifiable) — 숨김.</summary>
+    RelationNotAllowed = 3,
+
+    /// <summary>목적지가 기타 대화이거나 결정 오류가 있다(9_5-11로 백업 "기타 대화" 그룹은 항상 여기) — 숨김.</summary>
+    TargetNotProject = 4,
+
+    /// <summary>이미 그 프로젝트에 있다 — 숨김.</summary>
+    AlreadyThere = 5,
+
+    /// <summary>Codex Desktop이 <c>thread-project-assignments</c>에 위치를 따로 기록했다 — 흐림 + 이유.</summary>
+    DesktopAssigned = 6,
+
+    /// <summary>Codex Desktop이 <c>projectless-thread-ids</c>에 기록했다 — 흐림 + 이유.</summary>
+    DesktopProjectless = 7,
+
+    /// <summary>Codex Desktop 상태 파일을 읽지 못했거나 9_5a 게이트에 실패했다 — 흐림 + 이유.</summary>
+    DesktopStateUnavailable = 8,
+}
+
 /// <summary>쓸 것이 0개인 이유.</summary>
 public enum ImportNothingToWriteReason
 {
@@ -88,6 +122,12 @@ public sealed record ImportSelectionConversation(
 
     /// <summary>이번 가져오기에서 실제로 다루는 대화인지(포함 + 자동 포함 조상).</summary>
     public bool IsInClosure => IsIncludedByUser || IsAutoIncludedAncestor;
+
+    /// <summary>(Phase 9_3-00) 목적지로 옮길 수 있는지.</summary>
+    public RelinkStatus Relink { get; init; } = RelinkStatus.NotApplicable;
+
+    /// <summary>(Phase 9_3-01) 사용자가 "📁 이 프로젝트로 옮기기"를 골랐고 옮길 수 있는지.</summary>
+    public bool IsRelinkSelected { get; init; }
 }
 
 /// <summary><see cref="ImportSelection.Compute"/> 결과(요약).</summary>
@@ -127,7 +167,10 @@ public sealed record ImportSelectionSummary(
     /// </summary>
     public IReadOnlyList<NewProjectGroup> NewProjects { get; init; } = [];
 
-    /// <summary>쓸 것(Import + Update)이 0개인지.</summary>
+    /// <summary>(Phase 9_3-01) 이번에 프로젝트를 옮길 대화 수.</summary>
+    public int RelinkCount { get; init; }
+
+    /// <summary>쓸 것(Import + Update + 연결 변경)이 0개인지.</summary>
     public bool HasNothingToWrite => NothingToWriteReason != ImportNothingToWriteReason.None;
 
     /// <summary>
@@ -258,7 +301,8 @@ public static class ImportSelection
             }
         }
 
-        // 5) 대화별 최종 동작.
+        // 5) 대화별 최종 동작 + (Phase 9_3) 연결 변경.
+        var relinkRequested = new HashSet<string>(choices.RelinkThreadIds, StringComparer.OrdinalIgnoreCase);
         var results = new List<ImportSelectionConversation>(ordered.Count);
         foreach ((ImportConversationPreview conversation, ImportSelectionProject? project) in ordered)
         {
@@ -268,9 +312,26 @@ public static class ImportSelection
                 ? (conversation.PlannedAction, conversation.Relation == RevisionRelation.LocalAhead ? ImportSkipReason.LocalAhead : ImportSkipReason.None)
                 : (ImportPlannedAction.Skip, ExcludedSkipReason(conversation));
 
+            RelinkStatus relink = project is null ? RelinkStatus.NotApplicable : GetRelinkStatus(conversation, project.Resolution);
+            bool relinkRequestedHere = relinkRequested.Remove(conversation.ThreadId);
+            bool relinkSelected = relinkRequestedHere && relink == RelinkStatus.Available;
+            if (relinkRequestedHere && !relinkSelected)
+            {
+                warnings.Add($"옮길 수 없는 대화({conversation.ThreadId}, {relink})는 옮기기 선택에서 무시했습니다.");
+            }
+
             results.Add(new ImportSelectionConversation(
                 conversation, project?.ProjectKey, project?.Target, action, skipReason,
-                GetUnselectableReason(conversation), isIncluded, isAuto));
+                GetUnselectableReason(conversation), isIncluded, isAuto)
+            {
+                Relink = relink,
+                IsRelinkSelected = relinkSelected,
+            });
+        }
+
+        foreach (string unknown in relinkRequested.OrderBy(id => id, StringComparer.OrdinalIgnoreCase))
+        {
+            warnings.Add($"백업에 없는 대화({unknown})는 옮기기 선택에서 무시했습니다.");
         }
 
         // 6) 요약.
@@ -281,13 +342,15 @@ public static class ImportSelection
         int uncategorizedImports = results.Count(r =>
             r.FinalAction == ImportPlannedAction.Import && (r.Target is null || r.Target.Kind == ProjectTargetKind.Uncategorized));
 
-        ImportNothingToWriteReason nothingReason = importCount + updateCount > 0
+        int relinkCount = results.Count(r => r.IsRelinkSelected);
+        ImportNothingToWriteReason nothingReason = importCount + updateCount + relinkCount > 0
             ? ImportNothingToWriteReason.None
             : DescribeNothingToWrite(results, included.Count);
 
         // 7) (Phase 9_5-01) 새로 만들 프로젝트: 새로 가져올 대화가 실제로 들어가는 CreateNew 목적지만, 같은 루트는 하나로.
+        //    (Phase 9_3-05) 옮길 대화가 가는 CreateNew 목적지도 만든다. 이어받기만 가는 목적지로는 여전히 만들지 않는다.
         var importingKeys = new HashSet<string>(
-            results.Where(r => r.FinalAction == ImportPlannedAction.Import && r.ProjectKey is not null).Select(r => r.ProjectKey!),
+            results.Where(r => (r.FinalAction == ImportPlannedAction.Import || r.IsRelinkSelected) && r.ProjectKey is not null).Select(r => r.ProjectKey!),
             StringComparer.Ordinal);
         IReadOnlyList<NewProjectGroup> newProjects = NewProjectGrouping.Group(
             projects.Where(p => importingKeys.Contains(p.ProjectKey) && p.Resolution.Error is null).Select(p => (p.ProjectKey, p.Target)));
@@ -308,6 +371,56 @@ public static class ImportSelection
             blocking, warnings, nothingReason, hasBlockedInClosure, hasDivergedInClosure)
         {
             NewProjects = newProjects,
+            RelinkCount = relinkCount,
+        };
+    }
+
+    /// <summary>
+    /// (Phase 9_3-00) 이 대화를 그 백업 프로젝트의 목적지로 옮길 수 있는지(순수 규칙, 설계 §6 "9_3 V1 확정 규칙").
+    /// </summary>
+    /// <param name="conversation">백업 대화(이 PC 값과 Desktop 기록은 Preview에 있다).</param>
+    /// <param name="resolution">그 백업 프로젝트의 목적지 판정(사용자 결정 반영).</param>
+    public static RelinkStatus GetRelinkStatus(ImportConversationPreview conversation, ProjectTargetResolution resolution)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentNullException.ThrowIfNull(resolution);
+
+        if (!conversation.IsSelected || conversation.LocalLocation is not { ExistsLocally: true } location)
+        {
+            return RelinkStatus.NotApplicable;
+        }
+
+        if (location.Archived)
+        {
+            return RelinkStatus.Archived;
+        }
+
+        if (conversation.Relation is not (RevisionRelation.Identical or RevisionRelation.IncomingAhead or RevisionRelation.LocalAhead))
+        {
+            return conversation.Relation == RevisionRelation.New ? RelinkStatus.NotApplicable : RelinkStatus.RelationNotAllowed;
+        }
+
+        ProjectTarget target = resolution.Target;
+        bool isProject = resolution.Error is null &&
+                         (target.Kind == ProjectTargetKind.CreateNew ||
+                          (target.Kind == ProjectTargetKind.LinkExisting && !string.IsNullOrWhiteSpace(target.LinkDbProjectId)));
+        if (!isProject)
+        {
+            return RelinkStatus.TargetNotProject;
+        }
+
+        if (target.Kind == ProjectTargetKind.LinkExisting &&
+            string.Equals(conversation.LocalDbProjectId, target.LinkDbProjectId, StringComparison.Ordinal))
+        {
+            return RelinkStatus.AlreadyThere;
+        }
+
+        return conversation.DesktopPlacement switch
+        {
+            DesktopPlacementStatus.NotRecorded => RelinkStatus.Available,
+            DesktopPlacementStatus.Assigned => RelinkStatus.DesktopAssigned,
+            DesktopPlacementStatus.Projectless => RelinkStatus.DesktopProjectless,
+            _ => RelinkStatus.DesktopStateUnavailable,
         };
     }
 
@@ -349,12 +462,21 @@ public static class ImportSelection
         ProjectTarget suggested = project.SuggestedTarget ?? SuggestionFromMapping(project, directory);
         ProjectTargetResolution Suggestion(string? error) => new(suggested, project.PathMapping.Status, error);
 
+        // Phase 9_5-11 — 백업의 "기타 대화" 그룹은 서로 관계없는 채팅 모음이라 폴더(=한 프로젝트)를 지정하지 않는다. 목적지는 항상
+        // Uncategorized(NotApplicable)이고, 폴더·새 프로젝트 이름 결정은 결정 오류로 거부한다(화면은 그런 결정을 만들지 않는다).
+        if (project.ProjectId is null)
+        {
+            ProjectTarget none = ProjectTarget.Uncategorized(ProjectTargetReason.NotApplicable, null);
+            return !decision.UseSuggestion || decision.NewProjectName is not null
+                ? new ProjectTargetResolution(none, ProjectPathMappingStatus.NotApplicable, UncategorizedGroupDecisionError)
+                : new ProjectTargetResolution(none, ProjectPathMappingStatus.NotApplicable, null);
+        }
+
         if (decision.UseSuggestion)
         {
             return ApplyCreationDecision(suggested, project.PathMapping.Status, decision);
         }
 
-        // Phase 9_5-01 — 백업의 "기타 대화" 그룹(원본 루트 없음)에도 폴더를 지정할 수 있다(설계 §3.7).
         if (string.IsNullOrWhiteSpace(decision.FolderPath))
         {
             return Suggestion("폴더가 지정되지 않았습니다.");
@@ -397,6 +519,9 @@ public static class ImportSelection
             ? new ProjectTargetResolution(target, status, EmptyProjectNameError)
             : new ProjectTargetResolution(target with { NewProjectName = name }, status, null);
     }
+
+    /// <summary>(Phase 9_5-11) 백업 "기타 대화" 그룹에 폴더·이름 결정이 들어왔을 때의 결정 오류.</summary>
+    public const string UncategorizedGroupDecisionError = "백업의 기타 대화에는 작업 폴더를 지정할 수 없습니다.";
 
     /// <summary>새 프로젝트 이름이 비었을 때의 결정 오류.</summary>
     public const string EmptyProjectNameError = "새 프로젝트 이름을 입력해 주세요.";

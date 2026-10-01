@@ -147,10 +147,17 @@ public static class ImportPlanBuilder
             });
         }
 
+        // Phase 9_3-02 — 연결 변경(계획 시점의 이 PC 값을 고정한다. Apply 때 다르면 거부한다).
+        List<ImportPlanRelink> relinks = selection.Conversations
+            .Where(c => c.IsRelinkSelected && c.ProjectKey is not null)
+            .Select(c => new ImportPlanRelink(c.ThreadId, c.Preview.LocalDbProjectId, c.Preview.LocalCwd, c.ProjectKey!))
+            .ToList();
+
         return new ImportPlan(
             sourceIdentity, projects, conversations, selection.HasBlockingIssues, selection.HasUnresolvedDivergence)
         {
             UserChoices = choices,
+            Relinks = relinks,
         };
     }
 

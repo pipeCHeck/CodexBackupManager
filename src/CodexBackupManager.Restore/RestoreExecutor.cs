@@ -434,19 +434,24 @@ public static class RestoreExecutor
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var reusedProjectIds = new HashSet<string>(StringComparer.Ordinal);
         var legacyAdditions = new List<GlobalStateProjectAddition>();
+
+        // Phase 9_5a-03 / 9_3-06 — 새 프로젝트나 연결 변경이 있으면 트랜잭션 안에서 global-state 게이트와 계획 시점 해시를 다시 본다
+        // (계획 뒤 바뀌었으면 — 예: Desktop 배정이 생겼으면 — 쓰지 않는다 → Rollback).
+        if (opPlan.ProjectCreates.Count > 0 || opPlan.ThreadProjectLinks.Count > 0)
+        {
+            string? globalStateError = GlobalStateProjectStep.CheckUnchanged(codexHomePath, opPlan.GlobalStateExpectedSha256);
+            if (globalStateError is not null)
+            {
+                throw new InvalidOperationException(globalStateError);
+            }
+        }
+
         if (opPlan.ProjectCreates.Count > 0)
         {
             var gate = SchemaCompatibilityChecker.CheckProjectCreation(connection, transaction);
             if (!gate.IsSupported)
             {
                 throw new InvalidOperationException("state DB 프로젝트 스키마가 확인한 형태와 달라 새 프로젝트를 만들지 않습니다.");
-            }
-
-            // Phase 9_5a-03 — 트랜잭션 안에서 global-state 게이트와 계획 시점 해시를 다시 본다(계획 뒤 바뀌었으면 만들지 않는다 → Rollback).
-            string? globalStateError = GlobalStateProjectStep.CheckUnchanged(codexHomePath, opPlan.GlobalStateExpectedSha256);
-            if (globalStateError is not null)
-            {
-                throw new InvalidOperationException(globalStateError);
             }
 
             foreach (PlannedProjectCreate create in opPlan.ProjectCreates)
@@ -482,6 +487,21 @@ public static class RestoreExecutor
         if (opPlan.ProjectCreates.Count > 0)
         {
             faultInjection.Check(RestoreFaultInjectionPoint.AfterThreadInsert);
+        }
+
+        // Phase 9_3-03 — 이미 있는 대화 옮기기(프로젝트 생성 뒤, thread INSERT와 같은 단계). 영향 행이 1이 아니면 예외 → Rollback.
+        foreach (PlannedThreadProjectLink link in opPlan.ThreadProjectLinks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PlannedThreadProjectLink effective = effectiveProjectIds.TryGetValue(link.NewProjectId, out string? actualId)
+                ? link with { NewProjectId = actualId }
+                : link;
+            StateDatabaseWriter.RelinkThread(connection, transaction, effective);
+        }
+
+        if (opPlan.ThreadProjectLinks.Count > 0)
+        {
+            faultInjection.Check(RestoreFaultInjectionPoint.AfterThreadProjectLink);
         }
 
         foreach (PlannedThreadRolloutPathUpdate update in opPlan.ThreadRolloutPathUpdates)

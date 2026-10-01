@@ -200,6 +200,30 @@ public static class RestoreValidator
             }
         }
 
+        // Phase 9_3-04 — 옮긴 대화: 행의 project_id·cwd가 새 값이고, fresh 카탈로그에서 그 대화가 목적지 프로젝트 그룹 아래 있다.
+        foreach (PlannedThreadProjectLink link in executedPlan.ThreadProjectLinks)
+        {
+            ConversationEntry? entry = catalog.AllConversations
+                .FirstOrDefault(e => string.Equals(e.ThreadId, link.ThreadId, StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+            {
+                return Fail(link.ThreadId, "옮긴 대화를 다시 읽을 수 없습니다.");
+            }
+
+            if (!string.Equals(entry.Row.ProjectId, link.NewProjectId, StringComparison.Ordinal) ||
+                !string.Equals(entry.Row.Cwd, link.NewCwd, StringComparison.Ordinal))
+            {
+                return Fail(link.ThreadId, "옮긴 대화의 project_id 또는 cwd가 계획과 다릅니다.");
+            }
+
+            string? expectedGroupId = catalog.ProjectDirectory.FindById(link.NewProjectId)?.PrimaryId;
+            ProjectEntry? group = catalog.Projects.FirstOrDefault(p => p.Conversations.Any(c => string.Equals(c.ThreadId, link.ThreadId, StringComparison.OrdinalIgnoreCase)));
+            if (expectedGroupId is null || group is null || !string.Equals(group.ProjectId, expectedGroupId, StringComparison.Ordinal))
+            {
+                return Fail(link.ThreadId, "옮긴 대화가 목적지 프로젝트 그룹 아래에 나타나지 않습니다.");
+            }
+        }
+
         if (legacyProjectsAdded is { Count: > 0 } &&
             GlobalStateProjectStep.VerifyMerged(catalog.ProjectDirectory, legacyProjectsAdded) is { } mergeError)
         {

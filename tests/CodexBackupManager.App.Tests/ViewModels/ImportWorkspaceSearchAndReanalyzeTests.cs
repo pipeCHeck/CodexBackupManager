@@ -145,16 +145,13 @@ public sealed class ImportWorkspaceSearchAndReanalyzeTests : IDisposable
     {
         _h.RemoveFromTarget(Thread1, Thread2, Thread3);
         string alphaFolder = _h.NewFolder("alpha-folder");
-        string otherFolder = _h.NewFolder("other-folder");
-        var folders = new Queue<string>([alphaFolder, otherFolder]);
-        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(), folderPicker: () => folders.Dequeue());
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(), folderPicker: () => alphaFolder);
 
+        // 9_5-11 — 백업 "기타 대화" 그룹에는 폴더를 지정하지 않으므로 폴더·이름·만들지 않기는 모두 Alpha에서 고른다.
         ImportProjectNodeViewModel alpha = ProjectOf(ws, Thread1);
         alpha.ChooseFolderCommand.Execute(null);
         alpha.NewProjectName = "유지할 이름";
-        ImportProjectNodeViewModel other = UncategorizedGroup(ws);
-        other.ChooseFolderCommand.Execute(null);
-        other.DeclineCreation = true;
+        alpha.DeclineCreation = true;
         Node(ws, Thread3).IsChecked = false;
         ImportUserChoices before = ws.Choices!;
 
@@ -183,12 +180,9 @@ public sealed class ImportWorkspaceSearchAndReanalyzeTests : IDisposable
         alpha = ProjectOf(ws, Thread1);
         Assert.True(alpha.IsFolderUserSelected);
         Assert.Equal(alphaFolder, alpha.Target!.FolderPath);
-        Assert.Equal("유지할 이름", alpha.NewProjectName);
-        Assert.True(alpha.IsCreatingProject);
-        other = UncategorizedGroup(ws);
-        Assert.True(other.IsFolderUserSelected);
-        Assert.True(other.DeclineCreation);
-        Assert.False(other.IsCreatingProject);
+        Assert.Equal("유지할 이름", alpha.NewProjectName);   // 이름 결정 유지
+        Assert.True(alpha.DeclineCreation);                  // 만들지 않기 유지
+        Assert.False(alpha.IsCreatingProject);
         Assert.True(ws.CanImport);
         Assert.Equal(0, ws.PlanBuildCount);
     }

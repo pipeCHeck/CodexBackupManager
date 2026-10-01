@@ -75,6 +75,9 @@ public sealed partial class ProjectCreateApplyTests : IDisposable
 
     private static string RolloutFileName(string threadId) => $"rollout-{Ts:yyyy-MM-ddTHH-mm-ss}-{threadId}.jsonl";
 
+    /// <summary>(Phase 9_3-T1) 다음 Export 때 원본 rollout 뒤에 붙일 줄(이어받기 시나리오용, thread ID → 줄들).</summary>
+    private readonly Dictionary<string, string> _sourceExtraLines = new(StringComparer.OrdinalIgnoreCase);
+
     private string NewFolder(string label)
     {
         string path = Path.Combine(_root, $"{label}-{Guid.NewGuid():N}");
@@ -92,7 +95,7 @@ public sealed partial class ProjectCreateApplyTests : IDisposable
         foreach (SourceConversation c in conversations)
         {
             string aFile = Path.Combine(_pcADir, RolloutFileName(c.ThreadId));
-            File.WriteAllText(aFile, RolloutContent(c.ThreadId));
+            File.WriteAllText(aFile, RolloutContent(c.ThreadId) + (_sourceExtraLines.TryGetValue(c.ThreadId, out string? extra) ? extra : string.Empty));
             entries.Add(new ConversationEntry
             {
                 ThreadId = c.ThreadId,
@@ -277,20 +280,44 @@ public sealed partial class ProjectCreateApplyTests : IDisposable
     }
 
     [Fact]
-    public void T1_백업의_기타_대화_그룹에도_폴더를_지정해_새_프로젝트를_만든다()
+    public void T1_백업의_기타_대화_그룹에는_폴더를_지정할_수_없고_기타_대화로_가져온다()
     {
+        // Phase 9_5-11 — 폴더 결정은 결정 오류라 Plan을 만들지 않는다. 기본 선택이면 프로젝트 없이 기타 대화로 들어간다.
         string folder = NewFolder("for-uncategorized");
         string threadId = NewId();
         string backupPath = Export(new SourceConversation(threadId, null, "기타 대화", null));
         ImportPreview preview = Preview(backupPath);
         Assert.Equal(ProjectTargetReason.NotApplicable, TargetOf(preview, null).Reason);
 
-        ImportPlan plan = Plan(preview, backupPath, Choices(preview, new Dictionary<string, ProjectTargetDecision> { [ImportUserChoices.UncategorizedProjectKey] = ProjectTargetDecision.Folder(folder) }));
-        AssertSucceeded(Apply(plan));
+        ImportUserChoices withFolder = Choices(preview, new Dictionary<string, ProjectTargetDecision> { [ImportUserChoices.UncategorizedProjectKey] = ProjectTargetDecision.Folder(folder) });
+        Assert.Contains(ImportSelection.Compute(preview, withFolder).BlockingReasons, r => r.Contains(ImportSelection.UncategorizedGroupDecisionError, StringComparison.Ordinal));
+        Assert.Null(ImportPlanBuilder.Build(preview, backupPath, withFolder));
 
-        string newId = (string)Assert.Single(Rows("SELECT id FROM projects"))[0]!;
-        Assert.Equal(newId, Column(threadId, "project_id"));
-        Assert.Equal(CanonicalPath.Create(folder).Display, Column(threadId, "cwd"));
+        AssertSucceeded(Apply(Plan(preview, backupPath, ImportUserChoices.CreateDefault(preview))));
+        Assert.Equal(0, Count("projects"));
+        Assert.Null(Column(threadId, "project_id"));
+    }
+
+    [Fact]
+    public void T1_Planner도_백업의_기타_대화_그룹으로는_프로젝트를_만들지_않는다()
+    {
+        // 9_5-11 방어: Selection을 거치지 않고 만든 CreateNew 목적지라도 Planner가 거부한다.
+        string folder = NewFolder("forged");
+        string backupPath = Export(new SourceConversation(NewId(), null, "기타 대화", null));
+        ImportPreview preview = Preview(backupPath);
+        ImportPlan plan = Plan(preview, backupPath, ImportUserChoices.CreateDefault(preview));
+        ImportPlan forged = plan with
+        {
+            Projects = plan.Projects.Select(p => p with
+            {
+                ResolvedTarget = ProjectTarget.Create(ProjectTargetReason.UserSelectedUnregistered, CanonicalPath.Create(folder).Display, "가짜"),
+            }).ToList(),
+        };
+        var rejections = new List<string>();
+        (IReadOnlyList<PlannedProjectCreate> creates, _) = RestoreOperationPlanner.PlanProjectCreates(forged, rejections);
+
+        Assert.Empty(creates);
+        Assert.Contains(rejections, r => r.Contains("기타 대화", StringComparison.Ordinal));
     }
 
     [Fact]

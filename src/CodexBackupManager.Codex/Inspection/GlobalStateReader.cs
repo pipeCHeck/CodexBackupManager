@@ -158,7 +158,13 @@ public static class GlobalStateReader
     public sealed record ProjectGraph(
         IReadOnlyDictionary<string, LocalProjectInfo> LocalProjects,
         IReadOnlyDictionary<string, string> ThreadProjectAssignments,
-        IReadOnlySet<string> ProjectlessThreadIds);
+        IReadOnlySet<string> ProjectlessThreadIds)
+    {
+        /// <summary>
+        /// (Phase 9_3-00) <c>thread-project-assignments</c>의 키 전부(projectKind·값 형식과 무관). 이 앱이 옮기지 않을 대화를 가리는 데 쓴다.
+        /// </summary>
+        public IReadOnlySet<string> AllAssignedThreadIds { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+    }
 
     /// <summary>
     /// 프로젝트↔대화 그래프를 읽는다. 실패하면 <c>null</c>.
@@ -222,11 +228,13 @@ public static class GlobalStateReader
             }
 
             var assignments = new Dictionary<string, string>(StringComparer.Ordinal);
+            var allAssigned = new HashSet<string>(StringComparer.Ordinal);
             if (root.TryGetProperty("thread-project-assignments", out JsonElement tpa) &&
                 tpa.ValueKind == JsonValueKind.Object)
             {
                 foreach (JsonProperty prop in tpa.EnumerateObject())
                 {
+                    allAssigned.Add(prop.Name);
                     if (prop.Value.ValueKind != JsonValueKind.Object)
                     {
                         continue;
@@ -253,7 +261,7 @@ public static class GlobalStateReader
                 }
             }
 
-            return new ProjectGraph(localProjects, assignments, projectless);
+            return new ProjectGraph(localProjects, assignments, projectless) { AllAssignedThreadIds = allAssigned };
         }
         catch (JsonException ex)
         {

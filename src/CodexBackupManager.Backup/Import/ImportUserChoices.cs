@@ -43,7 +43,7 @@ public sealed record ProjectTargetDecision(string? FolderPath, string? NewProjec
 /// 정하고, <see cref="ImportPlanBuilder.Build(ImportPreview,string,ImportUserChoices,System.Threading.CancellationToken)"/>가
 /// 같은 규칙으로 Plan을 만든다.
 /// </para>
-/// <para>설계 §5.2의 <c>RelinkThreadIds</c>는 Phase 9_3에서 추가한다.</para>
+/// <para>(Phase 9_3-01) <see cref="RelinkThreadIds"/>: 이 PC에 이미 있는 대화 중 그 백업 프로젝트의 목적지로 옮길 대화(기본 빈 집합).</para>
 /// </remarks>
 /// <param name="IncludedThreadIds">
 /// 사용자가 체크한 대화(백업 manifest에서 선택된 대화만 의미가 있다). 조상은 넣지 않아도 자동 포함된다.
@@ -61,6 +61,12 @@ public sealed record ImportUserChoices(
     /// Codex 프로젝트 ID(UUID 형식)와 겹치지 않도록 공백과 괄호를 넣은 고정 문자열이다.
     /// </summary>
     public const string UncategorizedProjectKey = "(uncategorized)";
+
+    /// <summary>
+    /// (Phase 9_3-01) 이 PC에 이미 있는 대화 중 그 백업 프로젝트의 목적지(등록 프로젝트 또는 새 프로젝트)로 옮길 대화. 기본은 빈 집합이고
+    /// 빈 집합이면 9_3 이전과 같은 결과다. 옮길 수 없는 대화가 들어 있으면 무시하고 경고를 남긴다(<see cref="ImportSelection.GetRelinkStatus"/>).
+    /// </summary>
+    public IReadOnlySet<string> RelinkThreadIds { get; init; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>백업 프로젝트 ID → 프로젝트 키. "기타 대화"(<c>null</c>)는 <see cref="UncategorizedProjectKey"/>.</summary>
     public static string ProjectKeyOf(string? backupProjectId) => backupProjectId ?? UncategorizedProjectKey;

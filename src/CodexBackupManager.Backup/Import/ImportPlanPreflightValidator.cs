@@ -93,13 +93,17 @@ public static class ImportPlanPreflightValidator
             currentLocalByThreadId[entry.ThreadId] = true;
         }
 
+        // Phase 9_3-02 — 옮길 대화는 가져오기에서 뺐더라도(이미 같음 등) 이 PC 내용이 미리보기 이후 바뀌지 않았는지 확인한다
+        // (바뀌었으면 — 예: 그 사이 이어 써서 다르게 이어졌으면 — 옮기지 않고 다시 분석하게 한다).
+        var relinkIds = new HashSet<string>(plan.Relinks.Select(r => r.ThreadId), StringComparer.OrdinalIgnoreCase);
+
         foreach (ImportPlanConversation conversation in plan.Conversations)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             // Phase 9_2-21 — 사용자 선택으로 이번 가져오기에서 뺀 대화는 사전조건을 확인하지 않는다. 그 대화의 로컬
             // 상태가 미리보기 이후 바뀌어도 나머지 적용을 막지 않는다(LocalAhead Skip은 제외 대상이 아니다 — 기존 동작).
-            if (conversation.IsExcludedFromApply)
+            if (conversation.IsExcludedFromApply && !relinkIds.Contains(conversation.ThreadId))
             {
                 continue;
             }

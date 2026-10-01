@@ -210,7 +210,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>현재 Preview(테스트 확인용).</summary>
     internal ImportPreview? CurrentPreview => _preview;
 
-    /// <summary>(Phase 9_5-07) 오늘 날짜("가져온 대화 yyyy-MM-dd" 이름용). 테스트가 고정할 수 있게 둔다.</summary>
+    /// <summary>이 PC의 지금 시각(9_2-36 확인 시각 표시). 테스트가 고정할 수 있게 둔다.</summary>
     internal Func<DateTime> Now { get; set; } = static () => DateTime.Now;
 
     /// <summary>이 화면에서 앱이 만든 폴더 중 아직 남아 있는 것(테스트 확인용).</summary>
@@ -239,6 +239,11 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
                 }
 
                 RaiseCommands();
+                foreach (ImportConversationNodeViewModel node in _conversationNodes.Values)
+                {
+                    node.RaiseEditability(); // Phase 9_3-01 — 옮기기 체크는 편집 중에만 바꿀 수 있다
+                }
+
                 _logger.Info($"가져오기 화면 상태={value}");
             }
         }
@@ -873,6 +878,28 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         UpdateChoices(_choices with { IncludedThreadIds = included });
     }
 
+    /// <summary>(Phase 9_3-01) "📁 이 프로젝트로 옮기기"를 바꾼다(메모리 연산만, Plan 없음).</summary>
+    internal void SetRelink(string threadId, bool relink)
+    {
+        if (!CanEditSelection || _choices is null)
+        {
+            return;
+        }
+
+        var relinks = new HashSet<string>(_choices.RelinkThreadIds, StringComparer.OrdinalIgnoreCase);
+        if (relink)
+        {
+            relinks.Add(threadId);
+        }
+        else
+        {
+            relinks.Remove(threadId);
+        }
+
+        UpdateChoices(_choices with { RelinkThreadIds = relinks });
+        _logger.Info($"가져오기: 옮기기 {(relink ? "켬" : "끔")}. count={relinks.Count}");
+    }
+
     private void SelectNewOnly()
     {
         if (_preview is null || _choices is null)
@@ -953,7 +980,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>[다른 폴더…]: 폴더를 고르고 즉시 다시 판정한다(Plan은 만들지 않는다).</summary>
     internal void ChooseFolder(ImportProjectNodeViewModel node)
     {
-        if (!CanEditSelection || node.ProjectKey is not { } key || _choices is null || _preview is null)
+        if (!CanEditSelection || !node.IsFolderEditable || node.ProjectKey is not { } key || _choices is null || _preview is null)
         {
             return;
         }
@@ -1064,7 +1091,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// </summary>
     internal void CreateNewFolder(ImportProjectNodeViewModel node)
     {
-        if (_newFolders is null || !CanEditSelection || node.ProjectKey is not { } key || _choices is null || _preview is null)
+        if (_newFolders is null || !CanEditSelection || !node.IsFolderEditable || node.ProjectKey is not { } key || _choices is null || _preview is null)
         {
             return;
         }
@@ -1091,21 +1118,10 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// 새 폴더의 원래 이름: 백업 프로젝트 행은 백업 프로젝트 표시 이름. 백업 "기타 대화" 그룹은 지금 체크된 대화가 1개면 그 제목,
-    /// 0개나 여러 개면 "가져온 대화 yyyy-MM-dd"(이 PC 날짜). 앞뒤 공백은 지운다.
+    /// 새 폴더의 원래 이름: 백업 프로젝트 표시 이름(앞뒤 공백 제거). (Phase 9_5-11) 백업 "기타 대화" 그룹에는 폴더를 만들지 않으므로
+    /// 그 그룹의 이름 규칙은 없다.
     /// </summary>
-    private string OriginalFolderName(ImportProjectNodeViewModel node)
-    {
-        if (node.ProjectKey == ImportUserChoices.UncategorizedProjectKey)
-        {
-            List<ImportConversationNodeViewModel> included = node.Conversations.Where(c => c.Result.IsIncludedByUser).ToList();
-            return included.Count == 1
-                ? included[0].Title.Trim()
-                : "가져온 대화 " + Now().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        }
-
-        return node.DisplayName.Trim();
-    }
+    private static string OriginalFolderName(ImportProjectNodeViewModel node) => node.DisplayName.Trim();
 
     /// <summary>
     /// 행의 목적지가 이 화면이 만든 폴더에서 다른 곳으로 바뀌었으면, 다른 행도 쓰지 않을 때 그 폴더를 (비어 있을 때만) 지운다.
@@ -1384,7 +1400,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         State = ImportWorkspaceState.Confirming;
-        bool confirmed = _confirmDialog(ImportTexts.ConfirmMessage(_summary), "가져오기 확인");
+        bool confirmed = _confirmDialog(ImportTexts.ConfirmMessage(_summary, LocalProjects), "가져오기 확인");
         if (!confirmed)
         {
             State = ImportWorkspaceState.Editing;
@@ -1453,7 +1469,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
         _logger.Info(
             $"가져오기 적용 결과. outcome={result.Outcome} preflight={result.PreflightStatus?.ToString() ?? "-"} " +
-            $"imports={_summary.ImportCount} updates={_summary.UpdateCount} uncategorized={_summary.UncategorizedImportCount} " +
+            $"imports={_summary.ImportCount} updates={_summary.UpdateCount} relinks={_summary.RelinkCount} uncategorized={_summary.UncategorizedImportCount} " +
             $"newProjects={_summary.NewProjects.Count}"); // 프로젝트 이름·경로는 남기지 않는다
         ShowResult(result, plan);
     }

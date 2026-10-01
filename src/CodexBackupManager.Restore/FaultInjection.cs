@@ -60,6 +60,9 @@ public enum RestoreFaultInjectionPoint
 
     /// <summary>(Phase 9_5a-03) global-state 사후 검증 직전.</summary>
     BeforeGlobalStateValidation,
+
+    /// <summary>(Phase 9_3-T2) 같은 트랜잭션 안에서 연결 변경 UPDATE를 마친 직후(커밋 전).</summary>
+    AfterThreadProjectLink,
 }
 
 /// <summary>fault injection 훅. 테스트 전용 — 운영 코드는 <see cref="NoOpRestoreFaultInjectionHook"/>을 쓴다.</summary>

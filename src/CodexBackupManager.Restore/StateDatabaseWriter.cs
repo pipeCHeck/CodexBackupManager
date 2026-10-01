@@ -147,6 +147,34 @@ public static class StateDatabaseWriter
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>
+    /// (Phase 9_3-03) 이 PC에 있는 대화를 다른 프로젝트로 옮긴다. 계획 시점 값(<c>project_id</c>, <c>cwd</c>)과 같을 때만 바꾸고, 영향 행이
+    /// 정확히 1이 아니면 예외(→ Rollback, TOCTOU). <c>project_id</c>와 <c>cwd</c> 외의 컬럼(<c>updated_at_ms</c> 포함)은 바꾸지 않는다.
+    /// </summary>
+    public static void RelinkThread(SqliteConnection connection, SqliteTransaction transaction, PlannedThreadProjectLink link)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(link);
+
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            UPDATE threads SET project_id = $new, cwd = $newCwd
+            WHERE id = $id AND project_id IS $expected AND cwd IS $expectedCwd
+            """;
+        cmd.Parameters.AddWithValue("$new", link.NewProjectId);
+        cmd.Parameters.AddWithValue("$newCwd", link.NewCwd);
+        cmd.Parameters.AddWithValue("$id", link.ThreadId);
+        cmd.Parameters.AddWithValue("$expected", (object?)link.ExpectedProjectId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$expectedCwd", (object?)link.ExpectedCwd ?? DBNull.Value);
+        int affected = cmd.ExecuteNonQuery();
+        if (affected != 1)
+        {
+            throw new InvalidOperationException($"옮길 대화의 현재 위치가 계획과 달라 옮기지 않습니다(영향 행 {affected}).");
+        }
+    }
+
     /// <summary>(Phase 9_5a-03) 레거시 항목에 쓸 DB 프로젝트 값(이름, 루트 position 순, <c>created_at_ms</c>).</summary>
     public sealed record ProjectSummary(string Name, IReadOnlyList<string> RootPaths, long CreatedAtMs);
 

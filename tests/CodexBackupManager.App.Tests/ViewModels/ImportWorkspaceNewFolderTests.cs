@@ -77,24 +77,20 @@ public sealed class ImportWorkspaceNewFolderTests : IDisposable
     }
 
     [Fact]
-    public async Task 기타_대화_그룹은_체크된_대화가_1개면_그_제목_여러_개면_가져온_대화_날짜로_만든다()
+    public async Task 기타_대화_그룹에는_새_폴더_만들기가_없고_폴더를_만들지_않는다()
     {
+        // Phase 9_5-11 — 예전 "체크된 대화 1개면 그 제목 / 여러 개면 가져온 대화 날짜" 이름 규칙은 없어졌다.
         _h.RemoveFromTarget(Thread2, Thread3);
         ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(Thread2, Thread3));
-        ws.Now = () => new DateTime(2026, 10, 2, 9, 0, 0);
         ImportProjectNodeViewModel group = UncategorizedGroup(ws);
-        Assert.True(group.ShowCreateFolder);
+        Assert.False(group.ShowCreateFolder);
+        Assert.False(group.CreateFolderCommand.CanExecute(null));
 
-        ws.SetIncluded([Thread3], include: false);
         group.CreateFolderCommand.Execute(null);
-        string title = group.Conversations.Single(c => c.ThreadId == Thread2).Title.Trim();
-        Assert.Equal(title, group.NewProjectName);
-        Assert.Equal(Path.Combine(_h.DefaultNewFolderBase, NewProjectFolderService.SanitizeFolderName(title)), group.Target!.FolderPath);
 
-        ws.SetIncluded([Thread3], include: true);
-        group.CreateFolderCommand.Execute(null);
-        Assert.Equal("가져온 대화 2026-10-02", group.NewProjectName);
-        Assert.Equal(Path.Combine(_h.DefaultNewFolderBase, "가져온 대화 2026-10-02"), group.Target!.FolderPath);
+        Assert.Empty(ws.CreatedFolders);
+        Assert.False(Directory.Exists(_h.DefaultNewFolderBase));
+        Assert.Equal(ProjectTargetKind.Uncategorized, group.Target!.Kind);
     }
 
     [Fact]
@@ -307,13 +303,17 @@ public sealed class ImportWorkspaceNewFolderTests : IDisposable
     [Fact]
     public async Task 새_프로젝트_그룹에_이어받기가_섞이면_이어받은_대화는_기존_위치로_보인다()
     {
-        _h.RemoveFromTarget(Thread2);                       // 기타 대화 그룹: 새 대화
-        _h.AppendToSourceRollout(Thread3, 2, "이어받을-줄"); // 기타 대화 그룹(보관됨): 이어받기
-        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(Thread2, Thread3));
-        ImportProjectNodeViewModel group = UncategorizedGroup(ws);
-        Assert.Equal(RevisionRelation.IncomingAhead, group.Conversations.Single(c => c.ThreadId == Thread3).Result.Preview.Relation);
-        group.CreateFolderCommand.Execute(null);
-        Assert.True(group.IsCreatingProject);
+        // Phase 9_5-11 — 백업 "기타 대화" 그룹에는 폴더를 지정하지 않으므로, 원본 PC에서 Thread3을 Alpha 프로젝트로 옮겨(cwd 폴백)
+        // Alpha 한 그룹에 새 대화(Thread1)와 이어받기(Thread3)가 섞이게 한다.
+        _h.SetSourceThreadCwd(Thread3, @"C:\Fixture\Projects\Alpha");
+        _h.RemoveFromTarget(Thread1);                       // Alpha: 새 대화
+        _h.AppendToSourceRollout(Thread3, 2, "이어받을-줄"); // Alpha(보관됨): 이어받기
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(Thread1, Thread3));
+        ImportProjectNodeViewModel alpha = ProjectOf(ws, Thread1);
+        Assert.Contains(alpha.Conversations, c => c.ThreadId == Thread3);
+        Assert.Equal(RevisionRelation.IncomingAhead, alpha.Conversations.Single(c => c.ThreadId == Thread3).Result.Preview.Relation);
+        alpha.CreateFolderCommand.Execute(null);
+        Assert.True(alpha.IsCreatingProject);
 
         // 확인·요약은 새 대화가 들어가는 프로젝트만 센다(이어받기는 그 수에 영향이 없다).
         Assert.Single(ws.Summary!.NewProjects);
@@ -327,10 +327,10 @@ public sealed class ImportWorkspaceNewFolderTests : IDisposable
         Assert.Equal(["새로 가져옴"], created.Items.Select(i => i.Text));
         ImportResultGroup kept = ws.Result.Groups.Single(g => g.Destination == "→ 기존 위치 유지");
         ImportResultItem update = Assert.Single(kept.Items);
-        Assert.StartsWith("이어받음 · 이 PC 위치: 기타 대화", update.Text);
-        Assert.Equal("이어받음 · 이 PC 위치: 기타 대화 (보관됨) · 기존 위치 유지", update.Text); // 9_2-35: 괄호는 한 번만
+        Assert.StartsWith("이어받음 · 이 PC 위치: ", update.Text);
+        Assert.EndsWith(" · 기존 위치 유지", update.Text); // 9_2-35: 괄호는 한 번만
 
-        Assert.IsType<string>(ReadThreadColumn(_h.TargetHome, Thread2, "project_id"));
+        Assert.IsType<string>(ReadThreadColumn(_h.TargetHome, Thread1, "project_id"));
         Assert.IsType<DBNull>(ReadThreadColumn(_h.TargetHome, Thread3, "project_id")); // 이어받은 대화는 옮기지 않는다
     }
 }

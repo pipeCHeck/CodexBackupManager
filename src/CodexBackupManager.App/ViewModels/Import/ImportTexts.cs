@@ -206,6 +206,10 @@ public static class ImportTexts
         };
     }
 
+    /// <summary>(Phase 9_5-11) 백업의 "기타 대화" 그룹 작업 폴더 행 문구.</summary>
+    public const string BackupUncategorizedGroupStatus =
+        "다른 PC에서 프로젝트 없이 쓰던 채팅입니다. 이 PC에서도 프로젝트 없는 채팅으로 가져옵니다.";
+
     /// <summary>(Phase 9_5a-05) Desktop 상태 파일 형식을 확인하지 못해 새 프로젝트를 만들지 않을 때의 작업 폴더 행 문구.</summary>
     public const string DesktopStateUnsupportedStatus =
         "Codex 데스크톱 앱의 프로젝트 목록 형식을 확인하지 못해 새 프로젝트를 만들지 않습니다. 기타 대화로 가져옵니다.";
@@ -251,7 +255,8 @@ public static class ImportTexts
     /// <summary>하단 요약 첫 줄.</summary>
     public static string SummaryLine(ImportSelectionSummary summary)
         => $"가져오기: 새 대화 {summary.ImportCount} · 이어받기 {summary.UpdateCount} · 기타 대화로 {summary.UncategorizedImportCount}" +
-           (summary.NewProjects.Count > 0 ? $" · 새 프로젝트 {summary.NewProjects.Count}" : string.Empty);
+           (summary.NewProjects.Count > 0 ? $" · 새 프로젝트 {summary.NewProjects.Count}" : string.Empty) +
+           (summary.RelinkCount > 0 ? $" · 연결 변경 {summary.RelinkCount}" : string.Empty);
 
     /// <summary>
     /// 하단 요약 둘째 줄(안내 또는 적용 불가 사유 한 줄). 차단 사유의 thread ID는 대화 제목으로 바꾼다.
@@ -294,20 +299,85 @@ public static class ImportTexts
     }
 
     /// <summary>[가져오기] 버튼 문구.</summary>
+    /// <remarks>(Phase 9_3-01) 옮기기가 있으면 "대화 N개 가져오기 · M개 옮기기", 옮기기만 있으면 "대화 M개 옮기기".</remarks>
     public static string ImportButton(ImportSelectionSummary summary)
-        => $"대화 {summary.ImportCount + summary.UpdateCount}개 가져오기";
+    {
+        int writes = summary.ImportCount + summary.UpdateCount;
+        if (summary.RelinkCount == 0)
+        {
+            return $"대화 {writes}개 가져오기";
+        }
 
-    /// <summary>확인 대화상자 문구(설계 §7.5 — 9_3/9_5 줄은 아직 없다).</summary>
-    public static string ConfirmMessage(ImportSelectionSummary summary)
-        => "다음 내용을 Codex에 적용합니다." + Environment.NewLine + Environment.NewLine +
-           $"  새로 가져올 대화   {summary.ImportCount}개" + Environment.NewLine +
-           $"  이어받을 대화      {summary.UpdateCount}개" + Environment.NewLine +
-           (summary.NewProjects.Count > 0
-               ? $"  새로 만들 프로젝트 {summary.NewProjects.Count}개: {string.Join(", ", summary.NewProjects.Select(NewProjectLabel))}" + Environment.NewLine
-               : string.Empty) +
-           $"  기타 대화로 들어갈 대화 {summary.UncategorizedImportCount}개" + Environment.NewLine + Environment.NewLine +
-           "적용 전에 현재 상태의 복구 지점(Snapshot)을 만듭니다." + Environment.NewLine +
-           "실패하면 자동으로 되돌립니다. Codex가 완전히 종료되어 있어야 합니다.";
+        return writes == 0 ? $"대화 {summary.RelinkCount}개 옮기기" : $"대화 {writes}개 가져오기 · {summary.RelinkCount}개 옮기기";
+    }
+
+    /// <summary>확인 대화상자 문구(설계 §7.5).</summary>
+    /// <param name="summary">선택 요약.</param>
+    /// <param name="directory">(Phase 9_3-01) 이 PC 프로젝트 목록(옮길 목적지 이름). 없으면 목적지 이름 대신 "등록된 프로젝트".</param>
+    public static string ConfirmMessage(ImportSelectionSummary summary, ProjectDirectory? directory = null)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        string relinks = string.Empty;
+        if (summary.RelinkCount > 0)
+        {
+            List<string> moves = summary.Conversations.Where(c => c.IsRelinkSelected).Select(c => "    " + RelinkLine(summary, c, directory)).ToList();
+            const int Shown = 5;
+            relinks = $"  프로젝트 옮기기 {summary.RelinkCount}개:" + Environment.NewLine +
+                      string.Join(Environment.NewLine, moves.Take(Shown)) + Environment.NewLine +
+                      (moves.Count > Shown ? $"    … 외 {moves.Count - Shown}개" + Environment.NewLine : string.Empty);
+        }
+
+        return "다음 내용을 Codex에 적용합니다." + Environment.NewLine + Environment.NewLine +
+               $"  새로 가져올 대화   {summary.ImportCount}개" + Environment.NewLine +
+               $"  이어받을 대화      {summary.UpdateCount}개" + Environment.NewLine +
+               relinks +
+               (summary.NewProjects.Count > 0
+                   ? $"  새로 만들 프로젝트 {summary.NewProjects.Count}개: {string.Join(", ", summary.NewProjects.Select(NewProjectLabel))}" + Environment.NewLine
+                   : string.Empty) +
+               $"  기타 대화로 들어갈 대화 {summary.UncategorizedImportCount}개" + Environment.NewLine + Environment.NewLine +
+               "적용 전에 현재 상태의 복구 지점(Snapshot)을 만듭니다." + Environment.NewLine +
+               "실패하면 자동으로 되돌립니다. Codex가 완전히 종료되어 있어야 합니다.";
+    }
+
+    /// <summary>(Phase 9_3-01) "'제목' 기타 대화 → 'Alpha'" 또는 "→ 새 프로젝트 '이름'".</summary>
+    public static string RelinkLine(ImportSelectionSummary summary, ImportSelectionConversation conversation, ProjectDirectory? directory)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        ArgumentNullException.ThrowIfNull(conversation);
+        string from = LocalLocation(conversation.Preview.LocalLocation) ?? "기타 대화";
+        return $"'{TitleOf(conversation.Preview)}' {from} → {RelinkDestination(summary, conversation.ProjectKey, directory, created: false)}";
+    }
+
+    /// <summary>(Phase 9_3-01/04) 옮길 목적지 표기: 등록 프로젝트 "'Alpha'", 새 프로젝트 "새 프로젝트 '이름'"(결과 화면은 "새로 만든 프로젝트").</summary>
+    public static string RelinkDestination(ImportSelectionSummary summary, string? projectKey, ProjectDirectory? directory, bool created)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+        ImportSelectionProject? project = summary.Projects.FirstOrDefault(p => p.ProjectKey == projectKey);
+        if (project?.Target is { Kind: ProjectTargetKind.CreateNew })
+        {
+            NewProjectGroup? group = summary.NewProjects.FirstOrDefault(g => projectKey is not null && g.ProjectKeys.Contains(projectKey));
+            string name = group?.Name ?? project.Target.NewProjectName ?? string.Empty;
+            return (created ? "새로 만든 프로젝트 '" : "새 프로젝트 '") + name + "'";
+        }
+
+        string? known = project?.Target.LinkDbProjectId is { } id ? directory?.FindById(id)?.DisplayName : null;
+        return known is not null ? $"'{known}'" : "등록된 프로젝트";
+    }
+
+    /// <summary>(Phase 9_3-00) 옮길 수 없는 이유(행 안 한 줄). 옮길 수 있거나 체크를 숨기는 경우는 <c>null</c>.</summary>
+    public static string? RelinkUnavailableReason(RelinkStatus status) => status switch
+    {
+        RelinkStatus.DesktopAssigned or RelinkStatus.DesktopProjectless => RelinkDesktopRecorded,
+        RelinkStatus.DesktopStateUnavailable => RelinkDesktopStateUnavailable,
+        _ => null,
+    };
+
+    /// <summary>(Phase 9_3-00) Desktop이 위치를 따로 기록한 대화.</summary>
+    public const string RelinkDesktopRecorded =
+        "Codex 데스크톱 앱이 이 대화의 위치를 따로 기록하고 있어 이 앱에서 옮기지 않습니다. Codex에서 직접 옮겨 주세요.";
+
+    /// <summary>(Phase 9_3-00) Desktop 상태 파일을 확인하지 못했을 때.</summary>
+    public const string RelinkDesktopStateUnavailable = "Codex 데스크톱 앱 상태 파일을 확인하지 못해 옮기지 않습니다.";
 
     /// <summary>Codex 실행 중 안내(가져오기 시작 시, 설계 §9).</summary>
     public const string CodexRunningAtStart = "가져오기는 Codex를 종료한 상태에서만 할 수 있습니다. Codex를 완전히 종료한 뒤 [다시 확인]을 눌러 주세요.";

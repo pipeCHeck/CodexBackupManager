@@ -326,7 +326,7 @@ public sealed class ImportSelectionTests : IDisposable
     }
 
     [Fact]
-    public void 없는_폴더_지정은_결정_오류이고_기타_대화_그룹에는_폴더를_지정할_수_있다()
+    public void 없는_폴더_지정은_결정_오류이고_기타_대화_그룹에는_폴더를_지정할_수_없다()
     {
         ImportProjectPreview project = Project("p", Missing, Conv("n", RevisionRelation.New));
         ImportProjectPreview uncategorized = Project(null, NotApplicable, Conv("u", RevisionRelation.New));
@@ -335,10 +335,22 @@ public sealed class ImportSelectionTests : IDisposable
 
         Assert.NotNull(ImportSelection.ResolveTarget(project, ProjectTargetDecision.Folder(Path.Combine(_root, "nope")), ProjectDirectory.Empty).Error);
         Assert.NotNull(ImportSelection.ResolveTarget(project, new ProjectTargetDecision(null, null, UseSuggestion: false), ProjectDirectory.Empty).Error);
-        // Phase 9_5-01: 백업의 "기타 대화" 그룹도 폴더를 지정할 수 있다(9_2까지는 결정 오류였다).
-        ProjectTargetResolution toFolder = ImportSelection.ResolveTarget(uncategorized, ProjectTargetDecision.Folder(existing), ProjectDirectory.Empty);
-        Assert.Null(toFolder.Error);
-        Assert.Equal(ProjectTargetReason.UserSelectedUnregistered, toFolder.Target.Reason);
-        Assert.Equal(ProjectPathMappingStatus.ManuallyLinked, toFolder.PathStatus);
+
+        // Phase 9_5-11: 백업의 "기타 대화" 그룹에는 폴더·새 프로젝트 이름을 지정할 수 없다(결정 오류, 목적지는 항상 기타 대화).
+        foreach (ProjectTargetDecision decision in new[]
+                 {
+                     ProjectTargetDecision.Folder(existing),
+                     ProjectTargetDecision.Suggested with { NewProjectName = "이름" },
+                 })
+        {
+            ProjectTargetResolution rejected = ImportSelection.ResolveTarget(uncategorized, decision, ProjectDirectory.Empty);
+            Assert.Equal(ImportSelection.UncategorizedGroupDecisionError, rejected.Error);
+            Assert.Equal(ProjectTarget.Uncategorized(ProjectTargetReason.NotApplicable, null), rejected.Target);
+        }
+
+        ProjectTargetResolution suggested = ImportSelection.ResolveTarget(uncategorized, ProjectTargetDecision.Suggested, ProjectDirectory.Empty);
+        Assert.Null(suggested.Error);
+        Assert.Equal(ProjectTargetKind.Uncategorized, suggested.Target.Kind);
+        Assert.Equal(ProjectTargetReason.NotApplicable, suggested.Target.Reason);
     }
 }

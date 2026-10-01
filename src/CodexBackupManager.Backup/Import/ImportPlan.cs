@@ -133,6 +133,15 @@ public enum ImportSkipReason
 /// <param name="DisplayName">표시 이름.</param>
 /// <param name="PathStatus">경로 매핑 상태(자동 연결/수동 재지정/미해결).</param>
 /// <param name="TargetProjectPath">해결된 현재 PC 기준 경로. 미해결이면 <c>null</c>.</param>
+/// <summary>
+/// (Phase 9_3-02) 이 PC에 이미 있는 대화를 그 백업 프로젝트의 목적지로 옮기는 연결 변경 하나(계획 시점 값).
+/// </summary>
+/// <param name="ThreadId">대상 thread.</param>
+/// <param name="ExpectedProjectId">계획 시점 <c>threads.project_id</c>(NULL이면 <c>null</c>). Apply 때 이 값과 다르면 거부한다.</param>
+/// <param name="ExpectedCwd">계획 시점 <c>threads.cwd</c>. Apply 때 이 값과 다르면 거부한다.</param>
+/// <param name="TargetProjectKey">목적지 백업 프로젝트 키(<see cref="ImportUserChoices.ProjectKeyOf(string?)"/>).</param>
+public sealed record ImportPlanRelink(string ThreadId, string? ExpectedProjectId, string? ExpectedCwd, string TargetProjectKey);
+
 public sealed record ImportPlanProject(
     string? ProjectId,
     string DisplayName,
@@ -187,6 +196,9 @@ public sealed record ImportPlan(
     /// </summary>
     public bool IsApplyReady => !HasBlockingIssues && !HasUnresolvedDivergence;
 
+    /// <summary>(Phase 9_3-02) 연결 변경 목록. 선택 없는 이전 방식 Plan과 9_3 이전 Plan은 빈 목록이다.</summary>
+    public IReadOnlyList<ImportPlanRelink> Relinks { get; init; } = [];
+
     /// <summary>
     /// (Phase 9_2-03) 이 Plan을 만든 사용자 선택. <c>null</c>이면 이전 방식(Preview의 대화 전부, 제안 목적지)이고 결과도 그때와 같다.
     /// 값이 있으면 <see cref="HasBlockingIssues"/>/<see cref="HasUnresolvedDivergence"/>는 이번에 실제로 적용할 대화와 그 조상
@@ -209,6 +221,16 @@ public sealed record ImportPlan(
         }
 
         string key = ImportUserChoices.ProjectKeyOf(project.ProjectId);
+
+        // Phase 9_3-05 — 연결 변경 대화가 가는 목적지도 이번 적용에 쓰인다(새 대화가 없어도 새 프로젝트를 만든다).
+        foreach (ImportPlanRelink relink in Relinks)
+        {
+            if (string.Equals(relink.TargetProjectKey, key, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
         foreach (ImportPlanConversation conversation in Conversations)
         {
             if (conversation.PlannedAction == ImportPlannedAction.Import &&

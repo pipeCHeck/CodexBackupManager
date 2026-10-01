@@ -130,22 +130,28 @@ public sealed class ImportWorkspaceCreateProjectTests : IDisposable
     }
 
     [Fact]
-    public async Task 백업의_기타_대화_그룹에도_폴더를_지정해_새_프로젝트로_가져온다()
+    public async Task 백업의_기타_대화_그룹에는_폴더를_지정할_수_없고_안내를_보여_기타_대화로_가져온다()
     {
+        // Phase 9_5-11
         _h.RemoveFromTarget(Thread2);
         string folder = _h.NewFolder("uncategorized-target");
         ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(await _h.ExportAsync(Thread2), folderPicker: () => folder);
         ImportProjectNodeViewModel group = UncategorizedGroup(ws);
-        Assert.True(group.IsFolderEditable);
-        Assert.Equal("폴더 선택…", group.ChooseFolderText);
-        Assert.True(group.ChooseFolderCommand.CanExecute(null));
+        Assert.False(group.IsFolderEditable);
+        Assert.False(group.ShowCreateFolder);
+        Assert.False(group.ChooseFolderCommand.CanExecute(null));
+        Assert.False(group.CreateFolderCommand.CanExecute(null));
+        Assert.Equal("다른 PC에서 프로젝트 없이 쓰던 채팅입니다. 이 PC에서도 프로젝트 없는 채팅으로 가져옵니다.", group.TargetStatusText);
 
-        group.ChooseFolderCommand.Execute(null);
-        Assert.True(group.IsCreatingProject);
+        group.ChooseFolderCommand.Execute(null); // 눌려도(명령 직접 실행) 결정을 만들지 않는다
+        group.CreateFolderCommand.Execute(null);
+        Assert.False(group.IsCreatingProject);
+        Assert.True(ws.Choices!.DecisionFor(ImportUserChoices.UncategorizedProjectKey).UseSuggestion);
+        Assert.False(Directory.Exists(_h.DefaultNewFolderBase)); // 폴더도 만들지 않았다(기준 폴더는 첫 만들기 때 생긴다)
 
         await ws.ImportAsync();
         Assert.Equal(RestoreOutcome.Succeeded, ws.Result!.Outcome);
-        Assert.IsType<string>(ReadThreadColumn(_h.TargetHome, Thread2, "project_id"));
+        Assert.IsType<DBNull>(ReadThreadColumn(_h.TargetHome, Thread2, "project_id"));
     }
 }
 

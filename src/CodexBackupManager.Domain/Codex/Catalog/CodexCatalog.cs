@@ -38,6 +38,12 @@ public sealed record CodexCatalog(
     /// </summary>
     public Codex.Projects.ProjectDirectory ProjectDirectory { get; init; } = Codex.Projects.ProjectDirectory.Empty;
 
+    /// <summary>
+    /// (Phase 9_3-00) Codex Desktop이 global-state에 따로 기록한 대화 위치(배정·projectless)와 그 파일을 믿을 수 있는지.
+    /// 직접 만든 카탈로그의 기본값은 <see cref="DesktopThreadPlacement.Unavailable"/>(어떤 대화도 옮기지 않는다)다.
+    /// </summary>
+    public DesktopThreadPlacement ThreadPlacement { get; init; } = DesktopThreadPlacement.Unavailable;
+
     /// <summary><c>thread_source == "user"</c>인 전체 대화 수. 프로젝트 그룹 합계와 같다.</summary>
     public int UserConversationCount { get; } = CountUser(AllConversations);
 

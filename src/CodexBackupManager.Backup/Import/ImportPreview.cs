@@ -75,6 +75,15 @@ public sealed record ImportConversationPreview(
 
     /// <summary>(Phase 9_1-07) 백업 체인에서 이 대화의 분기 조상 thread ID(뿌리 → 가까운 순). 자기 자신은 포함하지 않는다.</summary>
     public IReadOnlyList<string> RequiredAncestorThreadIds { get; init; } = [];
+
+    /// <summary>(Phase 9_3-00) 이 PC의 <c>threads.project_id</c> 원문(DB 값). 이 PC에 없거나 비어 있으면 <c>null</c>.</summary>
+    public string? LocalDbProjectId { get; init; }
+
+    /// <summary>(Phase 9_3-00) 이 PC의 <c>threads.cwd</c> 원문. 이 PC에 없으면 <c>null</c>.</summary>
+    public string? LocalCwd { get; init; }
+
+    /// <summary>(Phase 9_3-00) Codex Desktop이 global-state에 이 대화의 위치를 따로 기록했는지(읽기 전용 판정).</summary>
+    public DesktopPlacementStatus DesktopPlacement { get; init; } = DesktopPlacementStatus.Unavailable;
 }
 
 /// <summary>
@@ -87,6 +96,22 @@ public sealed record ImportConversationPreview(
 /// </param>
 /// <param name="ProjectDisplayName">그 프로젝트의 표시 이름. "기타 대화"거나 이 PC에 없으면 <c>null</c>.</param>
 /// <param name="Archived">이 PC에서 보관(archive) 상태인지. 없으면 <c>false</c>.</param>
+/// <summary>(Phase 9_3-00) Codex Desktop이 global-state에 대화 위치를 따로 기록했는지.</summary>
+public enum DesktopPlacementStatus
+{
+    /// <summary>global-state를 읽지 못했거나 9_5a 게이트에 실패했다 — 옮기지 않는다.</summary>
+    Unavailable = 0,
+
+    /// <summary>Desktop이 따로 기록하지 않았다(DB <c>project_id</c>만 바꿔도 된다, 9_0-A).</summary>
+    NotRecorded = 1,
+
+    /// <summary><c>thread-project-assignments</c>에 있다 — 옮기지 않는다.</summary>
+    Assigned = 2,
+
+    /// <summary><c>projectless-thread-ids</c>에 있다 — 옮기지 않는다.</summary>
+    Projectless = 3,
+}
+
 public sealed record ConversationLocalLocation(
     bool ExistsLocally,
     string? KnownProjectKey,

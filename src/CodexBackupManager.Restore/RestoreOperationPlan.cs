@@ -120,6 +120,23 @@ public sealed record PlannedProjectCreate(
     string IdempotencyKey);
 
 /// <summary>
+/// (Phase 9_3-02) 이 PC에 이미 있는 대화를 다른 프로젝트로 옮기는 연산(같은 SQLite 트랜잭션, 프로젝트 생성 뒤).
+/// <c>UPDATE threads SET project_id=@new, cwd=@newCwd WHERE id=@id AND project_id IS @expected AND cwd IS @expectedCwd</c> —
+/// 영향 행이 정확히 1이 아니면 실패(→ Rollback). <c>updated_at_ms</c>와 다른 컬럼, rollout 파일은 바꾸지 않는다.
+/// </summary>
+/// <param name="ThreadId">대상 thread.</param>
+/// <param name="ExpectedProjectId">계획 시점 <c>project_id</c>(NULL이면 <c>null</c>).</param>
+/// <param name="ExpectedCwd">계획 시점 <c>cwd</c>.</param>
+/// <param name="NewProjectId">목적지 <c>projects.id</c>(등록 프로젝트의 DB ID, 또는 같은 계획의 <see cref="PlannedProjectCreate.NewProjectId"/>).</param>
+/// <param name="NewCwd">목적지 루트 표기(등록 루트 표기 또는 <see cref="PlannedProjectCreate.RootPathDisplay"/>).</param>
+public sealed record PlannedThreadProjectLink(
+    string ThreadId,
+    string? ExpectedProjectId,
+    string? ExpectedCwd,
+    string NewProjectId,
+    string NewCwd);
+
+/// <summary>
 /// frozen <c>ImportPlan</c> + fresh 로컬 상태로부터 계산한, 실제로 실행할 구체적 file/DB 연산
 /// 목록(요구사항 8). <see cref="RestoreOperationPlanner"/>만 이 값을 만든다 — relation/PlannedAction을
 /// 다시 판단하지 않는다.
@@ -144,13 +161,18 @@ public sealed record RestoreOperationPlan(
 
     /// <summary>
     /// (Phase 9_5a-03) 새 프로젝트를 만들 때, 계획 시점에 게이트(<c>GlobalStateProjectGate</c>)를 통과한 <c>.codex-global-state.json</c>의 SHA-256.
-    /// Snapshot·트랜잭션 안·쓰기 직전에 파일이 이 값과 다르면 거부한다(계획 뒤 변경). 프로젝트를 만들지 않으면 <c>null</c>.
+    /// Snapshot·트랜잭션 안·쓰기 직전에 파일이 이 값과 다르면 거부한다(계획 뒤 변경). (Phase 9_3-06) 연결 변경이 있으면 프로젝트를 만들지 않아도
+    /// 고정한다(계획 뒤 Desktop 배정이 바뀌었는지 보기 위함 — 이때 global-state에는 쓰지 않는다). 둘 다 없으면 <c>null</c>.
     /// </summary>
     public string? GlobalStateExpectedSha256 { get; init; }
 
+    /// <summary>(Phase 9_3-02) 연결 변경(이 PC에 이미 있는 대화를 다른 프로젝트로 옮기기).</summary>
+    public IReadOnlyList<PlannedThreadProjectLink> ThreadProjectLinks { get; init; } = [];
+
     /// <summary>SQL 쓰기가 하나라도 있는지(Snapshot 대상 판단용).</summary>
     public bool HasSqlWrite =>
-        ProjectCreates.Count > 0 || ThreadInserts.Count > 0 || ThreadRolloutPathUpdates.Count > 0 || ThreadMetadataUpdates.Count > 0;
+        ProjectCreates.Count > 0 || ThreadInserts.Count > 0 || ThreadRolloutPathUpdates.Count > 0 || ThreadMetadataUpdates.Count > 0 ||
+        ThreadProjectLinks.Count > 0;
 
     /// <summary>아무 write도 필요 없는(전부 NoOp/Skip인) 계획인지.</summary>
     public bool IsEmpty =>
@@ -181,7 +203,13 @@ public sealed record RestoreOperationPlan(
             inserts.Add(insert.ResolvedProjectId is { } id ? insert with { ResolvedProjectId = Map(id) } : insert);
         }
 
-        return this with { ThreadInserts = inserts, ProjectCreates = creates };
+        var links = new List<PlannedThreadProjectLink>(ThreadProjectLinks.Count);
+        foreach (PlannedThreadProjectLink link in ThreadProjectLinks)
+        {
+            links.Add(link with { NewProjectId = Map(link.NewProjectId) });
+        }
+
+        return this with { ThreadInserts = inserts, ProjectCreates = creates, ThreadProjectLinks = links };
     }
 }
 

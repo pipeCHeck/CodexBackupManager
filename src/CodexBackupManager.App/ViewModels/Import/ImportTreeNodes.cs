@@ -119,9 +119,43 @@ public sealed class ImportConversationNodeViewModel : ObservableObject
         set => SetProperty(ref _isTreeSelected, value);
     }
 
+    // ── Phase 9_3-01 "📁 이 프로젝트로 옮기기" ───────────────────────────────────
+
+    /// <summary>옮기기 체크 문구(일반 가져오기 체크와 구분).</summary>
+    public string RelinkLabel => "📁 이 프로젝트로 옮기기";
+
+    /// <summary>옮기기 체크를 보여주는지(옮길 수 있거나, Desktop 기록 때문에 옮길 수 없는 대화). 해당 없는 대화는 숨긴다.</summary>
+    public bool IsRelinkVisible => _result.Relink is RelinkStatus.Available or RelinkStatus.DesktopAssigned or
+        RelinkStatus.DesktopProjectless or RelinkStatus.DesktopStateUnavailable;
+
+    /// <summary>옮기기 체크를 바꿀 수 있는지.</summary>
+    public bool IsRelinkEnabled => _result.Relink == RelinkStatus.Available && _owner.CanEditSelection;
+
+    /// <summary>옮기기 체크(기본 해제, 양방향).</summary>
+    public bool IsRelinkChecked
+    {
+        get => _result.IsRelinkSelected;
+        set
+        {
+            if (_result.Relink == RelinkStatus.Available && value != _result.IsRelinkSelected)
+            {
+                _owner.SetRelink(ThreadId, value);
+            }
+        }
+    }
+
+    /// <summary>옮길 수 없는 이유 한 줄(툴팁이 아니라 행 안에 보인다). 옮길 수 있거나 체크를 숨기면 <c>null</c>.</summary>
+    public string? RelinkReasonText => ImportTexts.RelinkUnavailableReason(_result.Relink);
+
+    internal void RaiseEditability() => OnPropertyChanged(nameof(IsRelinkEnabled));
+
     internal void Update(ImportSelectionConversation result)
     {
         _result = result;
+        OnPropertyChanged(nameof(IsRelinkVisible));
+        OnPropertyChanged(nameof(IsRelinkEnabled));
+        OnPropertyChanged(nameof(IsRelinkChecked));
+        OnPropertyChanged(nameof(RelinkReasonText));
         OnPropertyChanged(nameof(Result));
         OnPropertyChanged(nameof(IsChecked));
         OnPropertyChanged(nameof(IsCheckable));
@@ -229,8 +263,13 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
 
     /// <summary>작업 폴더 상태 문구(ProjectTarget.Reason 기준).</summary>
     public string TargetStatusText => _project is { } p
-        ? ImportTexts.TargetStatus(p.Target, _owner.LocalProjects, p.Preview.PathMapping.OriginalRootPaths, IsCreationDeclined)
+        ? IsBackupUncategorizedGroup
+            ? ImportTexts.BackupUncategorizedGroupStatus
+            : ImportTexts.TargetStatus(p.Target, _owner.LocalProjects, p.Preview.PathMapping.OriginalRootPaths, IsCreationDeclined)
         : "선택한 대화에 필요한 원본 대화입니다. 기타 대화로 함께 들어갑니다.";
+
+    /// <summary>(Phase 9_5-11) 백업의 "기타 대화" 그룹인지(작업 폴더를 지정하지 않는다).</summary>
+    public bool IsBackupUncategorizedGroup => _project?.ProjectKey == ImportUserChoices.UncategorizedProjectKey;
 
     /// <summary>(Phase 9_5-05) 목적지가 새 프로젝트 만들기인지(이름 칸을 보여준다).</summary>
     public bool IsCreatingProject => Target?.Kind == ProjectTargetKind.CreateNew;
@@ -282,9 +321,9 @@ public sealed class ImportProjectNodeViewModel : ObservableObject
     public string? DecisionError => _project?.Resolution.Error;
 
     /// <summary>
-    /// 작업 폴더를 바꿀 수 있는 프로젝트인지. 조상 그룹만 불가다(Phase 9_5-05 — 백업의 "기타 대화" 그룹에도 폴더를 지정할 수 있다).
+    /// 작업 폴더를 바꿀 수 있는 프로젝트인지. 조상 그룹과 (Phase 9_5-11) 백업의 "기타 대화" 그룹은 불가다 — 폴더 버튼·이름 칸을 보여주지 않는다.
     /// </summary>
-    public bool IsFolderEditable => _project is not null;
+    public bool IsFolderEditable => _project is not null && !IsBackupUncategorizedGroup;
 
     /// <summary>사용자가 폴더를 직접 골랐는지([원래대로] 표시).</summary>
     public bool IsFolderUserSelected => _project is { } p && _owner.IsFolderDecision(p.ProjectKey);

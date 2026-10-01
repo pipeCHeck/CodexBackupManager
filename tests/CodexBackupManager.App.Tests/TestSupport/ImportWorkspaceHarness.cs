@@ -181,8 +181,50 @@ internal sealed class ImportWorkspaceHarness : IDisposable
         File.WriteAllBytes(GlobalStatePath(home), CodexBackupManager.Codex.Inspection.GlobalStateJson.StrictUtf8.GetBytes(builder.ToString()));
     }
 
+    /// <summary>(Phase 9_3) 현재 Home의 host 키를 JS 문자열 리터럴로("local:경로", 따옴표 포함).</summary>
+    public static string HostKeyJson(string home)
+    {
+        var builder = new System.Text.StringBuilder();
+        CodexBackupManager.Codex.Inspection.GlobalStateJson.WriteString(builder, "local:" + home);
+        return builder.ToString();
+    }
+
     /// <summary>(Phase 9_5a) global-state 파일 경로.</summary>
     public static string GlobalStatePath(string home) => Path.Combine(home, ".codex-global-state.json");
+
+    /// <summary>(Phase 9_5-11) 원본 PC 대화의 cwd를 바꾼다 — cwd 폴백으로 다른 프로젝트 그룹에 넣어 내보내기 위함.</summary>
+    public void SetSourceThreadCwd(string threadId, string cwd)
+    {
+        using SqliteConnection connection = Open(SourceHome);
+        using SqliteCommand cmd = connection.CreateCommand();
+        cmd.CommandText = "UPDATE threads SET cwd = $cwd WHERE id = $id";
+        cmd.Parameters.AddWithValue("$cwd", cwd);
+        cmd.Parameters.AddWithValue("$id", threadId);
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
+    /// (Phase 9_3) 원본 PC global-state에서 대화를 Alpha(레거시 ID <c>local-fixture1</c>)에 배정하고 projectless에서 뺀다 — 그 대화를 Alpha 프로젝트로 내보내기 위함.
+    /// </summary>
+    public void AssignSourceThreadToAlpha(string threadId)
+    {
+        string path = Path.Combine(SourceHome, ".codex-global-state.json");
+        var root = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        var assignments = (System.Text.Json.Nodes.JsonObject)root["thread-project-assignments"]!;
+        assignments[threadId] = new System.Text.Json.Nodes.JsonObject { ["projectKind"] = "local", ["projectId"] = "local-fixture1" };
+        if (root["projectless-thread-ids"] is System.Text.Json.Nodes.JsonArray projectless)
+        {
+            foreach (System.Text.Json.Nodes.JsonNode? item in projectless.ToList())
+            {
+                if (item?.GetValue<string>() == threadId)
+                {
+                    projectless.Remove(item);
+                }
+            }
+        }
+
+        File.WriteAllText(path, root.ToJsonString());
+    }
 
     /// <summary>대상 PC에서 대화를 지운다(행 + rollout 파일) — 가져오기에서 "새 대화"가 된다.</summary>
     public void RemoveFromTarget(params string[] threadIds)
