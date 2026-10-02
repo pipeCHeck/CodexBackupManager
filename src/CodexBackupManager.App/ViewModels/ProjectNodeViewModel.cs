@@ -144,4 +144,16 @@ public sealed class ProjectNodeViewModel : ObservableObject
 
     /// <summary>(Phase 9_2-23) 화면 읽기 프로그램·UI 자동화가 읽는 이름(DisplayName).</summary>
     public string AutomationName => DisplayName;
+
+    private bool _isVisible = true;
+
+    /// <summary>
+    /// (Phase 9_U-01) 검색으로 보이는지(보이는 대화가 하나라도 있으면 참). 표시만 바꾼다 — 프로젝트 체크박스는 검색과 무관하게
+    /// 이 프로젝트의 대화 전부를 고르거나 해제한다.
+    /// </summary>
+    public bool IsVisible
+    {
+        get => _isVisible;
+        internal set => SetProperty(ref _isVisible, value);
+    }
 }

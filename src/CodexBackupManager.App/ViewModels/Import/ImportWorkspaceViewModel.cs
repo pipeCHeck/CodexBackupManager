@@ -683,7 +683,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         string? home = _codexHomeProvider();
         if (string.IsNullOrWhiteSpace(home))
         {
-            Fail("Codex Home 경로를 확인할 수 없습니다.", "메인 화면에서 Codex 폴더를 먼저 선택해 주세요.", retryable: true);
+            Fail("Codex 데이터 폴더를 확인할 수 없습니다.", "메인 화면에서 Codex 폴더를 먼저 선택해 주세요.", retryable: true);
             return;
         }
 
@@ -1360,7 +1360,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ApplyFilter()
     {
-        string query = _searchText.Trim();
+        string query = TreeSearch.Normalize(_searchText);
         foreach (ImportProjectNodeViewModel project in Projects)
         {
             bool anyVisible = false;
@@ -1378,17 +1378,12 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
     /// <summary>
     /// 검색어(앞뒤 공백 제거됨)로 대화 한 줄을 보일지(표시 규칙만, 선택은 바꾸지 않는다). Phase 9_2-33 — 백업 프로젝트 그룹 이름이
     /// 맞으면 그 그룹의 대화를 모두 보인다. "필요한 원본 대화(자동 포함)" 그룹은 이름으로 찾지 않고, 실제로 자동 포함된 대화만 보인다.
+    /// 규칙은 메인 화면과 같은 <see cref="TreeSearch"/>다(9_U-01).
     /// </summary>
     internal static bool IsShownBySearch(string query, string projectName, bool isDependencyGroup, string title, bool isAutoIncluded)
-    {
-        bool titleMatches = query.Length == 0 || title.Contains(query, StringComparison.CurrentCultureIgnoreCase);
-        if (isDependencyGroup)
-        {
-            return titleMatches && isAutoIncluded;
-        }
-
-        return titleMatches || projectName.Contains(query, StringComparison.CurrentCultureIgnoreCase);
-    }
+        => isDependencyGroup
+            ? TreeSearch.TitleMatches(query, title) && isAutoIncluded
+            : TreeSearch.IsShown(query, projectName, title);
 
     /// <summary>트리 선택이 바뀌었을 때(View가 부른다).</summary>
     public void SelectNode(object? node)
@@ -1481,7 +1476,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         CodexDetectionService.DetectionResult detection = new CodexDetectionService().DetectFromUserSelection(codexHomePath);
         if (detection.Installation is not { } installation)
         {
-            throw new InvalidOperationException("Codex Home을 다시 확인할 수 없습니다.");
+            throw new InvalidOperationException("Codex 데이터 폴더를 다시 확인할 수 없습니다.");
         }
 
         return CodexCatalogBuilder.Build(installation, cancellationToken);
@@ -1531,7 +1526,7 @@ public sealed class ImportWorkspaceViewModel : ObservableObject, IDisposable
         string? home = _codexHomeProvider();
         if (string.IsNullOrWhiteSpace(home))
         {
-            EditingError = "Codex Home 경로를 확인할 수 없습니다.";
+            EditingError = "Codex 데이터 폴더를 확인할 수 없습니다.";
             State = ImportWorkspaceState.Editing;
             return;
         }

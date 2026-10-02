@@ -78,10 +78,10 @@ public static class ImportTexts
         {
             RevisionRelation.New => "이 PC에 없는 대화입니다. 가져옵니다.",
             RevisionRelation.IncomingAhead when conversation.Preview.IsCompressedRollout =>
-                "이 PC에 있지만 백업이 더 깁니다. 압축된 기록이라 이어받을 수 없습니다.",
-            RevisionRelation.IncomingAhead => "이 PC에 있지만 백업이 더 깁니다. 뒤에 이어붙입니다.",
+                "백업에 이 PC보다 뒤의 내용이 있지만, 이 PC 대화가 압축 파일로 저장돼 있어 이어 붙일 수 없습니다.",
+            RevisionRelation.IncomingAhead => "백업에 이 PC보다 뒤의 내용이 있습니다. 이 PC 대화에 이어 붙입니다.",
             RevisionRelation.Identical => "이미 이 PC에 있습니다. 내용이 같습니다.",
-            RevisionRelation.LocalAhead => "이 PC 쪽이 더 깁니다. 건너뜁니다.",
+            RevisionRelation.LocalAhead => "이 PC에서 더 이어서 쓴 대화입니다. 그대로 두고 건너뜁니다.",
             RevisionRelation.Diverged => "양쪽이 다르게 이어졌습니다. 이번 버전에서는 가져올 수 없습니다(다른 대화는 가져올 수 있습니다).",
             _ => "이 PC 데이터가 불완전해 비교할 수 없습니다.",
         };
@@ -99,10 +99,10 @@ public static class ImportTexts
         {
             null => null,
             ImportUnselectableReason.AlreadyPresent => "이미 이 PC에 있어 가져올 것이 없습니다.",
-            ImportUnselectableReason.LocalAhead => "이 PC 쪽이 더 최신이라 건너뜁니다.",
+            ImportUnselectableReason.LocalAhead => "이 PC에서 더 이어서 쓴 대화라 건너뜁니다.",
             ImportUnselectableReason.Diverged => "양쪽이 다르게 이어져 이번 버전에서는 가져올 수 없습니다.",
             ImportUnselectableReason.Unverifiable => "이 PC 데이터가 불완전해 비교할 수 없습니다.",
-            ImportUnselectableReason.CompressedUpdate => "압축된 기록(.jsonl.zst)이라 이어받기를 지원하지 않습니다.",
+            ImportUnselectableReason.CompressedUpdate => "이 PC 대화가 압축 파일(.jsonl.zst)로 저장돼 있어 이어 붙일 수 없습니다.",
             ImportUnselectableReason.DependencyOnly => "다른 대화의 원본으로만 들어 있는 대화입니다. 필요하면 자동으로 함께 가져옵니다.",
             _ => null,
         };
@@ -116,7 +116,7 @@ public static class ImportTexts
         var parts = new List<string>();
         if (conversation.IsCompressedRollout && conversation.Relation != RevisionRelation.New)
         {
-            parts.Add("압축된 기록(.jsonl.zst)이라 이어받기는 지원하지 않습니다.");
+            parts.Add("이 PC 대화가 압축 파일(.jsonl.zst)로 저장돼 있어 백업의 뒤 내용을 이어 붙일 수 없습니다.");
         }
 
         if (conversation.Relation == RevisionRelation.Diverged)

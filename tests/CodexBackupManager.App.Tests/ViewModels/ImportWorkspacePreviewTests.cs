@@ -270,7 +270,7 @@ public sealed class ImportWorkspacePreviewTests : IDisposable
         Assert.Equal(CodexBackupManager.Domain.Codex.Import.RevisionRelation.IncomingAhead, thread1.Result.Preview.Relation);
         Assert.True(thread1.IsChecked);
         Assert.Equal("이 PC 위치: Alpha 프로젝트", thread1.PresenceText);
-        Assert.StartsWith("이 PC에 있지만 백업이 더 깁니다", thread1.StatusSentence);
+        Assert.Equal("백업에 이 PC보다 뒤의 내용이 있습니다. 이 PC 대화에 이어 붙입니다.", thread1.StatusSentence);
         Assert.True(ws.CanImport);
 
         await ws.ImportAsync();

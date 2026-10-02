@@ -91,4 +91,13 @@ public sealed class ConversationNodeViewModel : ObservableObject
 
     /// <summary>(Phase 9_2-23) 화면 읽기 프로그램·UI 자동화가 읽는 이름(Title).</summary>
     public string AutomationName => Title;
+
+    private bool _isVisible = true;
+
+    /// <summary>(Phase 9_U-01) 검색으로 보이는지. 표시만 바꾸고 백업 선택(<see cref="IsSelected"/>)과 무관하다.</summary>
+    public bool IsVisible
+    {
+        get => _isVisible;
+        internal set => SetProperty(ref _isVisible, value);
+    }
 }

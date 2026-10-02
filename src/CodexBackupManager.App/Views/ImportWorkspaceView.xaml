@@ -81,82 +81,7 @@
       </Style.Triggers>
     </Style>
 
-    <!-- Phase 9_2-25 — 펼침 삼각형. 기본 TreeViewItem 템플릿은 삼각형을 머리글 세로 가운데에 두어서, 작업 폴더 상자가 커지면
-         삼각형이 따라 내려갔다. 이 템플릿은 삼각형을 머리글 첫 줄(이름 줄) 높이에 고정한다. -->
-    <Style x:Key="ImportTreeExpander" TargetType="ToggleButton">
-      <Setter Property="Focusable" Value="False" />
-      <Setter Property="Width" Value="18" />
-      <Setter Property="Height" Value="18" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ToggleButton">
-            <Border Background="Transparent" Width="18" Height="18">
-              <Path x:Name="Arrow" Data="M 4,3 L 9,7.5 L 4,12 Z" Fill="{StaticResource Muted}"
-                    HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
-                <Path.RenderTransform>
-                  <RotateTransform Angle="0" />
-                </Path.RenderTransform>
-              </Path>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="Arrow" Property="RenderTransform">
-                  <Setter.Value>
-                    <RotateTransform Angle="90" />
-                  </Setter.Value>
-                </Setter>
-              </Trigger>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Arrow" Property="Fill" Value="{StaticResource Fg}" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style x:Key="ImportTreeItem" TargetType="TreeViewItem">
-      <Setter Property="IsExpanded" Value="True" />
-      <Setter Property="Padding" Value="0,3" />
-      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="TreeViewItem">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="18" />
-                <ColumnDefinition Width="*" />
-              </Grid.ColumnDefinitions>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-              </Grid.RowDefinitions>
-              <ToggleButton x:Name="Expander" Style="{StaticResource ImportTreeExpander}" VerticalAlignment="Top" Margin="0,3,0,0"
-                            IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press" />
-              <Border x:Name="Bd" Grid.Column="1" Padding="{TemplateBinding Padding}" CornerRadius="3" Background="Transparent"
-                      BorderThickness="1" BorderBrush="Transparent">
-                <ContentPresenter x:Name="PART_Header" ContentSource="Header" HorizontalAlignment="Stretch" />
-              </Border>
-              <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="1" />
-            </Grid>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsExpanded" Value="False">
-                <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed" />
-              </Trigger>
-              <Trigger Property="HasItems" Value="False">
-                <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
-              </Trigger>
-              <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-              </Trigger>
-              <Trigger Property="IsKeyboardFocused" Value="True">
-                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Info}" />
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
+    <!-- ImportTreeExpander / ImportTreeItem은 9_U-07에서 메인 트리와 같이 쓰려고 App.xaml로 옮겼다. -->
   </UserControl.Resources>
 
   <Grid>
@@ -258,9 +183,12 @@
               <TextBox Width="240" Margin="0,0,8,4" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                        Style="{StaticResource SearchBox}" Tag="대화 제목 또는 프로젝트 이름 검색"
                        ToolTip="대화 제목이나 프로젝트 이름으로 찾기(선택은 그대로 유지됩니다)" AutomationProperties.Name="대화 또는 프로젝트 검색" />
-              <Button Content="새 대화만" Command="{Binding SelectNewOnlyCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
-              <Button Content="전체 선택" Command="{Binding SelectAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
-              <Button Content="모두 해제" Command="{Binding ClearAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4" />
+              <Button Content="새 대화만" Command="{Binding SelectNewOnlyCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4"
+                      ToolTip="처음 상태로 돌립니다: 이 PC에 없는 대화와 뒤에 이어 붙일 대화만 체크합니다." />
+              <Button Content="전체 선택" Command="{Binding SelectAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4"
+                      ToolTip="가져올 수 있는 대화를 모두 체크합니다(검색 중이어도 안 보이는 대화까지 전부)." />
+              <Button Content="모두 해제" Command="{Binding ClearAllCommand}" Style="{StaticResource SmallButton}" Margin="0,0,6,4"
+                      ToolTip="체크를 모두 해제합니다(검색 중이어도 안 보이는 대화까지 전부)." />
             </WrapPanel>
 
             <TreeView x:Name="ImportTree" Grid.Row="1" Margin="0,8,0,0" BorderThickness="0" Background="Transparent"

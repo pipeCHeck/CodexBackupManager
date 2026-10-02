@@ -158,9 +158,14 @@ internal sealed class ImportWorkspaceHarness : IDisposable
     }
 
     /// <summary>원본 PC 대화의 이름(화면 제목)을 바꾼다 — fixture 대화 제목은 모두 같아서 검색 테스트가 하나를 구별할 때 쓴다.</summary>
-    public void SetSourceThreadName(string threadId, string name)
+    public void SetSourceThreadName(string threadId, string name) => SetThreadName(SourceHome, threadId, name);
+
+    /// <summary>(Phase 9_U-01) 대상 PC 대화의 이름(화면 제목)을 바꾼다 — 메인 화면 검색 테스트용.</summary>
+    public void SetTargetThreadName(string threadId, string name) => SetThreadName(TargetHome, threadId, name);
+
+    private static void SetThreadName(string home, string threadId, string name)
     {
-        using SqliteConnection connection = Open(SourceHome);
+        using SqliteConnection connection = Open(home);
         using SqliteCommand cmd = connection.CreateCommand();
         cmd.CommandText = "UPDATE threads SET name = $name, title = $name WHERE id = $id";
         cmd.Parameters.AddWithValue("$name", name);

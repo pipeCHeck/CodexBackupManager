@@ -55,6 +55,9 @@ public sealed class MainViewModel : ObservableObject
     private bool _isCatalogLoading;
     private string? _catalogSummaryText;
     private string? _compactSummaryText;
+    private string _searchText = string.Empty;
+    private string? _searchStatusText;
+    private bool _hasNoSearchResults;
     private CancellationTokenSource? _catalogCancellation;
     private CodexCatalog? _lastCatalog;
 
@@ -292,6 +295,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 ExportCommand.RaiseCanExecuteChanged();
                 CancelExportCommand.RaiseCanExecuteChanged();
+                RaiseButtonToolTips();
             }
         }
     }
@@ -356,6 +360,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 OpenImportWorkspaceCommand.RaiseCanExecuteChanged();
                 OpenImportHistoryCommand?.RaiseCanExecuteChanged();
+                RaiseButtonToolTips();
             }
         }
     }
@@ -382,10 +387,9 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Phase 04_07 — 상단 진단 영역이 접혀 있어도 항상 보이는 한 줄 요약
-    /// (<c>"Desktop {버전} · CLI {버전} · Sessions {개수} · Threads {개수}"</c>). 연결에 실패하면
-    /// <c>null</c>이다(그 상태에선 실패 안내 문구가 대신 보인다). <see cref="Rows"/>에 이미 있는
-    /// 값들을 그대로 재사용해 만든다 — 별도 진단 로직을 새로 만들지 않는다.
+    /// Phase 04_07 — 상단 진단 영역이 접혀 있어도 항상 보이는 한 줄 요약. Phase 9_U-04부터 쉬운 말 한 줄
+    /// (<c>"Codex 버전 26.928"</c>, <see cref="DescribeCodexVersion"/>)이고, Desktop/CLI/Sessions/Threads 값은
+    /// [상세 정보](<see cref="Rows"/>)에만 있다. 연결에 실패하면 <c>null</c>이다(그 상태에선 실패 안내 문구가 대신 보인다).
     /// </summary>
     public string? CompactSummaryText
     {
@@ -423,7 +427,13 @@ public sealed class MainViewModel : ObservableObject
     public bool IsCatalogLoading
     {
         get => _isCatalogLoading;
-        private set => SetProperty(ref _isCatalogLoading, value);
+        private set
+        {
+            if (SetProperty(ref _isCatalogLoading, value))
+            {
+                OnPropertyChanged(nameof(ExportButtonToolTip));
+            }
+        }
     }
 
     /// <summary>카탈로그 요약(프로젝트/대화/파일 개수, 소요 시간). 아직 없으면 <c>null</c>.</summary>
@@ -444,6 +454,149 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>"선택한 대화 N / M" 요약 문구.</summary>
     public string SelectionSummaryText => $"선택한 대화 {SelectedConversationCount} / {TotalConversationCount}";
+
+    // ── Phase 9_U-01 메인 목록 검색 ─────────────────────────────────────────────
+
+    /// <summary>
+    /// 검색어(대화 제목 또는 프로젝트 이름, 가져오기 화면과 같은 <see cref="TreeSearch"/> 규칙). 표시만 바꾸고 선택은 그대로다 —
+    /// 숨은 대화도 선택돼 있으면 내보내기에 들어간다. 새로고침·Codex 폴더 변경 뒤에도 검색어를 유지하고 새 목록에 다시 적용한다.
+    /// </summary>
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (SetProperty(ref _searchText, value ?? string.Empty))
+            {
+                ApplySearch();
+            }
+        }
+    }
+
+    /// <summary>검색 중일 때 "검색 중: 대화 N개 표시 …" 문구. 검색하지 않으면 <c>null</c>.</summary>
+    public string? SearchStatusText
+    {
+        get => _searchStatusText;
+        private set => SetProperty(ref _searchStatusText, value);
+    }
+
+    /// <summary>검색어가 있는데 보이는 대화가 하나도 없는지(목록 자리에 "검색 결과가 없습니다"를 보여 준다).</summary>
+    public bool HasNoSearchResults
+    {
+        get => _hasNoSearchResults;
+        private set => SetProperty(ref _hasNoSearchResults, value);
+    }
+
+    /// <summary>[검색 지우기].</summary>
+    public RelayCommand ClearSearchCommand => _clearSearchCommand ??= new RelayCommand(() => SearchText = string.Empty, () => _searchText.Length > 0);
+
+    private RelayCommand? _clearSearchCommand;
+
+    private void ApplySearch()
+    {
+        string query = TreeSearch.Normalize(_searchText);
+        foreach (ProjectNodeViewModel project in ProjectNodes)
+        {
+            bool anyVisible = false;
+            foreach (ConversationNodeViewModel conversation in project.Conversations)
+            {
+                bool shown = TreeSearch.IsShown(query, project.DisplayName, conversation.Title);
+                conversation.IsVisible = shown;
+                anyVisible |= shown;
+            }
+
+            project.IsVisible = anyVisible || query.Length == 0;
+        }
+
+        _clearSearchCommand?.RaiseCanExecuteChanged();
+        UpdateSearchStatus();
+    }
+
+    private void UpdateSearchStatus()
+    {
+        if (TreeSearch.Normalize(_searchText).Length == 0)
+        {
+            SearchStatusText = null;
+            HasNoSearchResults = false;
+            return;
+        }
+
+        int shown = 0;
+        int hiddenSelected = 0;
+        foreach (ConversationNodeViewModel conversation in ProjectNodes.SelectMany(p => p.Conversations))
+        {
+            if (conversation.IsVisible)
+            {
+                shown++;
+            }
+            else if (conversation.IsSelected)
+            {
+                hiddenSelected++;
+            }
+        }
+
+        HasNoSearchResults = shown == 0 && TotalConversationCount > 0;
+        SearchStatusText = $"검색 중: 대화 {shown}개 표시 (전체 {TotalConversationCount}개)" +
+                           (hiddenSelected > 0 ? $" · 목록에 안 보이는 선택 {hiddenSelected}개도 내보내기에 들어갑니다" : string.Empty);
+    }
+
+    // ── Phase 9_U-05 버튼 툴팁(무엇을 하는지, Codex 데이터를 바꾸는지, 왜 꺼져 있는지) ─────────────────
+
+    /// <summary>[백업 내보내기] 툴팁. 누를 수 없으면 그 이유.</summary>
+    public string ExportButtonToolTip =>
+        IsImportWorkspaceOpen ? "가져오기 화면을 닫은 뒤 쓸 수 있습니다."
+        : IsExporting ? "내보내는 중입니다. 끝나면 다시 누를 수 있습니다."
+        : !HasSelection ? (IsCatalogLoading ? "목록을 만드는 중입니다. 끝나면 내보낼 대화를 체크하세요." : "내보낼 대화나 프로젝트를 먼저 체크하세요.")
+        : $"체크한 대화 {SelectedConversationCount}개를 백업 파일(.codexbackup) 하나로 저장합니다. Codex 데이터는 바꾸지 않습니다.";
+
+    /// <summary>[백업 가져오기] 툴팁. 누를 수 없으면 그 이유.</summary>
+    public string ImportButtonToolTip =>
+        !IsConnected ? "Codex 데이터 폴더에 연결한 뒤 쓸 수 있습니다."
+        : IsBusy ? "Codex 데이터 폴더를 확인하는 중입니다."
+        : IsExporting ? "내보내기가 끝난 뒤 쓸 수 있습니다."
+        : "백업 파일을 열어 가져올 대화를 고릅니다. 고르는 동안에는 아무것도 바꾸지 않고, [가져오기]를 누르면 복구 지점을 만든 뒤 " +
+          "Codex 데이터에 씁니다. Codex를 종료한 뒤에 시작하세요.";
+
+    /// <summary>[가져오기 기록] 툴팁. 누를 수 없으면 그 이유.</summary>
+    public string HistoryButtonToolTip =>
+        !IsConnected ? "Codex 데이터 폴더에 연결한 뒤 쓸 수 있습니다."
+        : "이 Codex 데이터 폴더의 가져오기 기록을 봅니다. 성공한 가져오기를 되돌리거나 오래된 복구 지점을 지울 수 있습니다(확인 후에만 바꿉니다).";
+
+    private void RaiseButtonToolTips()
+    {
+        OnPropertyChanged(nameof(ExportButtonToolTip));
+        OnPropertyChanged(nameof(ImportButtonToolTip));
+        OnPropertyChanged(nameof(HistoryButtonToolTip));
+    }
+
+    private const string CatalogStatsLabel = "목록 통계";
+
+    /// <summary>[상세 정보] 표의 한 줄을 넣거나 바꾼다.</summary>
+    private void SetDiagnosticRow(string label, string value)
+    {
+        for (int i = 0; i < Rows.Count; i++)
+        {
+            if (Rows[i].Label == label)
+            {
+                Rows[i] = new InfoRow(label, value);
+                return;
+            }
+        }
+
+        Rows.Add(new InfoRow(label, value));
+    }
+
+    /// <summary>(Phase 9_U-04) 기본 화면 한 줄: "Codex 버전 26.928"(앱 버전의 앞 두 자리). 앱 버전을 모르면 CLI 버전, 둘 다 모르면 "확인 불가".</summary>
+    internal static string DescribeCodexVersion(string? desktopVersion, string? cliVersion)
+    {
+        if (!string.IsNullOrWhiteSpace(desktopVersion))
+        {
+            string[] parts = desktopVersion.Split('.');
+            return "Codex 버전 " + (parts.Length >= 2 ? parts[0] + "." + parts[1] : desktopVersion);
+        }
+
+        return string.IsNullOrWhiteSpace(cliVersion) ? "Codex 버전 " + NotAvailable : "Codex CLI " + cliVersion;
+    }
 
     /// <summary>Phase 3 — 오른쪽 Conversation Viewer에 표시할 메시지 목록.</summary>
     public ObservableCollection<ConversationMessageViewModel> ConversationMessages { get; } = [];
@@ -751,10 +904,8 @@ public sealed class MainViewModel : ObservableObject
             ? "없음"
             : string.Join(", ", info.ActivitySignals)));
 
-        CompactSummaryText =
-            $"Desktop {info.CodexDesktopVersion ?? NotAvailable} · CLI {info.CodexCliVersion ?? NotAvailable} · " +
-            $"Sessions {DescribeCount(info.SessionFileCount, info.CompressedSessionFileCount)} · " +
-            $"Threads {DescribeThreads(info)}";
+        // Phase 9_U-04 — 기본 화면에는 쉬운 말 한 줄만 둔다. Desktop/CLI/Sessions/Threads 같은 진단 값은 [상세 정보](Rows)에 그대로 있다.
+        CompactSummaryText = DescribeCodexVersion(info.CodexDesktopVersion, info.CodexCliVersion);
 
         // Phase 5(Export) manifest에 그대로 쓴다 — 다시 조사하지 않고 여기서 읽은 값을 재사용한다.
         _lastCodexDesktopVersion = info.CodexDesktopVersion;
@@ -836,11 +987,14 @@ public sealed class MainViewModel : ObservableObject
         // 위 Apply()의 ClearIfDifferentHome이 이미 처리했다).
         _selection.RetainOnly(ProjectNodes.SelectMany(p => p.Conversations).Select(c => c.ThreadId));
 
-        CatalogSummaryText =
-            $"프로젝트 {catalog.Projects.Count}개 · 사용자 대화 {catalog.UserConversationCount}개 · " +
+        // Phase 9_U-04 — 목록 머리에는 개수만. 파일 수·소요 시간(개발자 진단)은 [상세 정보]의 한 줄로 옮긴다.
+        CatalogSummaryText = $"프로젝트 {catalog.Projects.Count}개 · 대화 {catalog.UserConversationCount}개";
+        SetDiagnosticRow(
+            CatalogStatsLabel,
             $"rollout 파일 {catalog.Stats.RolloutFileCount}개 · " +
             $"스캔 {catalog.Stats.JsonlScanDuration.TotalMilliseconds:F0}ms / " +
-            $"전체 {catalog.Stats.TotalBuildDuration.TotalMilliseconds:F0}ms";
+            $"전체 {catalog.Stats.TotalBuildDuration.TotalMilliseconds:F0}ms");
+        ApplySearch();
 
         // 카탈로그 경고에는 사용자 원문이 없다(파일명/thread ID 수준의 진단 문구뿐이다). 개수만 로그에 남긴다.
         _logger.Info(
@@ -930,8 +1084,7 @@ public sealed class MainViewModel : ObservableObject
                 long sizeBytes = new FileInfo(destination).Length;
                 completed = CreateExportCompleted(writtenManifest, destination, sizeBytes);
                 ExportStatusText =
-                    $"내보내기 완료 — 선택 대화 {selectedThreadIds.Count}개, {sizeBytes / 1024.0 / 1024.0:F1} MB, " +
-                    $"{stopwatch.ElapsedMilliseconds}ms" +
+                    $"내보내기 완료 — 선택 대화 {selectedThreadIds.Count}개, {sizeBytes / 1024.0 / 1024.0:F1} MB" +
                     (result.Warnings.Count > 0 ? $" (경고 {result.Warnings.Count}건)" : string.Empty);
                 _logger.Info(
                     $"Export 완료. selected={selectedThreadIds.Count} sizeBytes={sizeBytes} " +
@@ -1058,6 +1211,11 @@ public sealed class MainViewModel : ObservableObject
     internal IReadOnlyList<ConversationNodeViewModel> HighlightConversations(IReadOnlyList<string> threadIds)
     {
         var wanted = new HashSet<string>(threadIds, StringComparer.OrdinalIgnoreCase);
+        if (ProjectNodes.SelectMany(p => p.Conversations).Any(c => wanted.Contains(c.ThreadId) && !c.IsVisible))
+        {
+            SearchText = string.Empty; // 9_U-01: 검색 때문에 가져온 대화가 숨겨져 있으면 검색을 지워 보이게 한다.
+        }
+
         var found = new List<ConversationNodeViewModel>();
         foreach (ProjectNodeViewModel project in ProjectNodes)
         {
@@ -1094,6 +1252,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void RaiseMainCommands()
     {
+        RaiseButtonToolTips();
         RefreshCommand.RaiseCanExecuteChanged();
         ChangeFolderCommand.RaiseCanExecuteChanged();
         ExportCommand.RaiseCanExecuteChanged();
@@ -1339,6 +1498,8 @@ public sealed class MainViewModel : ObservableObject
         SelectAllConversationsCommand.RaiseCanExecuteChanged();
         ClearSelectionCommand.RaiseCanExecuteChanged();
         ExportCommand.RaiseCanExecuteChanged();
+        UpdateSearchStatus();
+        OnPropertyChanged(nameof(ExportButtonToolTip));
     }
 
     private void ShowFailure(string detail)

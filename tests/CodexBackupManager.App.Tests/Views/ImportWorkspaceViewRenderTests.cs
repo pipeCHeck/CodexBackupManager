@@ -231,6 +231,99 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml());
     }
 
+    // ── 9_U-01/02/04/05/07 메인 화면 ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(820, 700)]
+    [InlineData(1180, 860)]
+    public async Task 메인_창은_검색_칸과_사용_안내와_툴팁을_그리고_좁은_폭에서도_버튼이_가려지지_않는다(double width, double height)
+    {
+        _h.SetTargetThreadName(ImportWorkspaceHarness.Thread2, string.Concat(Enumerable.Repeat("아주 긴 대화 제목이 계속 이어집니다 ", 12)));
+        CodexBackupManager.App.ViewModels.MainViewModel main = _h.CreateMainViewModel(_h.TargetHome);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+
+        AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml(), width, height, window =>
+        {
+            var content = (FrameworkElement)window.Content;
+            var texts = Descendants<System.Windows.Controls.TextBlock>(window).ToList();
+
+            // 9_U-01 검색 칸(자리 표시 문구)
+            System.Windows.Controls.TextBox search = Descendants<System.Windows.Controls.TextBox>(window).Single(t => t.Name == "MainSearchBox");
+            Assert.Equal("대화 제목 또는 프로젝트 이름 검색", search.Tag);
+            Assert.True(search.IsVisible);
+
+            // 9_U-02 하단 안내, 9_U-04 라벨, 9_U-05 사용 안내(대화를 고르지 않았을 때)
+            Assert.Contains(texts, t => t.Text == "목록 보기·내보내기는 Codex 데이터를 바꾸지 않습니다." && t.IsVisible);
+            Assert.Contains(texts, t => t.Text == "가져오기·되돌리기는 복구 지점을 만든 뒤에만 바꿉니다." && t.IsVisible);
+            Assert.DoesNotContain(texts, t => t.Text.Contains("읽기 전용으로만", StringComparison.Ordinal));
+            Assert.Contains(texts, t => t.Text == "Codex 데이터 폴더" && t.IsVisible);
+            Assert.DoesNotContain(texts, t => t.Text == "Codex Home");
+            Assert.Contains(texts, t => t.Text.StartsWith("① 내보낼 대화나 프로젝트를 체크하고", StringComparison.Ordinal) && t.IsVisible);
+            Assert.Contains(texts, t => t.Text == "Codex 버전 99.123" && t.IsVisible);
+            Assert.DoesNotContain(texts, t => t.IsVisible && (t.Text.Contains("rollout 파일", StringComparison.Ordinal) || t.Text.Contains("Sessions", StringComparison.Ordinal)));
+
+            // 9_U-05 버튼 툴팁(꺼진 [백업 내보내기]도 이유가 보인다)
+            System.Windows.Controls.Button export = Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, "백업 내보내기"));
+            Assert.False(export.IsEnabled);
+            Assert.Equal("내보낼 대화나 프로젝트를 먼저 체크하세요.", export.ToolTip);
+            Assert.True(System.Windows.Controls.ToolTipService.GetShowOnDisabled(export));
+            foreach (string name in new[] { "Codex 폴더 선택", "새로고침", "백업 가져오기", "가져오기 기록" })
+            {
+                System.Windows.Controls.Button button = Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, name));
+                Assert.False(string.IsNullOrWhiteSpace(button.ToolTip as string), name + " 툴팁 없음");
+
+                // 9_U-08 — 820px에서 오른쪽 안내와 겹쳐 [가져오기 기록]이 가려졌다. 모든 버튼이 창 안에 보인다.
+                Rect bounds = button.TransformToAncestor(content).TransformBounds(new Rect(0, 0, button.ActualWidth, button.ActualHeight));
+                Assert.True(bounds.Right <= content.ActualWidth + 0.5, $"{name} 버튼이 창 밖으로 나갑니다: {bounds.Right:F0} / {content.ActualWidth:F0}");
+            }
+
+            // 9_U-07 — 긴 제목이 있어도 트리 가로 스크롤바가 생기지 않고, 제목은 말줄임 + 전체 제목 툴팁
+            System.Windows.Controls.TreeView tree = Descendants<System.Windows.Controls.TreeView>(window).Single(t => t.Name == "ConversationTree");
+            System.Windows.Controls.ScrollViewer treeScroll = Descendants<System.Windows.Controls.ScrollViewer>(tree).First();
+            Assert.Equal(Visibility.Collapsed, treeScroll.ComputedHorizontalScrollBarVisibility);
+            System.Windows.Controls.TextBlock longTitle = Descendants<System.Windows.Controls.TextBlock>(tree).First(t => t.Text.StartsWith("아주 긴 대화 제목", StringComparison.Ordinal));
+            Assert.Equal(TextTrimming.CharacterEllipsis, longTitle.TextTrimming);
+            Assert.Equal(longTitle.Text, longTitle.ToolTip);
+            Rect titleBounds = longTitle.TransformToAncestor(tree).TransformBounds(new Rect(0, 0, longTitle.ActualWidth, longTitle.ActualHeight));
+            Assert.True(titleBounds.Right <= tree.ActualWidth + 0.5, $"긴 제목이 트리 밖으로 나갑니다: {titleBounds.Right:F0} / {tree.ActualWidth:F0}");
+        });
+    }
+
+    [Fact]
+    public async Task 메인_창은_검색_결과가_없으면_안내를_보이고_검색_중_표시를_그린다()
+    {
+        CodexBackupManager.App.ViewModels.MainViewModel main = _h.CreateMainViewModel(_h.TargetHome);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+        main.SearchText = "없는검색어xyz";
+
+        AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml(), window =>
+        {
+            var texts = Descendants<System.Windows.Controls.TextBlock>(window).ToList();
+            Assert.Contains(texts, t => t.Text.StartsWith("검색 결과가 없습니다.", StringComparison.Ordinal) && t.IsVisible);
+            Assert.Contains(texts, t => t.Text.StartsWith("검색 중: 대화 0개 표시", StringComparison.Ordinal) && t.IsVisible);
+            Assert.All(Descendants<System.Windows.Controls.TreeViewItem>(window), item => Assert.False(item.IsVisible));
+        });
+    }
+
+    [Fact]
+    public async Task 연결_실패_화면은_다음에_할_일을_먼저_보여준다()
+    {
+        string notCodex = _h.NewFolder("not-a-codex-home");
+        CodexBackupManager.App.ViewModels.MainViewModel main = _h.CreateMainViewModel(notCodex);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+        Assert.False(main.IsConnected);
+
+        AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml(), 820, 700, window =>
+        {
+            var texts = Descendants<System.Windows.Controls.TextBlock>(window).ToList();
+            Assert.Contains(texts, t => t.Text == "Codex 데이터 폴더(.codex)를 찾지 못했습니다." && t.IsVisible);
+            Assert.Contains(texts, t => t.Text.StartsWith("아래 [Codex 폴더 선택]을 눌러 직접 고르세요.", StringComparison.Ordinal) && t.IsVisible);
+            System.Windows.Controls.Button import = Descendants<System.Windows.Controls.Button>(window).Single(b => Equals(b.Content, "백업 가져오기"));
+            Assert.False(import.IsEnabled);
+            Assert.Equal("Codex 데이터 폴더에 연결한 뒤 쓸 수 있습니다.", import.ToolTip);
+        });
+    }
+
     [Fact]
     public async Task 메인_창의_사이드바_보정_줄을_바인딩_오류_없이_그린다()
     {
@@ -548,11 +641,72 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         Assert.InRange(rendered, 1, ws.ContentMessages.Count); // 가상화: 보인 것만 FlowDocument를 만든다
     }
 
+    // ── 9_U-03 좁은 폭에서 대화 내용 말풍선이 패널 안에 있다 ─────────────────────────
+
+    /// <summary>목록 안 말풍선(Border "Bubble")마다 오른쪽 끝이 목록 오른쪽 끝을 넘지 않는지 본다.</summary>
+    private static void AssertBubblesInside(System.Windows.Controls.ListBox list)
+    {
+        var bubbles = Descendants<System.Windows.Controls.Border>(list).Where(b => b.Name == "Bubble" && b.IsVisible).ToList();
+        Assert.NotEmpty(bubbles);
+        // 목록 자체도 창(보이는 영역) 안에 있어야 한다.
+        Window window = Window.GetWindow(list);
+        var content = (FrameworkElement)window.Content;
+        Rect listBounds = list.TransformToAncestor(content).TransformBounds(new Rect(0, 0, list.ActualWidth, list.ActualHeight));
+        Assert.True(listBounds.Right <= content.ActualWidth + 0.5, $"대화 내용 목록이 창 밖으로 나갑니다: 오른쪽 {listBounds.Right:F0} / 창 {content.ActualWidth:F0}");
+        foreach (System.Windows.Controls.Border bubble in bubbles)
+        {
+            Rect bounds = bubble.TransformToAncestor(list).TransformBounds(new Rect(0, 0, bubble.ActualWidth, bubble.ActualHeight));
+            Assert.True(bounds.Left >= -0.5 && bounds.Right <= list.ActualWidth + 0.5,
+                $"말풍선이 목록 밖으로 나갑니다: {bounds.Left:F0}..{bounds.Right:F0} / 목록 폭 {list.ActualWidth:F0}");
+        }
+    }
+
+    [Theory]
+    [InlineData(820, 700)]
+    [InlineData(1180, 860)]
+    public async Task 좁은_폭에서도_가져오기_미리보기_말풍선이_패널_안에서_줄바꿈된다(double width, double height)
+    {
+        _h.AppendToSourceRollout(ImportWorkspaceHarness.Thread2, 6, string.Concat(Enumerable.Repeat("아주 긴 문장이 이어지는 대화 내용 ", 30)) + "C:/Users/someone/very/long/path/without/any/spaces/" + new string('x', 160));
+        _h.RemoveFromTarget(ImportWorkspaceHarness.Thread2);
+        string backup = await _h.ExportAsync();
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
+        ws.SelectNode(ws.Projects.SelectMany(p => p.Conversations).First(c => c.ThreadId == ImportWorkspaceHarness.Thread2));
+        await ImportWorkspaceHarness.ContentLoadedAsync(ws);
+
+        AssertRendersWithoutBindingErrors(ws, BuildWindowXaml(), width, height, window =>
+            AssertBubblesInside(Descendants<System.Windows.Controls.ListBox>(window).Single(l => l.Name == "ContentList")));
+    }
+
+    [Fact]
+    public async Task 넓은_창을_좁게_줄여도_가져오기_미리보기_말풍선이_패널_안에_있다()
+    {
+        _h.AppendToSourceRollout(ImportWorkspaceHarness.Thread2, 6, string.Concat(Enumerable.Repeat("아주 긴 문장이 이어지는 대화 내용 ", 30)));
+        _h.RemoveFromTarget(ImportWorkspaceHarness.Thread2);
+        string backup = await _h.ExportAsync();
+        ImportWorkspaceViewModel ws = await _h.OpenEditingAsync(backup);
+        ws.SelectNode(ws.Projects.SelectMany(p => p.Conversations).First(c => c.ThreadId == ImportWorkspaceHarness.Thread2));
+        await ImportWorkspaceHarness.ContentLoadedAsync(ws);
+
+        AssertRendersWithoutBindingErrors(ws, BuildWindowXaml(), 1400, 860, window =>
+        {
+            window.Width = 820;
+            window.Height = 700;
+            Pump();
+            window.UpdateLayout();
+            Pump();
+            AssertBubblesInside(Descendants<System.Windows.Controls.ListBox>(window).Single(l => l.Name == "ContentList"));
+        });
+    }
+
     private static void AssertRendersWithoutBindingErrors(ImportWorkspaceViewModel viewModel, Action<Window>? inspect = null)
         => AssertRendersWithoutBindingErrors(viewModel, BuildWindowXaml(), inspect);
 
     /// <summary>창을 그리고(바인딩 오류 0 확인), <paramref name="inspect"/>로 그려진 화면을 STA 스레드에서 검사한다.</summary>
     private static void AssertRendersWithoutBindingErrors(object viewModel, string windowXaml, Action<Window>? inspect = null)
+        => AssertRendersWithoutBindingErrors(viewModel, windowXaml, 1000, 700, inspect);
+
+    /// <summary>창 크기를 정해 그린다(9_U-03 좁은 폭 확인).</summary>
+    private static void AssertRendersWithoutBindingErrors(object viewModel, string windowXaml, double width, double height, Action<Window>? inspect)
     {
         var errors = new List<string>();
 
@@ -565,8 +719,8 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
             try
             {
                 var window = (Window)XamlReader.Parse(windowXaml);
-                window.Width = 1000;
-                window.Height = 700;
+                window.Width = width;
+                window.Height = height;
                 window.Left = -20000;
                 window.ShowInTaskbar = false;
                 window.WindowStyle = WindowStyle.None;

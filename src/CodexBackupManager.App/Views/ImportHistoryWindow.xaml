@@ -44,7 +44,7 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-        <TextBlock Text="이 Codex 폴더의 가져오기 기록이 없습니다." Foreground="{StaticResource Muted}" Margin="12"
+        <TextBlock Text="이 Codex 데이터 폴더의 가져오기 기록이 없습니다." Foreground="{StaticResource Muted}" Margin="12"
                    Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
       </Grid>
     </Border>
@@ -76,9 +76,12 @@
     </Border>
 
     <WrapPanel Grid.Row="3" Margin="0,12,0,0" HorizontalAlignment="Right">
-      <Button Content="되돌리기" Command="{Binding UndoCommand}" Margin="0,0,8,4" Padding="12,5" />
-      <Button Content="선택 삭제" Command="{Binding DeleteSelectedCommand}" Margin="0,0,8,4" Padding="12,5" />
-      <Button Content="30일 지난 기록 정리" Command="{Binding CleanupCommand}" Margin="0,0,8,4" Padding="12,5" />
+      <Button Content="되돌리기" Command="{Binding UndoCommand}" Margin="0,0,8,4" Padding="12,5" ToolTipService.ShowOnDisabled="True"
+              ToolTip="고른 가져오기가 Codex에 쓴 것만 거꾸로 되돌립니다. 확인을 받은 뒤, 복구 지점을 만들고 진행합니다. 되돌릴 수 없는 기록이면 꺼져 있고 이유는 목록에 보입니다." />
+      <Button Content="선택 삭제" Command="{Binding DeleteSelectedCommand}" Margin="0,0,8,4" Padding="12,5" ToolTipService.ShowOnDisabled="True"
+              ToolTip="고른 기록과 그 복구 지점 파일을 지웁니다(확인 후). Codex 데이터는 바꾸지 않습니다. 지우면 그 가져오기는 되돌릴 수 없습니다." />
+      <Button Content="30일 지난 기록 정리" Command="{Binding CleanupCommand}" Margin="0,0,8,4" Padding="12,5" ToolTipService.ShowOnDisabled="True"
+              ToolTip="30일이 지났고 되돌릴 수 없는 기록의 복구 지점 파일을 한꺼번에 지웁니다(확인 후). Codex 데이터는 바꾸지 않습니다." />
       <Button Content="닫기" Command="{Binding CloseCommand}" IsCancel="True" Margin="0,0,0,4" Padding="12,5" MinWidth="72" />
     </WrapPanel>
 

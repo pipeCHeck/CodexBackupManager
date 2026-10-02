@@ -75,7 +75,7 @@ public sealed class MainViewModelCompactSummaryTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task 연결_성공하면_Desktop_CLI_Sessions_Threads_요약이_채워진다()
+    public async Task 연결_성공하면_쉬운_버전_한_줄이_보이고_진단_값은_상세_정보에_있다()
     {
         _home = RepositoryFixtures.CopyCodexHomeFixtureToTemp();
         var testDir = Path.Combine(Path.GetTempPath(), "cbm-app-tests", Guid.NewGuid().ToString("N"));
@@ -86,11 +86,14 @@ public sealed class MainViewModelCompactSummaryTests : IAsyncLifetime
         await WaitUntilIdle(viewModel);
 
         Assert.True(viewModel.IsConnected);
-        Assert.NotNull(viewModel.CompactSummaryText);
-        Assert.Contains("Desktop", viewModel.CompactSummaryText);
-        Assert.Contains("CLI", viewModel.CompactSummaryText);
-        Assert.Contains("Sessions", viewModel.CompactSummaryText);
-        Assert.Contains("Threads", viewModel.CompactSummaryText);
+        // Phase 9_U-04 — 기본 화면은 "Codex 버전 99.123"(fixture Desktop 99.123.45678)만, 진단 값은 [상세 정보] 표에 그대로 남는다.
+        Assert.Equal("Codex 버전 99.123", viewModel.CompactSummaryText);
+        Assert.Contains(viewModel.Rows, r => r.Label == "Codex Desktop" && r.Value == "99.123.45678");
+        Assert.Contains(viewModel.Rows, r => r.Label == "Codex CLI");
+        Assert.Contains(viewModel.Rows, r => r.Label == "Sessions");
+        Assert.Contains(viewModel.Rows, r => r.Label == "Threads (state DB)");
+        Assert.Contains(viewModel.Rows, r => r.Label == "목록 통계" && r.Value.Contains("rollout 파일", StringComparison.Ordinal) && r.Value.Contains("ms", StringComparison.Ordinal));
+        Assert.Matches(@"^프로젝트 \d+개 · 대화 \d+개$", viewModel.CatalogSummaryText);
     }
 
     [Fact]

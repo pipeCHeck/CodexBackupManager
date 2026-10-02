@@ -131,6 +131,82 @@
       </Style.Triggers>
     </Style>
 
+    <!-- Phase 9_2-25 — 펼침 삼각형(9_U-07부터 메인 트리도 같이 쓴다). 기본 TreeViewItem 템플릿은 삼각형을 머리글 세로 가운데에 두어서, 작업 폴더 상자가 커지면
+         삼각형이 따라 내려갔다. 이 템플릿은 삼각형을 머리글 첫 줄(이름 줄) 높이에 고정한다. -->
+    <Style x:Key="ImportTreeExpander" TargetType="ToggleButton">
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Width" Value="18" />
+      <Setter Property="Height" Value="18" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ToggleButton">
+            <Border Background="Transparent" Width="18" Height="18">
+              <Path x:Name="Arrow" Data="M 4,3 L 9,7.5 L 4,12 Z" Fill="{StaticResource Muted}"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                <Path.RenderTransform>
+                  <RotateTransform Angle="0" />
+                </Path.RenderTransform>
+              </Path>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Arrow" Property="RenderTransform">
+                  <Setter.Value>
+                    <RotateTransform Angle="90" />
+                  </Setter.Value>
+                </Setter>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Arrow" Property="Fill" Value="{StaticResource Fg}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="ImportTreeItem" TargetType="TreeViewItem">
+      <Setter Property="IsExpanded" Value="True" />
+      <Setter Property="Padding" Value="0,3" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TreeViewItem">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <ToggleButton x:Name="Expander" Style="{StaticResource ImportTreeExpander}" VerticalAlignment="Top" Margin="0,3,0,0"
+                            IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press" />
+              <Border x:Name="Bd" Grid.Column="1" Padding="{TemplateBinding Padding}" CornerRadius="3" Background="Transparent"
+                      BorderThickness="1" BorderBrush="Transparent">
+                <ContentPresenter x:Name="PART_Header" ContentSource="Header" HorizontalAlignment="Stretch" />
+              </Border>
+              <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="1" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsExpanded" Value="False">
+                <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed" />
+              </Trigger>
+              <Trigger Property="HasItems" Value="False">
+                <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource Info}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <!-- Phase 9_2-24 — 자리 표시 문구가 있는 검색 칸. 문구는 Tag로 준다. 입력하면 사라진다(외부 패키지 없음). -->
     <Style x:Key="SearchBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
       <Setter Property="Template">
@@ -162,6 +238,9 @@
          있던 것을 그대로 옮겼다(표시 결과 동일). -->
     <Style x:Key="ConversationMessageItemStyle" TargetType="ListBoxItem">
       <Setter Property="Focusable" Value="False" />
+      <!-- Phase 9_U-03 — 창을 크게 줄이면 가상화 목록이 항목을 예전(넓은) 폭 그대로 두는 경우가 있어(실제 앱 1400→820에서 재현),
+           말풍선이 목록 오른쪽 밖으로 잘렸다. 항목 폭을 목록의 보이는 폭에 묶어 항상 다시 줄바꿈하게 한다. -->
+      <Setter Property="Width" Value="{Binding ViewportWidth, RelativeSource={RelativeSource AncestorType=ScrollViewer}}" />
       <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="Padding" Value="0" />

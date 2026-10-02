@@ -30,7 +30,7 @@ public static class BackupFilePicker
     {
         var dialog = new OpenFileDialog
         {
-            Title = "백업 불러오기",
+            Title = "가져올 백업 파일 선택",
             Filter = "Codex Backup (*.codexbackup)|*.codexbackup",
             CheckFileExists = true,
             Multiselect = false,

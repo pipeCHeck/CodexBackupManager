@@ -63,12 +63,12 @@
         </Style>
       </Grid.Style>
 
-    <!-- Codex Home 경로 -->
+    <!-- Codex 데이터 폴더 경로(9_U-04: 화면에서는 "Codex Home" 대신 "Codex 데이터 폴더") -->
     <Border Grid.Row="0" Background="{StaticResource Panel}" CornerRadius="6"
             Padding="14,11" Margin="0,16,0,0"
             Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibility}}">
       <StackPanel>
-        <TextBlock Text="Codex Home" Foreground="{StaticResource Muted}" FontSize="11" />
+        <TextBlock Text="Codex 데이터 폴더" Foreground="{StaticResource Muted}" FontSize="11" />
         <TextBlock Text="{Binding HomePath}" FontFamily="Consolas, D2Coding, Malgun Gothic"
                    FontSize="13" Margin="0,3,0,0" TextWrapping="Wrap" />
       </StackPanel>
@@ -93,6 +93,8 @@
           <TextBlock Grid.Column="0" Text="{Binding IncompleteApplyStatusText}" Foreground="{StaticResource Warn}"
                      TextWrapping="Wrap" VerticalAlignment="Center" />
           <Button Grid.Column="1" Content="이전 상태로 복구" Command="{Binding RecoverIncompleteApplyCommand}"
+                  ToolTipService.ShowOnDisabled="True"
+                  ToolTip="중간에 멈춘 작업 직전의 복구 지점으로 Codex 데이터를 되돌립니다(확인 후). Codex를 완전히 종료한 뒤 누르세요."
                   Margin="10,0,0,0" Padding="10,4" MinWidth="0" FontSize="11" />
         </Grid>
       </Border>
@@ -109,6 +111,8 @@
           <TextBlock Grid.Column="0" Text="{Binding SidebarRepairText}" Foreground="{StaticResource Fg}"
                      TextWrapping="Wrap" VerticalAlignment="Center" />
           <Button Grid.Column="1" Content="사이드바에 표시" Command="{Binding RepairSidebarCommand}"
+                  ToolTipService.ShowOnDisabled="True"
+                  ToolTip="이 앱이 만든 프로젝트를 Codex 데스크톱 앱 사이드바 목록에 추가합니다(확인 후). Codex를 종료한 뒤, 복구 지점을 만들고 앱 상태 파일만 바꿉니다."
                   AutomationProperties.Name="사이드바에 표시"
                   Margin="10,0,0,0" Padding="10,4" MinWidth="0" FontSize="11" />
         </Grid>
@@ -138,9 +142,12 @@
           </Style>
         </Border.Style>
         <StackPanel>
-          <TextBlock Text="Codex 데이터 폴더를 직접 선택해 주세요."
-                     FontSize="14" Margin="0,0,0,10" />
-          <TextBlock Text="후보 경로 검사 결과" Foreground="{StaticResource Muted}"
+          <!-- Phase 9_U-08 — 처음 연결 실패: 무엇을 하면 되는지 먼저 말하고, 검사 결과는 그 아래에 둔다. -->
+          <TextBlock Text="Codex 데이터 폴더(.codex)를 찾지 못했습니다."
+                     FontSize="14" Margin="0,0,0,4" />
+          <TextBlock Text="아래 [Codex 폴더 선택]을 눌러 직접 고르세요. 보통 C:\Users\사용자 이름\.codex 입니다. Codex를 한 번도 실행하지 않았다면 먼저 실행해 주세요."
+                     Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" />
+          <TextBlock Text="찾아본 위치와 결과" Foreground="{StaticResource Muted}"
                      FontSize="11" Margin="0,0,0,5" />
           <TextBlock Text="{Binding DetailText}" Foreground="{StaticResource Muted}"
                      TextWrapping="Wrap" FontSize="12" />
@@ -243,44 +250,76 @@
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
               <RowDefinition Height="*" />
               <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <TextBlock Text="{Binding CatalogSummaryText, TargetNullValue='카탈로그 준비 중…'}"
+            <TextBlock Text="{Binding CatalogSummaryText, TargetNullValue='목록 준비 중…'}"
                        Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap" />
 
-            <TextBlock Grid.Row="1" Text="목록을 만드는 중입니다…"
+            <!-- Phase 9_U-01 — 가져오기 화면과 같은 검색(대화 제목 또는 프로젝트 이름). 표시만 바꾸고 체크는 그대로다. -->
+            <StackPanel Grid.Row="1" Margin="0,8,0,0">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="MainSearchBox" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                         Style="{StaticResource SearchBox}" Tag="대화 제목 또는 프로젝트 이름 검색"
+                         ToolTip="대화 제목이나 프로젝트 이름으로 찾습니다. 보이는 목록만 바뀌고 체크(내보낼 대화)는 그대로입니다."
+                         AutomationProperties.Name="대화 또는 프로젝트 검색" />
+                <Button Grid.Column="1" Content="지우기" Command="{Binding ClearSearchCommand}" Padding="8,3" MinWidth="0" FontSize="11"
+                        Margin="6,0,0,0" ToolTip="검색어를 지우고 전체 목록을 다시 보여 줍니다." AutomationProperties.Name="검색 지우기" />
+              </Grid>
+              <TextBlock Text="{Binding SearchStatusText}" Foreground="{StaticResource Info}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                         AutomationProperties.LiveSetting="Polite"
+                         Visibility="{Binding SearchStatusText, Converter={StaticResource NullToCollapsed}}" />
+            </StackPanel>
+
+            <TextBlock Grid.Row="2" Text="목록을 만드는 중입니다…"
                        Foreground="{StaticResource Muted}" FontSize="12"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        Visibility="{Binding IsCatalogLoading, Converter={StaticResource BoolToVisibility}}" />
+            <TextBlock Grid.Row="2" Text="검색 결과가 없습니다. 검색어를 바꾸거나 [지우기]를 누르세요."
+                       Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10,0"
+                       Visibility="{Binding HasNoSearchResults, Converter={StaticResource BoolToVisibility}}" />
 
             <!-- Focusable="False": 체크박스가 키보드 포커스를 받으면 TreeViewItem이 그걸 "선택"으로
                  취급해 오른쪽 Viewer가 바뀐다(WPF의 "포커스가 선택을 따라간다" 동작). 체크(백업 선택)와
                  Viewer 포커스를 완전히 분리하기 위해 체크박스는 포커스를 받지 않게 한다.
                  헤더/제목을 Grid(Auto+*)로 감싸는 이유: StackPanel은 자식에게 무한 너비를 주기 때문에
-                 TextTrimming이 실제로 동작하지 않는다 — 폭을 실제로 제한해야 말줄임이 걸린다. -->
-            <TreeView x:Name="ConversationTree" Grid.Row="1" Margin="0,10,0,0" BorderThickness="0" Background="Transparent"
+                 TextTrimming이 실제로 동작하지 않는다 — 폭을 실제로 제한해야 말줄임이 걸린다.
+                 Phase 9_U-07 — TreeViewItem 머리글 칸은 폭 제한이 없어 긴 제목이 가로 스크롤바를 늘 띄웠다. 가로 스크롤을 끄고
+                 가져오기 트리와 같은 항목 템플릿(ImportTreeItem, 머리글이 남은 폭(*)을 받는다)을 써서 말줄임표로 자르고, 전체 이름은 툴팁으로 보여 준다. -->
+            <TreeView x:Name="ConversationTree" Grid.Row="2" Margin="0,10,0,0" BorderThickness="0" Background="Transparent"
                       ItemsSource="{Binding ProjectNodes}"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      AutomationProperties.Name="프로젝트와 대화 목록"
                       SelectedItemChanged="ConversationTree_SelectedItemChanged">
+              <!-- 9_U-07 — 가져오기 트리와 같은 항목 모양(잘 보이는 펼침 삼각형, 선택·키보드 포커스 표시). -->
               <TreeView.ItemContainerStyle>
-                <Style TargetType="TreeViewItem">
+                <Style TargetType="TreeViewItem" BasedOn="{StaticResource ImportTreeItem}">
                   <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                   <Setter Property="Padding" Value="0,3" />
                   <!-- Phase 9_2-23 — 화면 읽기 프로그램·UI 자동화가 클래스 이름 대신 표시 이름을 읽게 한다. -->
                   <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                   <!-- Phase 9_2-17 — [목록에서 보기]가 가져온 대화를 선택하면 보이는 위치로 스크롤한다. -->
                   <Setter Property="views:TreeViewItemBehavior.BringIntoViewWhenSelected" Value="True" />
+                  <!-- Phase 9_U-01 — 검색은 표시만 바꾼다(체크는 그대로). -->
+                  <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BoolToVisibility}}" />
                 </Style>
               </TreeView.ItemContainerStyle>
               <TreeView.ItemTemplate>
                 <HierarchicalDataTemplate ItemsSource="{Binding Conversations}">
                   <HierarchicalDataTemplate.ItemContainerStyle>
-                    <Style TargetType="TreeViewItem">
+                    <Style TargetType="TreeViewItem" BasedOn="{StaticResource ImportTreeItem}">
                       <Setter Property="Padding" Value="0,3" />
                       <Setter Property="IsSelected" Value="{Binding IsTreeSelected, Mode=TwoWay}" />
                       <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
                       <Setter Property="views:TreeViewItemBehavior.BringIntoViewWhenSelected" Value="True" />
+                      <Setter Property="Visibility" Value="{Binding IsVisible, Converter={StaticResource BoolToVisibility}}" />
                     </Style>
                   </HierarchicalDataTemplate.ItemContainerStyle>
                   <Grid>
@@ -323,15 +362,17 @@
               </TreeView.ItemTemplate>
             </TreeView>
 
-            <!-- 선택 요약 + 전체 선택/해제(Phase 4) -->
-            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,10,0,0">
+            <!-- 선택 요약 + 전체 선택/해제(Phase 4). 9_U-01: 검색 중에도 목록 전체가 대상이다(툴팁에 적는다). -->
+            <WrapPanel Grid.Row="3" Margin="0,10,0,0">
               <TextBlock Text="{Binding SelectionSummaryText}" Foreground="{StaticResource Muted}"
-                         FontSize="11" VerticalAlignment="Center" />
+                         FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0" />
               <Button Content="전체 선택" Command="{Binding SelectAllConversationsCommand}"
-                      Margin="10,0,0,0" Padding="8,3" MinWidth="0" FontSize="11" />
+                      Margin="0,0,6,0" Padding="8,3" MinWidth="0" FontSize="11"
+                      ToolTip="목록의 모든 대화를 체크합니다(검색 중이어도 안 보이는 대화까지 전부)." />
               <Button Content="선택 해제" Command="{Binding ClearSelectionCommand}"
-                      Margin="6,0,0,0" Padding="8,3" MinWidth="0" FontSize="11" />
-            </StackPanel>
+                      Margin="0" Padding="8,3" MinWidth="0" FontSize="11"
+                      ToolTip="체크한 대화를 모두 해제합니다(검색 중이어도 안 보이는 대화까지 전부)." />
+            </WrapPanel>
           </Grid>
         </Border>
 
@@ -345,11 +386,15 @@
           <!-- 아직 대화를 선택하지 않았을 때 -->
           <Border Background="{StaticResource Panel}" CornerRadius="6" Padding="14"
                   Visibility="{Binding NoConversationSelected, Converter={StaticResource BoolToVisibility}}">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-              <TextBlock Text="대화 내용" Foreground="{StaticResource Muted}"
-                         FontSize="13" HorizontalAlignment="Center" />
-              <TextBlock Text="왼쪽에서 대화를 선택하세요." Foreground="{StaticResource Muted}"
-                         FontSize="11" Margin="0,4,0,0" HorizontalAlignment="Center" />
+            <!-- Phase 9_U-05 — 처음 쓰는 사람을 위한 짧은 사용 순서(대화를 고르면 이 자리에 내용이 보인다). -->
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="440" Margin="10,0">
+              <TextBlock Text="사용 방법" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,10" />
+              <TextBlock Text="① 내보낼 대화나 프로젝트를 체크하고 [백업 내보내기]를 누르세요." Foreground="{StaticResource Muted}"
+                         FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6" />
+              <TextBlock Text="② 다른 PC에서는 Codex를 종료한 뒤 [백업 가져오기]로 그 파일을 여세요." Foreground="{StaticResource Muted}"
+                         FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6" />
+              <TextBlock Text="③ 목록에서 대화를 누르면 여기에 대화 내용이 보입니다." Foreground="{StaticResource Muted}"
+                         FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
 
@@ -395,48 +440,62 @@
       </Grid>
     </Grid>
 
-    <!-- 하단 버튼 -->
+    <!-- 하단 버튼. Phase 9_U-05/08 — 820px 폭에서 오른쪽 안내와 버튼이 겹쳐 [가져오기 기록]이 가려졌다. 버튼은 줄바꿈되는
+         WrapPanel에 두고, 안내 문구는 아래 줄로 내렸다. 툴팁은 무엇을 하는지·Codex 데이터를 바꾸는지·왜 꺼져 있는지를 알려 준다. -->
     <Grid Grid.Row="3" Margin="0,18,0,0">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="*" />
-        <ColumnDefinition Width="Auto" />
-      </Grid.ColumnDefinitions>
-      <StackPanel Orientation="Horizontal">
-        <Button Content="Codex 폴더 선택" Command="{Binding ChangeFolderCommand}" />
-        <Button Content="새로고침" Command="{Binding RefreshCommand}" />
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+      <WrapPanel>
+        <Button Content="Codex 폴더 선택" Command="{Binding ChangeFolderCommand}" Margin="0,0,8,6"
+                ToolTipService.ShowOnDisabled="True"
+                ToolTip="Codex 데이터 폴더(.codex)를 직접 고릅니다. 자동으로 찾지 못했을 때 씁니다. Codex 데이터는 바꾸지 않습니다." />
+        <Button Content="새로고침" Command="{Binding RefreshCommand}" Margin="0,0,8,6"
+                ToolTipService.ShowOnDisabled="True"
+                ToolTip="Codex 데이터 폴더를 다시 읽어 목록을 새로 만듭니다(체크와 검색어는 유지). Codex 데이터는 바꾸지 않습니다." />
         <!-- Phase 5 — Export. 선택 0개면 ExportCommand.CanExecute가 false라 자동으로 비활성화된다.
              내보내는 중에는 IsExporting이 true가 되어 재실행(재클릭)도 막는다. -->
-        <Button Content="백업 내보내기" Command="{Binding ExportCommand}" Margin="18,0,8,0" />
+        <Button Content="백업 내보내기" Command="{Binding ExportCommand}" Margin="10,0,8,6"
+                ToolTipService.ShowOnDisabled="True" ToolTip="{Binding ExportButtonToolTip}" />
         <!-- Phase 05_01 — 취소 버튼. 평소엔 숨겨져 있고 Export 중에만 나타난다. 취소하면
              BackupWriter가 CancellationToken을 보고 temp를 지우고 실패 처리한다(core가 처리 —
              여기서는 신호만 보낸다). -->
-        <Button Content="취소" Command="{Binding CancelExportCommand}" Margin="0,0,8,0"
+        <Button Content="취소" Command="{Binding CancelExportCommand}" Margin="0,0,8,6" ToolTip="진행 중인 내보내기를 멈춥니다."
                 Visibility="{Binding IsExporting, Converter={StaticResource BoolToVisibility}}" />
         <!-- Phase 9_2-2 — 가져오기 작업 공간을 연다(파일 선택 → Codex 종료 확인 → 분석 → 선택 → 적용). -->
-        <Button Content="백업 가져오기" Command="{Binding OpenImportWorkspaceCommand}" Margin="0,0,8,0" />
-        <!-- Phase 9_4-02 — 현재 Codex Home의 가져오기·보정 기록, 되돌리기, Snapshot 정리. -->
-        <Button Content="가져오기 기록" Command="{Binding OpenImportHistoryCommand}" Margin="0,0,8,0" />
-        <StackPanel VerticalAlignment="Center" Margin="10,0,0,0" MaxWidth="420">
+        <Button Content="백업 가져오기" Command="{Binding OpenImportWorkspaceCommand}" Margin="0,0,8,6"
+                ToolTipService.ShowOnDisabled="True" ToolTip="{Binding ImportButtonToolTip}" />
+        <!-- Phase 9_4-02 — 현재 Codex 데이터 폴더의 가져오기·보정 기록, 되돌리기, 복구 지점 정리. -->
+        <Button Content="가져오기 기록" Command="{Binding OpenImportHistoryCommand}" Margin="0,0,8,6"
+                ToolTipService.ShowOnDisabled="True" ToolTip="{Binding HistoryButtonToolTip}" />
+        <StackPanel VerticalAlignment="Center" Margin="4,0,0,6" MaxWidth="460">
           <TextBlock Text="{Binding ExportStatusText}" Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"
                      Visibility="{Binding ExportStatusText, Converter={StaticResource NullToCollapsed}}" />
           <!-- Phase 9_2-20 — Codex 실행 중 내보내기 안내(차단하지 않음). -->
           <TextBlock Text="{Binding ExportNoticeText}" Foreground="{StaticResource Warn}" FontSize="11" TextWrapping="Wrap"
                      Visibility="{Binding ExportNoticeText, Converter={StaticResource NullToCollapsed}}" />
         </StackPanel>
-      </StackPanel>
+      </WrapPanel>
 
-      <!-- footer: 앱 하단 상태 영역 오른쪽에 자연스럽게 배치된 읽기 전용 안내 + 제작자 표시.
-           한 줄로 나란히 두면 창 폭이 좁을 때 왼쪽 버튼과 겹쳤던 문제가 있어, 세로 2줄로 쌓고
-           오른쪽 정렬해 폭을 훨씬 덜 차지하게 했다(별도 Grid 컬럼이라 왼쪽 버튼과도 겹치지 않는다). -->
-      <StackPanel Grid.Column="1" Orientation="Vertical" HorizontalAlignment="Right"
-                  VerticalAlignment="Center" Margin="14,0,0,0">
-        <TextBlock Text="Codex 원본 데이터는 읽기 전용으로만 접근합니다."
-                   Foreground="{StaticResource Muted}" FontSize="11"
-                   HorizontalAlignment="Right" TextAlignment="Right" />
-        <TextBlock Text="Made by ProController · power0802m@naver.com"
-                   Foreground="{StaticResource Muted}" FontSize="10"
-                   HorizontalAlignment="Right" TextAlignment="Right" Margin="0,2,0,0" />
-      </StackPanel>
+      <!-- footer: 데이터 안전 안내(9_U-02 — 0.2.0부터 "읽기 전용으로만 접근"은 사실이 아니다) + 제작자 표시. -->
+      <Grid Grid.Row="1" Margin="0,4,0,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <!-- 좁은 창에서 한 문장이 낱자 단위로 끊기지 않게 두 문장을 두 줄로 둔다. -->
+        <StackPanel VerticalAlignment="Center" Background="Transparent"
+                    ToolTip="Codex 데이터를 바꾸는 것은 가져오기, 되돌리기, [사이드바에 표시]뿐입니다. 셋 다 Codex가 종료된 상태에서, 바꿀 파일의 복구 지점(Snapshot)을 먼저 만든 뒤에 쓰고, 실패하면 자동으로 원래대로 돌립니다.">
+          <TextBlock Text="목록 보기·내보내기는 Codex 데이터를 바꾸지 않습니다." Foreground="{StaticResource Muted}" FontSize="11"
+                     TextTrimming="CharacterEllipsis" />
+          <TextBlock Text="가져오기·되돌리기는 복구 지점을 만든 뒤에만 바꿉니다." Foreground="{StaticResource Muted}" FontSize="11"
+                     TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <TextBlock Grid.Column="1" Text="Made by ProController · power0802m@naver.com"
+                   Foreground="{StaticResource Muted}" FontSize="10" VerticalAlignment="Center"
+                   TextAlignment="Right" Margin="14,0,0,0" />
+      </Grid>
     </Grid>
     </Grid>
   </Grid>
