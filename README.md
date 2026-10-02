@@ -3,10 +3,10 @@
 OpenAI Codex(CLI/Desktop)의 로컬 프로젝트와 대화를 골라 `.codexbackup` 파일 하나로 내보내고, 다른 PC에서
 가져와 다시 쓸 수 있게 하는 **Windows 데스크톱 프로그램**.
 
-> **현재 버전: 0.2.4** — 가져오기를 다시 만든 버전(Phase 9). 가져올 대화를 트리에서 고르고, 프로젝트마다
+> **현재 버전: 0.2.5** — 가져오기를 다시 만든 버전(Phase 9). 가져올 대화를 트리에서 고르고, 프로젝트마다
 > 작업 폴더를 지정하고(등록 안 된 폴더면 Codex 프로젝트를 새로 만들어 사이드바에도 표시), 성공한 가져오기를
 > 되돌릴 수 있다. 백업 형식(Backup Format V1)은 그대로라 0.1.x 백업도 가져올 수 있다.
-> 바뀐 점: [`docs/release-notes-v0.2.4.md`](./docs/release-notes-v0.2.4.md) · 배포 폴더 안내: [`docs/dist-readme.txt`](./docs/dist-readme.txt)
+> 바뀐 점: [`docs/release-notes-v0.2.5.md`](./docs/release-notes-v0.2.5.md) · 배포 폴더 안내: [`docs/dist-readme.txt`](./docs/dist-readme.txt)
 > · Phase 1~8 경과는 아래 [개발 기록](#개발-기록) 참고.
 
 ---
@@ -144,8 +144,8 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1
 결과물은 다음 3가지로 나온다(Phase 08_07부터 폴더형):
 
 ```
-artifacts\release\CodexBackupManager-v0.2.4-win-x64\      실제 배포용 폴더(exe+DLL+런타임+README.txt)
-artifacts\release\CodexBackupManager-v0.2.4-win-x64.zip   위 폴더를 그대로 압축한 ZIP(최상위가 폴더 하나)
+artifacts\release\CodexBackupManager-v0.2.5-win-x64\      실제 배포용 폴더(exe+DLL+런타임+README.txt)
+artifacts\release\CodexBackupManager-v0.2.5-win-x64.zip   위 폴더를 그대로 압축한 ZIP(최상위가 폴더 하나)
 artifacts\release\SHA256SUMS.txt                          ZIP의 SHA-256
 ```
 
@@ -153,7 +153,7 @@ artifacts\release\SHA256SUMS.txt                          ZIP의 SHA-256
 `docs\dist-readme.txt`(`README.txt`로 이름 변경)가 들어간다 — PDB/테스트 바이너리/소스는
 포함하지 않는다. 사용자는 ZIP을 풀어 나온 폴더를 통째로 원하는 위치에 두고 그 안의
 `CodexBackupManager.exe`를 실행하면 된다(exe만 따로 옮기면 실행되지 않는다). 배포용 릴리스
-노트는 [`docs/release-notes-v0.2.4.md`](./docs/release-notes-v0.2.4.md) 참고(이전 버전:
+노트는 [`docs/release-notes-v0.2.5.md`](./docs/release-notes-v0.2.5.md) 참고(이전 버전:
 [`docs/release-notes-v0.1.3.md`](./docs/release-notes-v0.1.3.md)).
 
 ---
@@ -172,7 +172,7 @@ CodexBackupManager/
 │  ├─ safe-restore-phase7.md                     Phase 7 Safe Restore 스펙(Snapshot/Rollback/journal)
 │  ├─ import-ux-redesign-phase9.md               Phase 9 가져오기 재설계 설계 문서
 │  ├─ phase9-implementation-plan.md              Phase 9 단계별 작업과 점검 기록
-│  ├─ release-notes-v0.2.4.md, release-notes-v0.1.3.md   릴리스 노트
+│  ├─ release-notes-v0.2.5.md, release-notes-v0.1.3.md   릴리스 노트
 │  └─ dist-readme.txt                            배포 폴더에 README.txt로 들어가는 사용 안내
 ├─ scripts/verify-phase1.ps1
 ├─ src/
@@ -250,7 +250,7 @@ CodexBackupManager/
 
 ## 개발 기록
 
-> 아래는 Phase 1~8 당시의 기록이다. 가져오기 화면(Phase 6/7 절의 Import Preview 패널과 [적용] 버튼)은 0.2.4(Phase 9)에서
+> 아래는 Phase 1~8 당시의 기록이다. 가져오기 화면(Phase 6/7 절의 Import Preview 패널과 [적용] 버튼)은 0.2.5(Phase 9)에서
 > 새 가져오기 화면으로 바뀌었다 — 지금 쓰는 방법은 위 [사용 방법](#사용-방법)을 따른다. Phase 9 설계와 단계별 기록은
 > [`docs/import-ux-redesign-phase9.md`](./docs/import-ux-redesign-phase9.md), [`docs/phase9-implementation-plan.md`](./docs/phase9-implementation-plan.md)에 있다.
 
@@ -583,7 +583,7 @@ Import Preview 패널 안에 **[적용]** 버튼이 생긴다. 누르면 확인 
 | 08_06 | v0.1.1 기준 문서 정합성 정리(README/handoff의 "GitHub Actions 확인 필요" 등 잔여 문구 정리, 기능/코드 변경 없음) | **완료** |
 | 08_07 | Folder-based Self-contained 전환 — 배포 형태를 single-file exe에서 폴더형(`PublishSingleFile=false`)으로 변경, `scripts/publish-release.ps1` 재작성, 버전 `0.1.1`→`0.1.2` patch bump | **완료** |
 | 08_08 | CI/문서 규격 정합성 — `windows-ci.yml`의 packaging job이 `scripts/publish-release.ps1`을 그대로 호출하도록 교체(옛 single-file 옵션 제거), `CLAUDE.md`§38/README/handoff의 남은 single-file 서술을 폴더형으로 정리, 버전 `0.1.2`→`0.1.3` patch bump | **완료 — v0.1.3 릴리스** |
-| 9 | 가져오기 재설계 — 새 가져오기 화면(트리·체크·내용 미리보기·검색), 작업 폴더 지정, 미등록 폴더의 Codex 프로젝트 자동 생성과 사이드바 표시, [새 폴더 만들기], 이미 있는 대화 옮기기, [사이드바에 표시], 내보내기 완료 안내, 가져오기 기록·되돌리기·Snapshot 정리, 버전 `0.2.4` | **완료** |
+| 9 | 가져오기 재설계 — 새 가져오기 화면(트리·체크·내용 미리보기·검색), 작업 폴더 지정, 미등록 폴더의 Codex 프로젝트 자동 생성과 사이드바 표시, [새 폴더 만들기], 이미 있는 대화 옮기기, [사이드바에 표시], 내보내기 완료 안내, 가져오기 기록·되돌리기·Snapshot 정리, 버전 `0.2.5` | **완료** |
 
 Export(`.codexbackup` V1) 포맷/설계 전체는 [`docs/codexbackup-format-v1.md`](./docs/codexbackup-format-v1.md)에
 있다 — Restore Sufficiency Audit(어떤 thread metadata가 있어야 복원할 수 있는지), dependency closure

@@ -1,6 +1,6 @@
-# Codex Backup Manager 0.2.4
+# Codex Backup Manager 0.2.5
 
-v0.2.4 릴리스 노트입니다. 이 문서는 GitHub Release 본문으로 그대로 쓸 수 있도록 작성했습니다 —
+v0.2.5 릴리스 노트입니다. 이 문서는 GitHub Release 본문으로 그대로 쓸 수 있도록 작성했습니다 —
 실제 Tag/Release 업로드는 사용자가 이 작업 트리를 검토·커밋한 뒤 직접 진행합니다.
 
 ## 이게 무엇인가요
@@ -10,7 +10,7 @@ PC에서 가져와 다시 쓸 수 있게 하는 Windows 데스크톱 프로그�
 배포입니다 — 압축을 푼 폴더를 통째로 두고 그 안의 `CodexBackupManager.exe`를 실행하면 됩니다
 (.NET 런타임을 따로 설치할 필요가 없습니다).
 
-0.2.4는 **가져오기를 처음부터 다시 만든 버전**입니다. 가져올 대화를 직접 고르고, 대화가 들어갈
+0.2.5는 **가져오기를 처음부터 다시 만든 버전**입니다. 가져올 대화를 직접 고르고, 대화가 들어갈
 작업 폴더(프로젝트)를 지정하고, 성공한 가져오기를 되돌릴 수 있습니다.
 
 ## 사용자가 알아야 할 변화
@@ -97,7 +97,7 @@ PC에서 가져와 다시 쓸 수 있게 하는 Windows 데스크톱 프로그�
 
 ## 이 앱이 Codex 데이터에 새로 쓰는 곳
 
-0.1.x는 rollout 파일과 `threads` 행만 썼습니다. 0.2.4는 아래를 **새로** 씁니다. 모든 쓰기는
+0.1.x는 rollout 파일과 `threads` 행만 썼습니다. 0.2.5는 아래를 **새로** 씁니다. 모든 쓰기는
 Codex 종료 확인 → Snapshot → 쓰기 → 결과 검증 → 실패 시 자동 Rollback 안에서만 일어납니다.
 
 - **state DB(`state_*.sqlite`)**
@@ -112,13 +112,13 @@ Codex 종료 확인 → Snapshot → 쓰기 → 결과 검증 → 실패 시 자
 ## 백업 형식
 
 - 백업 형식(Backup Format V1)은 **바뀌지 않았습니다.** 0.1.x에서 만든 백업도 그대로 가져올 수
-  있고, 0.2.4에서 만든 백업도 같은 형식입니다.
+  있고, 0.2.5에서 만든 백업도 같은 형식입니다.
 - 백업에는 Codex 대화 데이터만 들어 있습니다. **작업 폴더 안의 실제 파일(소스 코드 등)은 들어 있지
   않습니다.**
 
 ## 사용법
 
-1. 압축을 풀어 나온 `CodexBackupManager-v0.2.4-win-x64` 폴더 안의 `CodexBackupManager.exe`를
+1. 압축을 풀어 나온 `CodexBackupManager-v0.2.5-win-x64` 폴더 안의 `CodexBackupManager.exe`를
    실행합니다(폴더 안의 다른 파일은 그대로 두어야 합니다).
 2. Codex 폴더를 자동으로 찾지 못하면 [Codex 폴더 선택]으로 직접 지정합니다.
 3. 내보낼 프로젝트나 대화를 고르고 [백업 내보내기]로 `.codexbackup` 파일을 만듭니다.
@@ -153,7 +153,7 @@ Codex 종료 확인 → Snapshot → 쓰기 → 결과 검증 → 실패 시 자
 배포 ZIP과 같은 폴더의 `SHA256SUMS.txt`에 해시가 있습니다. PowerShell에서 다음처럼 비교하세요.
 
 ```powershell
-Get-FileHash .\CodexBackupManager-v0.2.4-win-x64.zip -Algorithm SHA256
+Get-FileHash .\CodexBackupManager-v0.2.5-win-x64.zip -Algorithm SHA256
 ```
 
 출력된 해시가 `SHA256SUMS.txt`에 적힌 값과 정확히 같아야 합니다.
