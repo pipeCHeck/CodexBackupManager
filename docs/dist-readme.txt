@@ -1,4 +1,4 @@
-Codex Backup Manager 0.2.2
+Codex Backup Manager 0.2.3
 ==========================
 
 OpenAI Codex의 프로젝트와 대화를 골라 백업 파일(.codexbackup) 하나로 내보내고, 다른 PC에서

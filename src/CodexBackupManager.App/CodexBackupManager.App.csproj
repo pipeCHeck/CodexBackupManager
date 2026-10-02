@@ -32,8 +32,15 @@
 
     <!-- WPF XAML 코드 생성 때문에 XML 문서 경고를 프로젝트 단위로 완화한다. -->
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!-- 프로그램 아이콘(exe·작업 표시줄·창 제목). 원본 이미지는 Assets/app-icon-source.png. -->
+    <ApplicationIcon>Assets/app.ico</ApplicationIcon>
   </PropertyGroup>
 
+
+  <ItemGroup>
+    <Resource Include="Assets/app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CodexBackupManager.Codex\CodexBackupManager.Codex.csproj" />
