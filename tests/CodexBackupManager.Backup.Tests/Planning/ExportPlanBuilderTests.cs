@@ -219,6 +219,10 @@ public sealed class ExportPlanBuilderTests : IDisposable
         Assert.Single(plan.Attachments); // shared.png 하나만(두 thread가 같은 파일을 공유 — dedupe).
         Assert.Equal(sharedImagePath, plan.Attachments[0].SourceFullPath);
         Assert.Contains(plan.Warnings, w => w.Contains('1') && w.Contains("찾을 수 없"));
+
+        // Phase 9_U-09 — 완료 창·목록 텍스트의 사용자 문구가 실제 경고 원문을 알아본다(원문이 바뀌면 여기서 걸린다).
+        string warning = Assert.Single(plan.Warnings);
+        Assert.StartsWith("대화에 붙인 이미지 파일 1개를 이 PC에서 찾지 못해", CodexBackupManager.Backup.Summary.ExportSummaryBuilder.DescribeWarning(warning), StringComparison.Ordinal);
     }
 
     [Fact]

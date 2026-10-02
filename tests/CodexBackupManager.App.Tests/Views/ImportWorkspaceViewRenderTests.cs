@@ -289,6 +289,83 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
         });
     }
 
+    // ── 9_U-09 (가) 메인 트리 키보드 체크 ─────────────────────────────────────────────
+
+    private static void PressSpace(UIElement target)
+    {
+        var args = new System.Windows.Input.KeyEventArgs(
+            System.Windows.Input.Keyboard.PrimaryDevice, PresentationSource.FromVisual(target)!, 0, System.Windows.Input.Key.Space)
+        {
+            RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent,
+        };
+        target.RaiseEvent(args);
+        Pump();
+    }
+
+    private static System.Windows.Controls.TreeViewItem TreeItemOf(Window window, object node)
+        => Descendants<System.Windows.Controls.TreeViewItem>(window).Single(i => ReferenceEquals(i.DataContext, node));
+
+    [Fact]
+    public async Task 메인_트리에서_Space는_고른_줄의_체크만_바꾸고_대화_보기와_검색_칸은_건드리지_않는다()
+    {
+        CodexBackupManager.App.ViewModels.MainViewModel main = _h.CreateMainViewModel(_h.TargetHome);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+        var conversations = main.ProjectNodes.SelectMany(p => p.Conversations).ToList();
+        CodexBackupManager.App.ViewModels.ConversationNodeViewModel viewed = conversations[0];
+        main.SelectConversation(viewed); // 오른쪽에 보고 있는 대화
+        string? viewedTitle = main.SelectedConversationTitle;
+
+        AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml(), window =>
+        {
+            CodexBackupManager.App.ViewModels.ConversationNodeViewModel target = conversations[^1];
+            System.Windows.Controls.TreeViewItem row = TreeItemOf(window, target);
+            Assert.True(row.Focus());
+
+            // 대화 줄: 체크가 켜지고 선택 수에 반영된다. 트리 선택·대화 보기는 그대로.
+            System.Windows.Controls.TreeView tree = Descendants<System.Windows.Controls.TreeView>(window).Single(t => t.Name == "ConversationTree");
+            object? selectedBefore = tree.SelectedItem;
+            PressSpace(row);
+            Assert.True(target.IsSelected);
+            Assert.Equal(1, main.SelectedConversationCount);
+            Assert.Same(selectedBefore, tree.SelectedItem);
+            Assert.Equal(viewedTitle, main.SelectedConversationTitle);
+
+            // 한 번 더 누르면 해제된다.
+            PressSpace(row);
+            Assert.False(target.IsSelected);
+            Assert.Equal(0, main.SelectedConversationCount);
+
+            // 검색 칸에서 온 Space는 트리 체크를 바꾸지 않는다(검색 칸은 트리 밖이라 글자 입력으로 처리된다).
+            System.Windows.Controls.TextBox search = Descendants<System.Windows.Controls.TextBox>(window).Single(t => t.Name == "MainSearchBox");
+            PressSpace(search);
+            Assert.Equal(0, main.SelectedConversationCount);
+        });
+    }
+
+    [Fact]
+    public async Task 메인_트리에서_프로젝트_줄의_Space는_프로젝트_전체를_바꾼다()
+    {
+        CodexBackupManager.App.ViewModels.MainViewModel main = _h.CreateMainViewModel(_h.TargetHome);
+        await ImportWorkspaceHarness.ConnectAsync(main);
+        CodexBackupManager.App.ViewModels.ProjectNodeViewModel project = main.ProjectNodes.OrderByDescending(p => p.Conversations.Count).First();
+        Assert.True(project.Conversations.Count >= 1);
+
+        AssertRendersWithoutBindingErrors(main, BuildMainWindowXaml(), window =>
+        {
+            System.Windows.Controls.TreeViewItem row = TreeItemOf(window, project);
+            Assert.True(row.Focus());
+
+            PressSpace(row);
+            Assert.True(project.IsSelected);
+            Assert.All(project.Conversations, c => Assert.True(c.IsSelected));
+            Assert.Equal(project.Conversations.Count, main.SelectedConversationCount);
+
+            PressSpace(row);
+            Assert.False(project.IsSelected);
+            Assert.Equal(0, main.SelectedConversationCount);
+        });
+    }
+
     [Fact]
     public async Task 메인_창은_검색_결과가_없으면_안내를_보이고_검색_중_표시를_그린다()
     {
@@ -391,6 +468,38 @@ public sealed class ImportWorkspaceViewRenderTests : IDisposable
 
             Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == @"D:\Mirror\프로젝트01 (이 PC에 없음)");
             Assert.Contains(Descendants<System.Windows.Controls.TextBlock>(window), t => t.Text == CodexBackupManager.App.ViewModels.ExportCompletedViewModel.TextFileNoteText);
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void 내보내기_완료_창은_경고가_있을_때만_경고_영역을_그린다(bool withWarnings)
+    {
+        // Phase 9_U-09 (나)
+        var summary = new CodexBackupManager.Backup.Summary.ExportSummary("x.codexbackup", 1000, DateTimeOffset.UtcNow, 1, [], null)
+        {
+            Warnings = withWarnings
+                ? [CodexBackupManager.Backup.Summary.ExportSummaryBuilder.DescribeWarning("참조된 첨부 이미지 파일 4개를 찾을 수 없어 Export에서 제외했습니다.")]
+                : [],
+        };
+        var vm = new CodexBackupManager.App.ViewModels.ExportCompletedViewModel(
+            summary, Path.Combine(_h.TestDir, "x.codexbackup"), _ => true, (_, _) => null,
+            TimeZoneInfo.Utc, new CodexBackupManager.App.Services.FileLogger(Path.Combine(_h.TestDir, "logs")));
+
+        AssertRendersWithoutBindingErrors(vm, BuildExportCompletedXaml(), 380, 520, window =>
+        {
+            var texts = Descendants<System.Windows.Controls.TextBlock>(window).ToList();
+            System.Windows.Controls.TextBlock? title = texts.SingleOrDefault(t => t.Text == "경고 1건");
+            if (withWarnings)
+            {
+                Assert.True(title is { IsVisible: true });
+                Assert.Contains(texts, t => t.IsVisible && t.Text.StartsWith("· 대화에 붙인 이미지 파일 4개를", StringComparison.Ordinal));
+            }
+            else
+            {
+                Assert.DoesNotContain(texts, t => t.IsVisible && t.Text.StartsWith("경고", StringComparison.Ordinal));
+            }
         });
     }
 

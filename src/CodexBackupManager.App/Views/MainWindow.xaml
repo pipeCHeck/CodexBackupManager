@@ -288,7 +288,8 @@
 
             <!-- Focusable="False": 체크박스가 키보드 포커스를 받으면 TreeViewItem이 그걸 "선택"으로
                  취급해 오른쪽 Viewer가 바뀐다(WPF의 "포커스가 선택을 따라간다" 동작). 체크(백업 선택)와
-                 Viewer 포커스를 완전히 분리하기 위해 체크박스는 포커스를 받지 않게 한다.
+                 Viewer 포커스를 완전히 분리하기 위해 체크박스는 포커스를 받지 않게 한다. 키보드로는 줄을 고른 뒤 Space로
+                 체크한다(9_U-09, TreeSpaceToggleBehavior — 대화 보기는 바꾸지 않는다).
                  헤더/제목을 Grid(Auto+*)로 감싸는 이유: StackPanel은 자식에게 무한 너비를 주기 때문에
                  TextTrimming이 실제로 동작하지 않는다 — 폭을 실제로 제한해야 말줄임이 걸린다.
                  Phase 9_U-07 — TreeViewItem 머리글 칸은 폭 제한이 없어 긴 제목이 가로 스크롤바를 늘 띄웠다. 가로 스크롤을 끄고
@@ -296,7 +297,9 @@
             <TreeView x:Name="ConversationTree" Grid.Row="2" Margin="0,10,0,0" BorderThickness="0" Background="Transparent"
                       ItemsSource="{Binding ProjectNodes}"
                       ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      views:TreeSpaceToggleBehavior.IsEnabled="True"
                       AutomationProperties.Name="프로젝트와 대화 목록"
+                      AutomationProperties.HelpText="선택한 줄에서 Space를 누르면 체크(내보낼 대화)를 바꿉니다."
                       SelectedItemChanged="ConversationTree_SelectedItemChanged">
               <!-- 9_U-07 — 가져오기 트리와 같은 항목 모양(잘 보이는 펼침 삼각형, 선택·키보드 포커스 표시). -->
               <TreeView.ItemContainerStyle>

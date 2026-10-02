@@ -142,7 +142,7 @@ public static class IncompleteApplyRecoveryService
         {
             return new RestoreResult(
                 RestoreOutcome.RollbackFailedCritical,
-                "CRITICAL: 복원 진행 기록이 손상되어 있어 자동으로 복구할 수 없습니다. Snapshot 폴더를 직접 확인해야 합니다.",
+                "CRITICAL: 복원 진행 기록이 손상되어 있어 자동으로 복구할 수 없습니다. 복구 지점 폴더를 직접 확인해야 합니다.",
                 null, null);
         }
 
@@ -151,7 +151,7 @@ public static class IncompleteApplyRecoveryService
         {
             return new RestoreResult(
                 RestoreOutcome.NotReady,
-                "이 Snapshot은 복구가 필요한 상태가 아닙니다(이미 완료됐거나 처리된 것으로 보입니다).",
+                "이 복구 지점은 복구가 필요한 상태가 아닙니다(이미 완료됐거나 처리된 것으로 보입니다).",
                 null, journalRead.Journal?.SnapshotId);
         }
 
@@ -160,7 +160,7 @@ public static class IncompleteApplyRecoveryService
         {
             return new RestoreResult(
                 RestoreOutcome.RollbackFailedCritical,
-                "CRITICAL: Snapshot manifest를 찾을 수 없어 자동 복구할 수 없습니다. 수동으로 확인해야 합니다.",
+                "CRITICAL: 복구 지점 정보(manifest)를 찾을 수 없어 자동 복구할 수 없습니다. 수동으로 확인해야 합니다.",
                 null, null);
         }
 
@@ -172,7 +172,7 @@ public static class IncompleteApplyRecoveryService
         {
             return new RestoreResult(
                 RestoreOutcome.RollbackFailedCritical,
-                "CRITICAL: 복원 진행 기록과 Snapshot 정보가 서로 일치하지 않습니다. 수동으로 확인해야 합니다.",
+                "CRITICAL: 복원 진행 기록과 복구 지점 정보가 서로 일치하지 않습니다. 수동으로 확인해야 합니다.",
                 null, manifest.SnapshotId);
         }
 
@@ -180,7 +180,7 @@ public static class IncompleteApplyRecoveryService
         {
             return new RestoreResult(
                 RestoreOutcome.NotReady,
-                "이 Snapshot은 다른 Codex Home에 대한 것입니다.",
+                "이 복구 지점은 다른 Codex 데이터 폴더에 대한 것입니다.",
                 null, manifest.SnapshotId);
         }
 

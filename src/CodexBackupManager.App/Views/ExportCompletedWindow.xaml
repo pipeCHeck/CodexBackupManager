@@ -21,6 +21,23 @@
       <TextBlock Text="✅ 내보내기 완료" FontSize="16" FontWeight="SemiBold" />
       <TextBlock Text="{Binding BackupFileText}" Margin="0,6,0,0" TextWrapping="Wrap" />
       <TextBlock Text="{Binding CountsText}" Foreground="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap" />
+      <!-- Phase 9_U-09 — 경고가 있으면 무슨 경고인지 사용자 말로 보여 준다(없으면 숨김). -->
+      <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Warn}" BorderThickness="1" CornerRadius="6"
+              Padding="12,8" Margin="0,10,0,0" MaxHeight="140"
+              Visibility="{Binding HasWarnings, Converter={StaticResource BoolToVisibility}}">
+        <StackPanel>
+          <TextBlock Text="{Binding WarningsTitle}" Foreground="{StaticResource Warn}" FontWeight="SemiBold" />
+          <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" MaxHeight="100" Margin="0,4,0,0">
+            <ItemsControl ItemsSource="{Binding Warnings}" AutomationProperties.Name="내보내기 경고">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding StringFormat='· {0}'}" TextWrapping="Wrap" Margin="0,1,0,1" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </StackPanel>
+      </Border>
     </StackPanel>
 
     <!-- 강조 안내 -->

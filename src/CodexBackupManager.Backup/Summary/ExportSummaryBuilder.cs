@@ -43,6 +43,12 @@ public sealed record ExportSummary(
 
     /// <summary>기타 대화 수.</summary>
     public int UncategorizedConversationCount => Uncategorized?.Conversations.Count ?? 0;
+
+    /// <summary>
+    /// (Phase 9_U-09) 이번 내보내기의 경고를 사용자 말로 바꾼 것(<see cref="ExportSummaryBuilder.DescribeWarning"/>). 없으면 빈 목록.
+    /// 화면과 텍스트 파일에만 쓰고 로그에는 개수만 남긴다.
+    /// </summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>
@@ -105,7 +111,25 @@ public static class ExportSummaryBuilder
             .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(p => p.Name, StringComparer.Ordinal)
             .ToList();
-        return new ExportSummary(backupFileName, backupSizeBytes, manifest.CreatedAtUtc, manifest.ConversationCount, projects, uncategorized);
+        return new ExportSummary(backupFileName, backupSizeBytes, manifest.CreatedAtUtc, manifest.ConversationCount, projects, uncategorized)
+        {
+            Warnings = (manifest.Warnings ?? []).Select(DescribeWarning).ToList(),
+        };
+    }
+
+    /// <summary>
+    /// (Phase 9_U-09) Export 경고 한 줄을 사용자 말로 바꾼다. 지금 Export가 내는 경고는 "첨부 이미지 누락"(<c>ExportPlanBuilder</c>, 개수만,
+    /// 경로 없음) 한 종류다. 모르는 경고는 원문을 한 줄로 정리해 그대로 보여 준다(경고 원문에는 경로·제목을 넣지 않는 것이 Export 규칙이다).
+    /// </summary>
+    public static string DescribeWarning(string warning)
+    {
+        ArgumentNullException.ThrowIfNull(warning);
+        System.Text.RegularExpressions.Match missingImages = System.Text.RegularExpressions.Regex.Match(
+            warning, @"^참조된 첨부 이미지 파일 (\d+)개를 찾을 수 없어 Export에서 제외했습니다\.$");
+        return missingImages.Success
+            ? $"대화에 붙인 이미지 파일 {missingImages.Groups[1].Value}개를 이 PC에서 찾지 못해 백업에 넣지 못했습니다. " +
+              "대화 내용은 모두 들어 있고, 다른 PC에서는 그 이미지만 보이지 않습니다."
+            : OneLine(warning);
     }
 
     /// <summary>
@@ -122,9 +146,18 @@ public static class ExportSummaryBuilder
             "만든 시각: " + FormatDateTimeWithOffset(summary.CreatedAtUtc, timeZone),
             $"백업 파일: {OneLine(summary.BackupFileName)} ({FormatSize(summary.BackupSizeBytes)})",
             CountsLine(summary),
-            string.Empty,
-            FoldersNotice,
         };
+
+        // (Phase 9_U-09) 경고가 있으면 맨 위 요약 바로 아래에 한 줄씩 적는다.
+        if (summary.Warnings.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"[경고 {summary.Warnings.Count}건]"));
+            lines.AddRange(summary.Warnings.Select(w => "  - " + w));
+        }
+
+        lines.Add(string.Empty);
+        lines.Add(FoldersNotice);
 
         foreach (ExportSummaryGroup project in summary.Projects)
         {

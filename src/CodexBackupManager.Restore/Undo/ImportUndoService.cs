@@ -309,7 +309,7 @@ public static class ImportUndoService
         SnapshotCreateResult snapshot = SnapshotService.Create(snapshotRoot, home, SnapshotMarkerPrefix + record.ImportSnapshotId, targets);
         if (!snapshot.Success)
         {
-            return NotReady($"되돌리기용 Snapshot을 만들지 못해 시작하지 않았습니다: {snapshot.FailureReason}", assessment);
+            return NotReady($"되돌리기용 복구 지점을 만들지 못해 시작하지 않았습니다: {snapshot.FailureReason}", assessment);
         }
 
         string undoId = snapshot.Manifest!.SnapshotId;
@@ -402,7 +402,7 @@ public static class ImportUndoService
             {
                 return new UndoResult(
                     RestoreOutcome.RollbackFailedCritical,
-                    $"CRITICAL: 되돌리기 도중 실패했고 자동 복구에도 실패했습니다. Snapshot({undoId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
+                    $"CRITICAL: 되돌리기 도중 실패했고 자동 복구에도 실패했습니다. 복구 지점({undoId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
                     undoId, 0, 0, [], assessment);
             }
 

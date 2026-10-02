@@ -207,12 +207,12 @@ public static class RestoreExecutor
                 return new RestoreResult(RestoreOutcome.NothingToDo, "적용할 변경 사항이 없습니다(모두 이미 최신 상태입니다).", null, null);
             }
 
-            onStatusChanged("Snapshot 생성 중");
+            onStatusChanged("복구 지점 만드는 중");
             IReadOnlyList<(string Label, string AbsolutePath)> snapshotTargets = ComputeSnapshotTargets(codexHomePath, opPlan);
             snapshot = SnapshotService.Create(snapshotRoot, codexHomePath, plan.Backup.BackupFileSha256, snapshotTargets);
             if (!snapshot.Success)
             {
-                return new RestoreResult(RestoreOutcome.NotReady, $"복구용 Snapshot을 만들지 못해 적용을 시작하지 않았습니다: {snapshot.FailureReason}", null, null);
+                return new RestoreResult(RestoreOutcome.NotReady, $"복구 지점을 만들지 못해 적용을 시작하지 않았습니다: {snapshot.FailureReason}", null, null);
             }
 
             // Phase 9_5a-03 — Snapshot에 담긴 global-state가 계획 때 게이트를 통과한 그 바이트인지(계획 뒤 변경이면 쓰기 0건으로 거부).
@@ -327,14 +327,14 @@ public static class RestoreExecutor
             // 요구사항 13: 취소와 실제 오류를 구분해서 사용자에게 보여준다. 어느 쪽이든 Snapshot을
             // 만든 "이후"의 실패는 항상 Rollback한다 — 원문/path는 메시지에 담지 않는다.
             bool wasCancelled = ex is OperationCanceledException;
-            onStatusChanged("Rollback 중");
+            onStatusChanged("원래대로 되돌리는 중");
             RollbackService.Result rollback = RollbackService.Rollback(snapshot.Manifest!, snapshot.SnapshotDirectory!);
 
             if (!rollback.Success)
             {
                 return new RestoreResult(
                     RestoreOutcome.RollbackFailedCritical,
-                    $"CRITICAL: 자동 복구에 실패했습니다. Snapshot({snapshot.Manifest!.SnapshotId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
+                    $"CRITICAL: 자동 복구에 실패했습니다. 복구 지점({snapshot.Manifest!.SnapshotId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
                     null, snapshot.Manifest!.SnapshotId);
             }
 

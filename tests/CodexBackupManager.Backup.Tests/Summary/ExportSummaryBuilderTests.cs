@@ -66,6 +66,33 @@ public sealed class ExportSummaryBuilderTests
         ]);
 
     [Fact]
+    public void 경고는_사용자_말로_바꿔_요약과_텍스트_경고_절에_넣고_없으면_절이_없다()
+    {
+        // Phase 9_U-09
+        BackupManifest withWarnings = Sample() with
+        {
+            Warnings = ["참조된 첨부 이미지 파일 3개를 찾을 수 없어 Export에서 제외했습니다.", "알 수 없는" + (char)10 + "경고"],
+        };
+
+        ExportSummary summary = ExportSummaryBuilder.Build(withWarnings, "b.codexbackup", 1);
+
+        Assert.Equal(
+            [
+                "대화에 붙인 이미지 파일 3개를 이 PC에서 찾지 못해 백업에 넣지 못했습니다. 대화 내용은 모두 들어 있고, 다른 PC에서는 그 이미지만 보이지 않습니다.",
+                "알 수 없는 경고",
+            ],
+            summary.Warnings);
+        string text = ExportSummaryBuilder.ToText(summary, Seoul);
+        const string crlf = "\r\n";
+        Assert.Contains(crlf + crlf + "[경고 2건]" + crlf + "  - 대화에 붙인 이미지 파일 3개를", text, StringComparison.Ordinal);
+        Assert.True(text.IndexOf("[경고 2건]", StringComparison.Ordinal) < text.IndexOf(ExportSummaryBuilder.FoldersNotice, StringComparison.Ordinal));
+
+        ExportSummary none = ExportSummaryBuilder.Build(Sample(), "b.codexbackup", 1);
+        Assert.Empty(none.Warnings);
+        Assert.DoesNotContain("[경고", ExportSummaryBuilder.ToText(none, Seoul), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void 프로젝트별_루트와_기타_대화_cwd를_중복_없이_표시_경로로_모은다()
     {
         ExportSummary summary = ExportSummaryBuilder.Build(Sample(), "codex-backup-20261001-140301.codexbackup", 12_900_000);

@@ -23,7 +23,7 @@ namespace CodexBackupManager.App.ViewModels;
 /// <c>PropertyChanged</c>를 알린다 — 재귀나 반복 재계산이 없다(요구사항: 수천 개 항목에서도 안정적).
 /// </para>
 /// </remarks>
-public sealed class ProjectNodeViewModel : ObservableObject
+public sealed class ProjectNodeViewModel : ObservableObject, ICheckToggle
 {
     private readonly ConversationSelectionState _selection;
 
@@ -129,6 +129,12 @@ public sealed class ProjectNodeViewModel : ObservableObject
 
     /// <summary>자식 하나의 선택이 개별적으로(체크박스 클릭 등) 바뀌었을 때, 이 프로젝트의 tri-state를 다시 읽으라고 알린다.</summary>
     internal void NotifyChildSelectionChanged() => NotifySelectionChanged();
+
+    /// <summary>
+    /// (Phase 9_U-09) Space: 3상태 체크박스를 누른 것과 같은 <see cref="IsSelected"/> setter(값은 읽지 않는다)로, 전체 선택이 아니면
+    /// 이 프로젝트의 대화 전부(검색으로 숨은 것 포함)를 고르고, 전체 선택이면 모두 해제한다.
+    /// </summary>
+    public void ToggleCheck() => IsSelected = null;
 
     /// <summary>이 프로젝트의 선택 상태가 바뀌었을 수 있다고 바인딩에 알린다. 값 자체는 저장하지 않는다.</summary>
     internal void NotifySelectionChanged() => OnPropertyChanged(nameof(IsSelected));

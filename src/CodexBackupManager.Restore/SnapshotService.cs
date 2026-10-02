@@ -83,7 +83,7 @@ public static class SnapshotService
                     if (verified.ByteLength != copied.ByteLength ||
                         !string.Equals(verified.Sha256Hex, copied.Sha256Hex, StringComparison.Ordinal))
                     {
-                        return new SnapshotCreateResult(false, null, null, $"Snapshot 파일 검증 실패: {label}");
+                        return new SnapshotCreateResult(false, null, null, $"복구 지점 파일 검증 실패: {label}");
                     }
                 }
 
@@ -116,7 +116,7 @@ public static class SnapshotService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return new SnapshotCreateResult(false, null, null, $"Snapshot 생성 중 오류: {ex.GetType().Name}");
+            return new SnapshotCreateResult(false, null, null, $"복구 지점을 만드는 중 오류: {ex.GetType().Name}");
         }
     }
 

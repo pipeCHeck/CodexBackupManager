@@ -154,6 +154,50 @@ public sealed class ExportCompletedTests : IDisposable
         }
     }
 
+    // ── Phase 9_U-09 (나) 경고 내용 ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task 경고가_없으면_경고_영역을_숨긴다()
+    {
+        await ExportAllAsync();
+        ExportCompletedViewModel completed = Assert.Single(_h.ExportCompletedShown);
+
+        Assert.False(completed.HasWarnings);
+        Assert.Empty(completed.Warnings);
+        Assert.DoesNotContain("[경고", completed.BuildText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void 경고가_있으면_사용자_말로_보여주고_텍스트에도_적지만_로그에는_개수만_남긴다()
+    {
+        Backup.Summary.ExportSummary summary = new Backup.Summary.ExportSummary("b.codexbackup", 10, DateTimeOffset.UtcNow, 1, [], null)
+        {
+            Warnings =
+            [
+                Backup.Summary.ExportSummaryBuilder.DescribeWarning("참조된 첨부 이미지 파일 2개를 찾을 수 없어 Export에서 제외했습니다."),
+                "비밀표시-경고 원문",
+            ],
+        };
+        string savePath = Path.Combine(_h.TestDir, "warn-list.txt");
+        var vm = new ExportCompletedViewModel(
+            summary, Path.Combine(_h.TestDir, "b.codexbackup"), _ => true, (_, _) => savePath, TimeZoneInfo.Utc,
+            new CodexBackupManager.App.Services.FileLogger(Path.Combine(_h.TestDir, "logs")));
+
+        Assert.True(vm.HasWarnings);
+        Assert.Equal("경고 2건", vm.WarningsTitle);
+        Assert.StartsWith("대화에 붙인 이미지 파일 2개를 이 PC에서 찾지 못해 백업에 넣지 못했습니다.", vm.Warnings[0], StringComparison.Ordinal);
+
+        vm.SaveTextCommand.Execute(null);
+        string text = File.ReadAllText(savePath, Encoding.UTF8);
+        Assert.Contains("[경고 2건]", text, StringComparison.Ordinal);
+        Assert.Contains("  - 비밀표시-경고 원문", text, StringComparison.Ordinal);
+
+        string logs = string.Concat(Directory.EnumerateFiles(Path.Combine(_h.TestDir, "logs"), "*", SearchOption.AllDirectories)
+            .Select(f => File.ReadAllText(f, Encoding.UTF8)));
+        Assert.DoesNotContain("비밀표시", logs, StringComparison.Ordinal);
+        Assert.DoesNotContain("이미지 파일", logs, StringComparison.Ordinal);
+    }
+
     private ExportCompletedViewModel Recreate(ExportCompletedViewModel completed, Func<string, string, string?> picker)
     {
         string backup = Path.Combine(completed.DefaultTextFileDirectory, Path.GetFileNameWithoutExtension(completed.DefaultTextFileName) + ".codexbackup");

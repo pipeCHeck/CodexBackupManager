@@ -174,6 +174,36 @@ public sealed class MainViewModelSearchTests : IDisposable
         Assert.Equal("체크한 대화 1개를 백업 파일(.codexbackup) 하나로 저장합니다. Codex 데이터는 바꾸지 않습니다.", main.ExportButtonToolTip);
     }
 
+    [Fact]
+    public async Task Space_체크는_체크박스와_같은_경로로_바꾸고_프로젝트는_검색으로_숨은_대화까지_바꾼다()
+    {
+        // Phase 9_U-09 (가) — TreeSpaceToggleBehavior가 부르는 ICheckToggle.ToggleCheck.
+        MainViewModel main = await ConnectedAsync();
+        ConversationNodeViewModel conversation = Node(main, Thread2);
+        ProjectNodeViewModel project = conversation.Parent!;
+        main.SearchText = "없는검색어xyz"; // 프로젝트의 대화가 모두 숨는다
+        Assert.All(project.Conversations, c => Assert.False(c.IsVisible));
+
+        ((ICheckToggle)project).ToggleCheck();
+
+        Assert.All(project.Conversations, c => Assert.True(c.IsSelected));
+        Assert.Equal(project.Conversations.Count, main.SelectedConversationCount);
+
+        ((ICheckToggle)conversation).ToggleCheck(); // 대화 하나만 해제 → 프로젝트는 일부 선택(null)
+        Assert.False(conversation.IsSelected);
+        Assert.Equal(project.Conversations.Count - 1, main.SelectedConversationCount);
+        if (project.Conversations.Count > 1)
+        {
+            Assert.Null(project.IsSelected);
+        }
+
+        ((ICheckToggle)project).ToggleCheck(); // 전체 선택이 아니면 전체 선택(3상태 체크박스와 같다)
+        Assert.True(project.IsSelected);
+        ((ICheckToggle)project).ToggleCheck();
+        Assert.False(project.IsSelected);
+        Assert.Equal(0, main.SelectedConversationCount);
+    }
+
     [Theory]
     [InlineData("26.928.21956", "0.146.0", "Codex 버전 26.928")]
     [InlineData(null, "0.146.0-alpha.9.2", "Codex CLI 0.146.0-alpha.9.2")]

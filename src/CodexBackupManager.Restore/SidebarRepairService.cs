@@ -184,7 +184,7 @@ public static class SidebarRepairService
             [(GlobalStateWriter.SnapshotLabel, GlobalStateProjectStep.PathFor(codexHomePath))]);
         if (!snapshot.Success)
         {
-            return new SidebarRepairResult(RestoreOutcome.NotReady, $"복구용 Snapshot을 만들지 못해 시작하지 않았습니다: {snapshot.FailureReason}", null, 0);
+            return new SidebarRepairResult(RestoreOutcome.NotReady, $"복구 지점을 만들지 못해 시작하지 않았습니다: {snapshot.FailureReason}", null, 0);
         }
 
         string snapshotId = snapshot.Manifest!.SnapshotId;
@@ -256,7 +256,7 @@ public static class SidebarRepairService
             {
                 return new SidebarRepairResult(
                     RestoreOutcome.RollbackFailedCritical,
-                    $"CRITICAL: 자동 복구에 실패했습니다. Snapshot({snapshotId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
+                    $"CRITICAL: 자동 복구에 실패했습니다. 복구 지점({snapshotId})을 이용해 수동으로 복구해야 합니다: {rollback.FailureReason}",
                     snapshotId, 0);
             }
 

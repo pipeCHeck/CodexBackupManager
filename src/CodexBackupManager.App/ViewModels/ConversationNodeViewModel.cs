@@ -16,7 +16,7 @@ namespace CodexBackupManager.App.ViewModels;
 /// 그대로 읽고 쓰는 얇은 뷰다. 상태를 이 클래스와 저장소 양쪽에 나눠 두면 서로 어긋날 수 있기 때문이다.
 /// </para>
 /// </remarks>
-public sealed class ConversationNodeViewModel : ObservableObject
+public sealed class ConversationNodeViewModel : ObservableObject, ICheckToggle
 {
     private readonly ConversationSelectionState _selection;
 
@@ -69,6 +69,9 @@ public sealed class ConversationNodeViewModel : ObservableObject
     /// 갱신하기 위해 호출한다. 값 자체는 저장하지 않고 다시 읽으라고 알리기만 한다.
     /// </summary>
     internal void NotifySelectionChanged() => OnPropertyChanged(nameof(IsSelected));
+
+    /// <summary>(Phase 9_U-09) Space: 체크박스 바인딩과 같은 <see cref="IsSelected"/> setter로 체크를 뒤집는다.</summary>
+    public void ToggleCheck() => IsSelected = !IsSelected;
 
     private bool _isHighlighted;
     private bool _isTreeSelected;

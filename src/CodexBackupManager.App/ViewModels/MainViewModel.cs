@@ -1144,7 +1144,7 @@ public sealed class MainViewModel : ObservableObject
                 summary, destination, DirectoryExists, ExportTextFilePicker, ExportSummaryTimeZone, _logger);
             _logger.Info(
                 $"내보내기 완료 안내. projects={summary.ProjectCount} uncategorized={summary.UncategorizedConversationCount} " +
-                $"folders={completed.Groups.Sum(g => g.Folders.Count)} missingFolders={completed.MissingFolderCount}");
+                $"folders={completed.Groups.Sum(g => g.Folders.Count)} missingFolders={completed.MissingFolderCount} warnings={summary.Warnings.Count}");
             return completed;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)

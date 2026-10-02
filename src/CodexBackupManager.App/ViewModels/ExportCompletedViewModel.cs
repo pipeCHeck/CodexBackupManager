@@ -97,6 +97,15 @@ public sealed class ExportCompletedViewModel : ObservableObject
     /// <summary>개수 줄("대화 N개 · 프로젝트 M개 · 기타 대화 K개").</summary>
     public string CountsText => ExportSummaryBuilder.CountsLine(_summary);
 
+    /// <summary>(Phase 9_U-09) 경고(사용자 말, <see cref="ExportSummaryBuilder.DescribeWarning"/>). 화면과 텍스트 파일에만 쓴다.</summary>
+    public IReadOnlyList<string> Warnings => _summary.Warnings;
+
+    /// <summary>경고가 있는지(없으면 경고 영역을 숨긴다).</summary>
+    public bool HasWarnings => _summary.Warnings.Count > 0;
+
+    /// <summary>"경고 N건".</summary>
+    public string WarningsTitle => $"경고 {_summary.Warnings.Count}건";
+
     /// <summary>강조 안내.</summary>
     public string Notice => NoticeText;
 
